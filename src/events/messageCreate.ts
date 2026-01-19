@@ -118,6 +118,13 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
             channelId = potentialChannelId;
             argsStartIndex = 1; // Skip the channel ID arg
             isSecretCommand = true;
+        } else if (/^\d{17,19}$/.test(potentialChannelId)) {
+            // Looks like a channel ID but channel not found or not a voice channel
+            const embed = new EmbedBuilder()
+                .setDescription('Channel not found or not a voice channel.')
+                .setColor(0xFF0000);
+            await message.reply({ embeds: [embed] }).catch(() => { });
+            return;
         }
     }
     
@@ -224,6 +231,13 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
             channelId = potentialChannelId;
             argsStartIndex = 1; // Skip the channel ID arg
             isSecretCommand = true;
+        } else if (/^\d{17,19}$/.test(potentialChannelId)) {
+            // Looks like a channel ID but channel not found or not a voice channel
+            const embed = new EmbedBuilder()
+                .setDescription('Channel not found or not a voice channel.')
+                .setColor(0xFF0000);
+            await message.reply({ embeds: [embed] }).catch(() => { });
+            return;
         }
     }
     
