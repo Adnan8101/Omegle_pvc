@@ -7,7 +7,10 @@ set -e  # Exit on any error
 
 BOT_NAME="pvc-bot"
 
-echo "🔍 Checking PM2 status..."
+echo "�️  Cleaning old build..."
+rm -rf dist
+
+echo "�🔍 Checking PM2 status..."
 
 # Check if PM2 is installed
 if ! command -v pm2 &> /dev/null; then
