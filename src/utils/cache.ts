@@ -119,13 +119,11 @@ interface CachedWhitelistEntry {
     targetType: string;
 }
 
-// Cache instances
 const guildSettingsCache = new TTLCache<string, CachedGuildSettings>(CACHE_TTL.GUILD_SETTINGS);
 const channelPermissionsCache = new TTLCache<string, CachedPermission[]>(CACHE_TTL.CHANNEL_PERMISSIONS);
 const ownerPermissionsCache = new TTLCache<string, CachedPermission[]>(CACHE_TTL.OWNER_PERMISSIONS);
 const whitelistCache = new TTLCache<string, CachedWhitelistEntry[]>(CACHE_TTL.WHITELIST);
 
-// Periodic cleanup (every 5 minutes)
 setInterval(() => {
     guildSettingsCache.cleanup();
     channelPermissionsCache.cleanup();
@@ -133,18 +131,14 @@ setInterval(() => {
     whitelistCache.cleanup();
 }, 5 * 60 * 1000);
 
-// ============ Guild Settings ============
-
 export async function getGuildSettings(guildId: string): Promise<CachedGuildSettings | null> {
-    // Check cache first
     const cached = guildSettingsCache.get(guildId);
     if (cached !== undefined) return cached;
 
-    // Fetch from DB
-    const { default: prisma } = await import('./database');
-    const settings = await prisma.guildSettings.findUnique({
+    const { default: prisma, withRetry } = await import('./database');
+    const settings = await withRetry(() => prisma.guildSettings.findUnique({
         where: { guildId },
-    });
+    }));
 
     if (settings) {
         guildSettingsCache.set(guildId, settings);
@@ -157,19 +151,15 @@ export function invalidateGuildSettings(guildId: string): void {
     guildSettingsCache.delete(guildId);
 }
 
-// ============ Channel Permissions ============
-
 export async function getChannelPermissions(channelId: string): Promise<CachedPermission[]> {
-    // Check cache first
     const cached = channelPermissionsCache.get(channelId);
     if (cached !== undefined) return cached;
 
-    // Fetch from DB
-    const { default: prisma } = await import('./database');
-    const permissions = await prisma.voicePermission.findMany({
+    const { default: prisma, withRetry } = await import('./database');
+    const permissions = await withRetry(() => prisma.voicePermission.findMany({
         where: { channelId },
         select: { targetId: true, targetType: true, permission: true },
-    });
+    }));
 
     channelPermissionsCache.set(channelId, permissions);
     return permissions;
@@ -184,18 +174,15 @@ export function invalidateChannelPermissions(channelId: string): void {
 export async function getOwnerPermissions(guildId: string, ownerId: string): Promise<CachedPermission[]> {
     const cacheKey = `${guildId}:${ownerId}`;
 
-    // Check cache first
     const cached = ownerPermissionsCache.get(cacheKey);
     if (cached !== undefined) return cached;
 
-    // Fetch from DB
-    const { default: prisma } = await import('./database');
-    const permissions = await prisma.ownerPermission.findMany({
+    const { default: prisma, withRetry } = await import('./database');
+    const permissions = await withRetry(() => prisma.ownerPermission.findMany({
         where: { guildId, ownerId },
         select: { targetId: true, targetType: true },
-    });
+    }));
 
-    // Map to CachedPermission format
     const mapped = permissions.map(p => ({
         targetId: p.targetId,
         targetType: p.targetType,
@@ -210,19 +197,15 @@ export function invalidateOwnerPermissions(guildId: string, ownerId: string): vo
     ownerPermissionsCache.delete(`${guildId}:${ownerId}`);
 }
 
-// ============ Strictness Whitelist ============
-
 export async function getWhitelist(guildId: string): Promise<CachedWhitelistEntry[]> {
-    // Check cache first
     const cached = whitelistCache.get(guildId);
     if (cached !== undefined) return cached;
 
-    // Fetch from DB
-    const { default: prisma } = await import('./database');
-    const whitelist = await prisma.strictnessWhitelist.findMany({
+    const { default: prisma, withRetry } = await import('./database');
+    const whitelist = await withRetry(() => prisma.strictnessWhitelist.findMany({
         where: { guildId },
         select: { targetId: true, targetType: true },
-    });
+    }));
 
     whitelistCache.set(guildId, whitelist);
     return whitelist;
@@ -232,16 +215,13 @@ export function invalidateWhitelist(guildId: string): void {
     whitelistCache.delete(guildId);
 }
 
-// ============ Batch Operations ============
-
 export async function batchUpsertPermissions(
     channelId: string,
     permissions: Array<{ targetId: string; targetType: string; permission: string }>
 ): Promise<void> {
-    const { default: prisma } = await import('./database');
+    const { default: prisma, withRetry } = await import('./database');
 
-    // Use transaction for atomicity and speed
-    await prisma.$transaction(
+    await withRetry(() => prisma.$transaction(
         permissions.map(perm =>
             prisma.voicePermission.upsert({
                 where: { channelId_targetId: { channelId, targetId: perm.targetId } },
@@ -254,9 +234,8 @@ export async function batchUpsertPermissions(
                 },
             })
         )
-    );
+    ));
 
-    // Invalidate cache
     invalidateChannelPermissions(channelId);
 }
 
@@ -265,9 +244,9 @@ export async function batchUpsertOwnerPermissions(
     ownerId: string,
     permissions: Array<{ targetId: string; targetType: string }>
 ): Promise<void> {
-    const { default: prisma } = await import('./database');
+    const { default: prisma, withRetry } = await import('./database');
 
-    await prisma.$transaction(
+    await withRetry(() => prisma.$transaction(
         permissions.map(perm =>
             prisma.ownerPermission.upsert({
                 where: { guildId_ownerId_targetId: { guildId, ownerId, targetId: perm.targetId } },
@@ -280,9 +259,8 @@ export async function batchUpsertOwnerPermissions(
                 },
             })
         )
-    );
+    ));
 
-    // Invalidate cache
     invalidateOwnerPermissions(guildId, ownerId);
 }
 
@@ -291,21 +269,18 @@ export async function batchDeleteOwnerPermissions(
     ownerId: string,
     targetIds: string[]
 ): Promise<void> {
-    const { default: prisma } = await import('./database');
+    const { default: prisma, withRetry } = await import('./database');
 
-    await prisma.ownerPermission.deleteMany({
+    await withRetry(() => prisma.ownerPermission.deleteMany({
         where: {
             guildId,
             ownerId,
             targetId: { in: targetIds },
         },
-    });
+    }));
 
-    // Invalidate cache
     invalidateOwnerPermissions(guildId, ownerId);
 }
-
-// ============ Cache Stats (for monitoring) ============
 
 export function getCacheStats(): Record<string, number> {
     return {
@@ -315,8 +290,6 @@ export function getCacheStats(): Record<string, number> {
         whitelist: whitelistCache.size,
     };
 }
-
-// ============ Clear All Caches ============
 
 export function clearAllCaches(): void {
     guildSettingsCache.clear();

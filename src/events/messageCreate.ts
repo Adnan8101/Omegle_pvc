@@ -1,7 +1,7 @@
 import { Events, type Message, ChannelType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import type { PVCClient } from '../client';
 import prisma from '../utils/database';
-import { getChannelByOwner, getChannelState } from '../utils/voiceManager';
+import { getChannelByOwner } from '../utils/voiceManager';
 import { getGuildSettings, batchUpsertPermissions, batchUpsertOwnerPermissions, batchDeleteOwnerPermissions, invalidateChannelPermissions, invalidateOwnerPermissions } from '../utils/cache';
 import { executeParallel, Priority } from '../utils/rateLimit';
 

@@ -174,8 +174,8 @@ async function handleRenameModal(interaction: ModalSubmitInteraction, channelId:
         if (pending) {
             pendingRenames.delete(approvalMessage.id);
             const timeoutEmbed = new EmbedBuilder()
-                .setTitle('Rename Request Expired ⏱️')
-                .setDescription(`<@${pending.userId}>'s rename request to **"${pending.newName}"** expired.`)
+                .setTitle('Rename Request Expired')
+                .setDescription(`<@${pending.userId}>'s rename request to "${pending.newName}" expired.`)
                 .setColor(0x888888)
                 .setTimestamp();
             await approvalMessage.edit({ embeds: [timeoutEmbed], components: [] }).catch(() => { });

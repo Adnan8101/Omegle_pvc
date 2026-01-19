@@ -86,12 +86,12 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
             const rapidData = rapidClickCounts.get(userId);
             if (rapidData && rapidData.count >= RAPID_THRESHOLD) {
                 await interaction.reply({
-                    content: `⏳ **Slow down!** You're clicking too fast.\nPlease wait **${seconds} seconds** before trying again.`,
+                    content: `Slow down. You're clicking too fast. Please wait ${seconds} seconds before trying again.`,
                     ephemeral: true,
                 });
             } else {
                 await interaction.reply({
-                    content: `⏳ Cooldown active. Try again in **${seconds}s**`,
+                    content: `Cooldown active. Try again in ${seconds}s`,
                     ephemeral: true,
                 });
             }
@@ -395,12 +395,11 @@ async function sendSelectionMenu(
             );
     }
 
-    // @ts-ignore - Builder types are compatible for ActionRow
-    const row = new ActionRowBuilder().addComponents(component);
+    const row = new ActionRowBuilder<typeof component>().addComponents(component);
 
     await interaction.reply({
-        content: messageContent || `**${placeholder}:**`,
-        components: [row as any],
+        content: messageContent || `${placeholder}:`,
+        components: [row],
         ephemeral: true,
     });
 }
