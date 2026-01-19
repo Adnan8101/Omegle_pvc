@@ -33,6 +33,23 @@ export async function execute(client: PVCClient, message: Message): Promise<void
         return;
     }
 
+    // Check if user is a PVC owner (can run !au and !ru anywhere with channel ID)
+    const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: message.author.id } });
+    
+    // PVC owners can run override commands anywhere
+    if (isPvcOwner && (message.content.startsWith('!au ') || message.content.startsWith('!ru '))) {
+        const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
+        const commandName = args.shift()?.toLowerCase();
+        
+        if (commandName === 'au' || commandName === 'adduser') {
+            await handleAddUser(message, undefined, args);
+            return;
+        } else if (commandName === 'ru' || commandName === 'removeuser') {
+            await handleRemoveUser(message, undefined, args);
+            return;
+        }
+    }
+
     // Get guild settings (cached)
     const settings = await getGuildSettings(message.guild.id);
 
