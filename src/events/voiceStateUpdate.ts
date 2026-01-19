@@ -7,6 +7,8 @@ import {
     registerChannel,
     unregisterChannel,
     getChannelByOwner,
+    setInactivityTimer,
+    clearInactivityTimer,
 } from '../utils/voiceManager';
 import { getOwnerPermissions } from '../utils/permissions';
 import { executeWithRateLimit, executeParallel, Priority } from '../utils/rateLimit';
@@ -53,6 +55,9 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
 
     const channelState = getChannelState(channelId);
     if (channelState) {
+        // Clear inactivity timer when someone joins
+        clearInactivityTimer(channelId);
+        
         // Log user joined PVC
         const channel = guild.channels.cache.get(channelId);
         if (channel) {
@@ -88,6 +93,15 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
                 channelName: channel.name,
                 channelId: channelId,
                 details: `${member.user.username} left the voice channel`,
+
+    // Check if channel is now empty
+    const channel = guild.channels.cache.get(channelId);
+    if (channel && channel.type === ChannelType.GuildVoice) {
+        if (channel.members.size === 0) {
+            // Channel is now empty - start inactivity timer
+            await startInactivityTimer(client, channelId, guild.id, channelState.ownerId, channel.name);
+        }
+    }
             });
         }
     }
@@ -291,7 +305,74 @@ async function enforceAdminStrictness(
 
         const owner = guild.members.cache.get(ownerId);
         const ownerName = owner?.displayName || 'the owner';
-        const embed = new EmbedBuilder()
+ 
+
+async function startInactivityTimer(
+    client: PVCClient,
+    channelId: string,
+    guildId: string,
+    ownerId: string,
+    channelName: string
+): Promise<void> {
+    console.log(`[Inactivity] Starting 5-minute timer for ${channelName} (${channelId})`);
+
+    // Send DM to owner
+    try {
+        const guild = client.guilds.cache.get(guildId);
+        if (guild) {
+            const owner = await guild.members.fetch(ownerId).catch(() => null);
+            if (owner) {
+                const embed = new EmbedBuilder()
+                    .setColor(0xFFA500)
+                    .setTitle('⚠️ Voice Channel Inactive')
+                    .setDescription(
+                        `Your voice channel **${channelName}** is currently empty.\n\n` +
+                        `It will be automatically deleted after **5 minutes** of inactivity.\n\n` +
+                        `Join the channel to prevent deletion.`
+                    )
+                    .setTimestamp();
+
+                await owner.send({ embeds: [embed] }).catch((err) => {
+                    console.log(`[Inactivity] Could not DM owner ${ownerId}:`, err.message);
+                });
+            }
+        }
+    } catch (err) {
+        console.error(`[Inactivity] Error sending DM to owner:`, err);
+    }
+
+    // Set 5-minute timer
+    setInactivityTimer(channelId, async () => {
+        try {
+            const guild = client.guilds.cache.get(guildId);
+            if (!guild) return;
+
+            const channel = guild.channels.cache.get(channelId);
+            if (!channel || channel.type !== ChannelType.GuildVoice) return;
+
+            // Double-check channel is still empty
+            if (channel.members.size === 0) {
+                console.log(`[Inactivity] Deleting inactive channel ${channelName} (${channelId})`);
+                
+                // Log channel deletion
+                await logAction({
+                    action: LogAction.CHANNEL_DELETED,
+                    guild: guild,
+                    channelName: channelName,
+                    channelId: channelId,
+                    details: `Channel deleted due to 5 minutes of inactivity`,
+                });
+
+                await deletePrivateChannel(channelId, guildId);
+            } else {
+                console.log(`[Inactivity] Channel ${channelName} is no longer empty, canceling deletion`);
+            }
+        } catch (err) {
+            console.error(`[Inactivity] Error deleting channel ${channelId}:`, err);
+        }
+    }, 5 * 60 * 1000); // 5 minutes
+}
+       const embed = new EmbedBuilder()
             .setColor(0xFF6B6B)
             .setTitle('Access Denied')
             .setDescription(

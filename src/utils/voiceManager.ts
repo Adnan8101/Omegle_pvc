@@ -11,6 +11,7 @@ interface VoiceChannelState {
 const channelStates = new Map<string, VoiceChannelState>();
 const ownerToChannel = new Map<string, string>(); // ownerId -> channelId
 const guildInterfaces = new Map<string, string>(); // guildId -> interfaceChannelId
+const inactivityTimers = new Map<string, NodeJS.Timeout>(); // channelId -> timeout
 
 /**
  * Register a private voice channel
@@ -35,6 +36,7 @@ export function unregisterChannel(channelId: string): void {
         ownerToChannel.delete(`${state.guildId}:${state.ownerId}`);
         channelStates.delete(channelId);
     }
+    clearInactivityTimer(channelId);
 }
 
 /**
@@ -122,5 +124,32 @@ export function clearAllState(): void {
  * Unregister an interface channel for a guild
  */
 export function unregisterInterfaceChannel(guildId: string): void {
-    guildInterfaces.delete(guildId);
+ 
+
+/**
+ * Set inactivity timer for a channel
+ */
+export function setInactivityTimer(channelId: string, callback: () => void, delay: number): void {
+    clearInactivityTimer(channelId);
+    const timer = setTimeout(callback, delay);
+    inactivityTimers.set(channelId, timer);
+}
+
+/**
+ * Clear inactivity timer for a channel
+ */
+export function clearInactivityTimer(channelId: string): void {
+    const timer = inactivityTimers.get(channelId);
+    if (timer) {
+        clearTimeout(timer);
+        inactivityTimers.delete(channelId);
+    }
+}
+
+/**
+ * Check if channel has an active inactivity timer
+ */
+export function hasInactivityTimer(channelId: string): boolean {
+    return inactivityTimers.has(channelId);
+}   guildInterfaces.delete(guildId);
 }
