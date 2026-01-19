@@ -42,7 +42,10 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
     const { channelId, guild, member } = state;
     if (!channelId || !member) return;
 
-    if (isInterfaceChannel(channelId)) {
+    const isInterface = isInterfaceChannel(channelId);
+    console.log(`[VoiceState] ${member.user.tag} joined ${channelId}, isInterface: ${isInterface}`);
+
+    if (isInterface) {
         await createPrivateChannel(client, state);
         return;
     }
@@ -76,7 +79,14 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
     if (existingChannel) {
         const channel = guild.channels.cache.get(existingChannel);
         if (channel && channel.type === ChannelType.GuildVoice) {
-            await executeWithRateLimit(`move:${member.id}`, () => member.voice.setChannel(channel), Priority.HIGH);
+            try {
+                const freshMember = await guild.members.fetch(member.id);
+                if (freshMember.voice.channelId) {
+                    await freshMember.voice.setChannel(channel);
+                }
+            } catch (err) {
+                console.error(`[PVC] Failed to move ${member.id} to existing channel:`, err);
+            }
             return;
         }
     }
@@ -102,17 +112,27 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
 
         registerChannel(newChannel.id, guild.id, member.id);
 
-        const [, ownerPermissions] = await Promise.all([
-            prisma.privateVoiceChannel.create({
-                data: {
-                    channelId: newChannel.id,
-                    guildId: guild.id,
-                    ownerId: member.id,
-                },
-            }),
-            getCachedOwnerPerms(guild.id, member.id),
-        ]);
+        await prisma.privateVoiceChannel.create({
+            data: {
+                channelId: newChannel.id,
+                guildId: guild.id,
+                ownerId: member.id,
+            },
+        });
 
+        const freshMember = await guild.members.fetch(member.id);
+        if (freshMember.voice.channelId) {
+            await freshMember.voice.setChannel(newChannel);
+            console.log(`[PVC] Moved ${member.user.tag} to new channel ${newChannel.name}`);
+        } else {
+            console.log(`[PVC] User ${member.user.tag} left voice before move, cleaning up`);
+            await newChannel.delete();
+            unregisterChannel(newChannel.id);
+            await prisma.privateVoiceChannel.delete({ where: { channelId: newChannel.id } }).catch(() => {});
+            return;
+        }
+
+        const ownerPermissions = await getCachedOwnerPerms(guild.id, member.id);
         if (ownerPermissions.length > 0) {
             const discordTasks = ownerPermissions.map(perm => ({
                 route: `perms:${newChannel.id}:${perm.targetId}`,
@@ -134,9 +154,8 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                 }))
             );
         }
-
-        await executeWithRateLimit(`move:${member.id}`, () => member.voice.setChannel(newChannel), Priority.HIGH);
-    } catch {
+    } catch (err) {
+        console.error(`[PVC] Failed to create private channel for ${member.id}:`, err);
     }
 }
 
