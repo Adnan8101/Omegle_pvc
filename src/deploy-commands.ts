@@ -9,6 +9,7 @@ import { command as strictnessWl } from './commands/strictness_wl';
 import { command as pvcCleanup } from './commands/pvc_setup_delete';
 import { command as invite } from './commands/invite';
 import { command as refreshPvc } from './commands/refresh_pvc';
+import prisma from './utils/database';
 
 const commands = [
     pvcSetup.data.toJSON(),
@@ -26,13 +27,23 @@ const rest = new REST().setToken(Config.token);
 
 async function deployCommands() {
     try {
+        console.log('🚀 Deploying slash commands...');
+        
         // Register commands globally or to a specific guild
         const route = Config.guildId
             ? Routes.applicationGuildCommands(Config.clientId, Config.guildId)
             : Routes.applicationCommands(Config.clientId);
 
         await rest.put(route, { body: commands });
-    } catch {
+        
+        console.log(`✅ Successfully registered ${commands.length} slash commands!`);
+        
+        // Disconnect Prisma to allow process to exit
+        await prisma.$disconnect();
+        process.exit(0);
+    } catch (error) {
+        console.error('❌ Failed to register slash commands:', error);
+        await prisma.$disconnect();
         process.exit(1);
     }
 }
