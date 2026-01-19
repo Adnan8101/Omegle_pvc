@@ -12,6 +12,7 @@ const channelStates = new Map<string, VoiceChannelState>();
 const ownerToChannel = new Map<string, string>(); // ownerId -> channelId
 const guildInterfaces = new Map<string, string>(); // guildId -> interfaceChannelId
 const inactivityTimers = new Map<string, NodeJS.Timeout>(); // channelId -> timeout
+const joinOrder = new Map<string, string[]>(); // channelId -> array of userIds in join order
 
 /**
  * Register a private voice channel
@@ -37,6 +38,7 @@ export function unregisterChannel(channelId: string): void {
         channelStates.delete(channelId);
     }
     clearInactivityTimer(channelId);
+    joinOrder.delete(channelId);
 }
 
 /**
@@ -152,4 +154,45 @@ export function clearInactivityTimer(channelId: string): void {
  */
 export function hasInactivityTimer(channelId: string): boolean {
     return inactivityTimers.has(channelId);
+}
+
+/**
+ * Add user to join order
+ */
+export function addUserToJoinOrder(channelId: string, userId: string): void {
+    const order = joinOrder.get(channelId) || [];
+    if (!order.includes(userId)) {
+        order.push(userId);
+        joinOrder.set(channelId, order);
+    }
+}
+
+/**
+ * Remove user from join order
+ */
+export function removeUserFromJoinOrder(channelId: string, userId: string): void {
+    const order = joinOrder.get(channelId);
+    if (order) {
+        const filtered = order.filter(id => id !== userId);
+        if (filtered.length > 0) {
+            joinOrder.set(channelId, filtered);
+        } else {
+            joinOrder.delete(channelId);
+        }
+    }
+}
+
+/**
+ * Get next user in join order (for ownership transfer)
+ */
+export function getNextUserInOrder(channelId: string): string | undefined {
+    const order = joinOrder.get(channelId);
+    return order && order.length > 0 ? order[0] : undefined;
+}
+
+/**
+ * Get join order for a channel
+ */
+export function getJoinOrder(channelId: string): string[] {
+    return joinOrder.get(channelId) || [];
 }

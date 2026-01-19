@@ -9,6 +9,11 @@ import {
     getChannelByOwner,
     setInactivityTimer,
     clearInactivityTimer,
+    addUserToJoinOrder,
+    removeUserFromJoinOrder,
+    getNextUserInOrder,
+    transferOwnership,
+    hasInactivityTimer,
 } from '../utils/voiceManager';
 import { getOwnerPermissions } from '../utils/permissions';
 import { executeWithRateLimit, executeParallel, Priority } from '../utils/rateLimit';
@@ -55,11 +60,73 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
 
     const channelState = getChannelState(channelId);
     if (channelState) {
+        const channel = guild.channels.cache.get(channelId);
+        const wasInactive = hasInactivityTimer(channelId);
+        
         // Clear inactivity timer when someone joins
         clearInactivityTimer(channelId);
         
+        // If channel was inactive and this person is not the owner, transfer ownership
+        if (wasInactive && member.id !== channelState.ownerId && channel && channel.type === ChannelType.GuildVoice) {
+            console.log(`[Ownership] Channel was inactive, transferring to ${member.user.tag}`);
+            
+            // Clear previous join order and start fresh
+            removeUserFromJoinOrder(channelId, channelState.ownerId);
+            addUserToJoinOrder(channelId, member.id);
+            
+            // Transfer ownership
+            transferOwnership(channelId, member.id);
+            
+            await prisma.privateVoiceChannel.update({
+                where: { channelId },
+                data: { ownerId: member.id },
+            });
+            
+            // Update channel permissions for new owner
+            const ownerPerms = getOwnerPermissions();
+            await channel.permissionOverwrites.edit(member.id, {
+                ViewChannel: true,
+                Connect: true,
+                Speak: true,
+                Stream: true,
+                MuteMembers: true,
+                DeafenMembers: true,
+                MoveMembers: true,
+                ManageChannels: true,
+            });
+            
+            // Log the transfer
+            await logAction({
+                action: LogAction.CHANNEL_CLAIMED,
+                guild: guild,
+                user: member.user,
+                channelName: channel.name,
+                channelId: channelId,
+                details: `Claimed inactive voice channel`,
+            });
+            
+            // Notify in command channel
+            const settings = await getGuildSettings(guild.id);
+            if (settings?.commandChannelId) {
+                const commandChannel = guild.channels.cache.get(settings.commandChannelId);
+                if (commandChannel && commandChannel.isTextBased()) {
+                    const embed = new EmbedBuilder()
+                        .setColor(0xFFD700)
+                        .setTitle('👑 Channel Claimed')
+                        .setDescription(
+                            `<@${member.id}> claimed the inactive channel **${channel.name}** and is now the owner!`
+                        )
+                        .setTimestamp();
+                    
+                    await commandChannel.send({ embeds: [embed] }).catch(() => {});
+                }
+            }
+        } else {
+            // Normal join - just add to join order
+            addUserToJoinOrder(channelId, member.id);
+        }
+        
         // Log user joined PVC
-        const channel = guild.channels.cache.get(channelId);
         if (channel) {
             await logAction({
                 action: LogAction.USER_ADDED,
@@ -82,6 +149,11 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
     const channelState = getChannelState(channelId);
     if (!channelState) return;
 
+    // Remove user from join order
+    if (member) {
+        removeUserFromJoinOrder(channelId, member.id);
+    }
+
     // Log user left PVC
     if (member) {
         const channel = guild.channels.cache.get(channelId);
@@ -103,6 +175,9 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
         if (channel.members.size === 0) {
             // Channel is now empty - start inactivity timer
             await startInactivityTimer(client, channelId, guild.id, channelState.ownerId, channel.name);
+        } else if (member && member.id === channelState.ownerId) {
+            // Owner left but channel is not empty - transfer ownership
+            await transferChannelOwnership(client, channelId, guild, channel);
         }
     }
 }
@@ -147,6 +222,9 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
         );
 
         registerChannel(newChannel.id, guild.id, member.id);
+        
+        // Initialize join order with owner as first member
+        addUserToJoinOrder(newChannel.id, member.id);
 
         await prisma.privateVoiceChannel.create({
             data: {
@@ -230,6 +308,81 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
         }
     } catch (err) {
         console.error(`[PVC] Failed to create private channel for ${member.id}:`, err);
+    }
+}
+
+async function transferChannelOwnership(
+    client: PVCClient,
+    channelId: string,
+    guild: any,
+    channel: any
+): Promise<void> {
+    try {
+        const nextUserId = getNextUserInOrder(channelId);
+        if (!nextUserId) {
+            console.log(`[Ownership] No one in queue to transfer ownership for ${channelId}`);
+            return;
+        }
+
+        const newOwner = guild.members.cache.get(nextUserId);
+        if (!newOwner) {
+            console.log(`[Ownership] Next user ${nextUserId} not found in guild`);
+            return;
+        }
+
+        // Transfer ownership in memory and database
+        transferOwnership(channelId, nextUserId);
+        
+        await prisma.privateVoiceChannel.update({
+            where: { channelId },
+            data: { ownerId: nextUserId },
+        });
+
+        // Update channel permissions for new owner
+        const ownerPerms = getOwnerPermissions();
+        await channel.permissionOverwrites.edit(nextUserId, {
+            ViewChannel: true,
+            Connect: true,
+            Speak: true,
+            Stream: true,
+            MuteMembers: true,
+            DeafenMembers: true,
+            MoveMembers: true,
+            ManageChannels: true,
+        });
+
+        console.log(`[Ownership] Transferred ownership of ${channel.name} to ${newOwner.user.tag}`);
+
+        // Log the transfer
+        await logAction({
+            action: LogAction.CHANNEL_TRANSFERRED,
+            guild: guild,
+            user: newOwner.user,
+            channelName: channel.name,
+            channelId: channelId,
+            details: `Ownership transferred to ${newOwner.user.username}`,
+        });
+
+        // Get command channel from settings
+        const settings = await getGuildSettings(guild.id);
+        if (settings?.commandChannelId) {
+            const commandChannel = guild.channels.cache.get(settings.commandChannelId);
+            if (commandChannel && commandChannel.isTextBased()) {
+                const embed = new EmbedBuilder()
+                    .setColor(0x9B59B6)
+                    .setTitle('🔄 Ownership Transferred')
+                    .setDescription(
+                        `<@${nextUserId}> is now the owner of **${channel.name}**`
+                    )
+                    .setTimestamp();
+
+                await commandChannel.send({ embeds: [embed] }).catch((err: any) => {
+                    console.log(`[Ownership] Failed to send transfer message:`, err.message);
+                });
+            }
+        }
+    } catch (err) {
+        console.error(`[Ownership] Failed to transfer ownership:`, err);
     }
 }
 
