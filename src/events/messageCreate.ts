@@ -1,4 +1,4 @@
-import { Events, type Message, ChannelType } from 'discord.js';
+import { Events, type Message, ChannelType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import type { PVCClient } from '../client';
 import prisma from '../utils/database';
 import { getChannelByOwner, getChannelState } from '../utils/voiceManager';
@@ -23,7 +23,10 @@ export async function execute(client: PVCClient, message: Message): Promise<void
     // If no command channel set, reply with error
     if (!settings?.commandChannelId) {
         if (message.content.startsWith('!au') || message.content.startsWith('!ru') || message.content.startsWith('!l')) {
-            await message.reply('Command channel not set. Use `/pvc_command_channel` to set it.').catch(() => {});
+            const embed = new EmbedBuilder()
+                .setDescription('Command channel not set. Use `/pvc_command_channel` to set it.')
+                .setColor(0xFF0000);
+            await message.reply({ embeds: [embed] }).catch(() => {});
         }
         return;
     }
@@ -60,13 +63,19 @@ export async function execute(client: PVCClient, message: Message): Promise<void
 
 async function handleAddUser(message: Message, channelId: string | undefined): Promise<void> {
     if (!channelId) {
-        await message.reply('You do not own a private voice channel.').catch(() => { });
+        const embed = new EmbedBuilder()
+            .setDescription('You do not own a private voice channel.')
+            .setColor(0xFF0000);
+        await message.reply({ embeds: [embed] }).catch(() => { });
         return;
     }
 
     const mentionedUsers = message.mentions.users;
     if (mentionedUsers.size === 0) {
-        await message.reply('Please mention users to add. Usage: `!au @user1 @user2 ...`').catch(() => { });
+        const embed = new EmbedBuilder()
+            .setDescription('Please mention users to add. Usage: `!au @user1 @user2 ...`')
+            .setColor(0xFF0000);
+        await message.reply({ embeds: [embed] }).catch(() => { });
         return;
     }
 
@@ -120,13 +129,19 @@ async function handleAddUser(message: Message, channelId: string | undefined): P
 
 async function handleRemoveUser(message: Message, channelId: string | undefined): Promise<void> {
     if (!channelId) {
-        await message.reply('You do not own a private voice channel.').catch(() => { });
+        const embed = new EmbedBuilder()
+            .setDescription('You do not own a private voice channel.')
+            .setColor(0xFF0000);
+        await message.reply({ embeds: [embed] }).catch(() => { });
         return;
     }
 
     const mentionedUsers = message.mentions.users;
     if (mentionedUsers.size === 0) {
-        await message.reply('Please mention users to remove. Usage: `!ru @user1 @user2 ...`').catch(() => { });
+        const embed = new EmbedBuilder()
+            .setDescription('Please mention users to remove. Usage: `!ru @user1 @user2 ...`')
+            .setColor(0xFF0000);
+        await message.reply({ embeds: [embed] }).catch(() => { });
         return;
     }
 
@@ -185,7 +200,10 @@ async function handleRemoveUser(message: Message, channelId: string | undefined)
 
 async function handleList(message: Message, channelId: string | undefined): Promise<void> {
     if (!channelId) {
-        await message.reply('You do not own a private voice channel.').catch(() => { });
+        const embed = new EmbedBuilder()
+            .setDescription('You do not own a private voice channel.')
+            .setColor(0xFF0000);
+        await message.reply({ embeds: [embed] }).catch(() => { });
         return;
     }
 
@@ -199,38 +217,142 @@ async function handleList(message: Message, channelId: string | undefined): Prom
     });
 
     if (!pvcData) {
-        await message.reply('Channel data not found.').catch(() => { });
+        const embed = new EmbedBuilder()
+            .setDescription('Channel data not found.')
+            .setColor(0xFF0000);
+        await message.reply({ embeds: [embed] }).catch(() => { });
         return;
     }
 
     const owner = guild.members.cache.get(pvcData.ownerId);
-    const ownerName = owner?.displayName || pvcData.ownerId;
-
-    // Get permitted users
+    const state = channel && channel.type === ChannelType.GuildVoice ? getChannelState(channelId) : null;
+    
+    // Get permitted/banned lists
     const permittedUsers = pvcData.permissions.filter(p => p.permission === 'permit' && p.targetType === 'user');
     const permittedRoles = pvcData.permissions.filter(p => p.permission === 'permit' && p.targetType === 'role');
     const bannedUsers = pvcData.permissions.filter(p => p.permission === 'ban' && p.targetType === 'user');
 
-    let reply = `**Voice Channel Info**\n`;
-    reply += `**Name:** ${channel?.name || 'Unknown'}\n`;
-    reply += `**Owner:** ${ownerName}\n\n`;
+    // Pagination settings
+    const ITEMS_PER_PAGE = 10;
+    let currentPage = 0;
+    
+    const createEmbed = (page: number) => {
+        const embed = new EmbedBuilder()
+            .setTitle('Voice Channel Information')
+            .setColor(0x5865F2)
+            .addFields(
+                { name: 'Channel Name', value: channel?.name || 'Unknown', inline: true },
+                { name: 'Channel ID', value: channelId, inline: true },
+                { name: 'Owner', value: owner ? `${owner} (${owner.displayName})` : `<@${pvcData.ownerId}>`, inline: true },
+            );
 
-    if (permittedUsers.length > 0) {
-        const userMentions = permittedUsers.map(p => `<@${p.targetId}>`).join(', ');
-        reply += `**Permitted Users (${permittedUsers.length}):** ${userMentions}\n`;
-    } else {
-        reply += `**Permitted Users:** None\n`;
+        if (channel) {
+            embed.addFields(
+                { name: 'Channel Link', value: `<#${channelId}>`, inline: true },
+                { name: 'Members', value: channel.type === ChannelType.GuildVoice ? `${channel.members.size}` : 'N/A', inline: true },
+                { name: 'Status', value: state?.isLocked ? 'Locked' : 'Unlocked', inline: true },
+            );
+        }
+
+        // Permitted Users with pagination
+        if (permittedUsers.length > 0) {
+            const start = page * ITEMS_PER_PAGE;
+            const end = start + ITEMS_PER_PAGE;
+            const pageUsers = permittedUsers.slice(start, end);
+            const userMentions = pageUsers.map(p => `• <@${p.targetId}>`).join('\n');
+            const totalPages = Math.ceil(permittedUsers.length / ITEMS_PER_PAGE);
+            embed.addFields({
+                name: `Permitted Users (${permittedUsers.length}) - Page ${page + 1}/${totalPages}`,
+                value: userMentions || 'None',
+                inline: false
+            });
+        } else {
+            embed.addFields({ name: 'Permitted Users', value: 'None', inline: false });
+        }
+
+        // Permitted Roles
+        if (permittedRoles.length > 0) {
+            const roleMentions = permittedRoles.map(p => `• <@&${p.targetId}>`).join('\n');
+            embed.addFields({
+                name: `Permitted Roles (${permittedRoles.length})`,
+                value: roleMentions,
+                inline: false
+            });
+        }
+
+        // Banned Users
+        if (bannedUsers.length > 0) {
+            const bannedMentions = bannedUsers.slice(0, 10).map(p => `• <@${p.targetId}>`).join('\n');
+            const more = bannedUsers.length > 10 ? `\n...and ${bannedUsers.length - 10} more` : '';
+            embed.addFields({
+                name: `Banned Users (${bannedUsers.length})`,
+                value: bannedMentions + more,
+                inline: false
+            });
+        }
+
+        embed.setFooter({ text: `Created ${pvcData.createdAt.toLocaleString()}` })
+            .setTimestamp();
+
+        return embed;
+    };
+
+    const totalPages = Math.ceil(permittedUsers.length / ITEMS_PER_PAGE) || 1;
+
+    // Send initial embed
+    const embed = createEmbed(currentPage);
+    const components: ActionRowBuilder<ButtonBuilder>[] = [];
+
+    if (totalPages > 1) {
+        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`list_prev_${message.id}`)
+                .setLabel('Previous')
+                .setStyle(ButtonStyle.Secondary)
+                .setDisabled(currentPage === 0),
+            new ButtonBuilder()
+                .setCustomId(`list_next_${message.id}`)
+                .setLabel('Next')
+                .setStyle(ButtonStyle.Secondary)
+                .setDisabled(currentPage === totalPages - 1)
+        );
+        components.push(row);
     }
 
-    if (permittedRoles.length > 0) {
-        const roleMentions = permittedRoles.map(p => `<@&${p.targetId}>`).join(', ');
-        reply += `**Permitted Roles (${permittedRoles.length}):** ${roleMentions}\n`;
-    }
+    const reply = await message.reply({ embeds: [embed], components }).catch(() => null);
+    if (!reply || totalPages <= 1) return;
 
-    if (bannedUsers.length > 0) {
-        const bannedMentions = bannedUsers.map(p => `<@${p.targetId}>`).join(', ');
-        reply += `**Banned Users (${bannedUsers.length}):** ${bannedMentions}\n`;
-    }
+    // Collector for pagination
+    const collector = reply.createMessageComponentCollector({
+        filter: (i) => i.user.id === message.author.id,
+        time: 300000, // 5 minutes
+    });
 
-    await message.reply(reply).catch(() => { });
+    collector.on('collect', async (interaction) => {
+        if (interaction.customId === `list_prev_${message.id}`) {
+            currentPage = Math.max(0, currentPage - 1);
+        } else if (interaction.customId === `list_next_${message.id}`) {
+            currentPage = Math.min(totalPages - 1, currentPage + 1);
+        }
+
+        const newEmbed = createEmbed(currentPage);
+        const newRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`list_prev_${message.id}`)
+                .setLabel('Previous')
+                .setStyle(ButtonStyle.Secondary)
+                .setDisabled(currentPage === 0),
+            new ButtonBuilder()
+                .setCustomId(`list_next_${message.id}`)
+                .setLabel('Next')
+                .setStyle(ButtonStyle.Secondary)
+                .setDisabled(currentPage === totalPages - 1)
+        );
+
+        await interaction.update({ embeds: [newEmbed], components: [newRow] }).catch(() => { });
+    });
+
+    collector.on('end', () => {
+        reply.edit({ components: [] }).catch(() => { });
+    });
 }
