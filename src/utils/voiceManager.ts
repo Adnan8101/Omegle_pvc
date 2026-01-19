@@ -12,6 +12,7 @@ const channelStates = new Map<string, VoiceChannelState>();
 const ownerToChannel = new Map<string, string>(); // ownerId -> channelId
 const guildInterfaces = new Map<string, string>(); // guildId -> interfaceChannelId
 const joinOrder = new Map<string, string[]>(); // channelId -> array of userIds in join order
+const tempPermittedUsers = new Map<string, Set<string>>(); // channelId -> Set of userIds with temp access
 
 // Anti-spam: Track user actions for rate limiting
 const userCooldowns = new Map<string, number>(); // `userId:action` -> timestamp
@@ -82,6 +83,7 @@ export function unregisterChannel(channelId: string): void {
         channelStates.delete(channelId);
     }
     joinOrder.delete(channelId);
+    tempPermittedUsers.delete(channelId);
 }
 
 /**
@@ -211,4 +213,30 @@ export function getNextUserInOrder(channelId: string): string | undefined {
  */
 export function getJoinOrder(channelId: string): string[] {
     return joinOrder.get(channelId) || [];
+}
+
+/**
+ * Add temporary permitted users (when channel is locked)
+ */
+export function addTempPermittedUsers(channelId: string, userIds: string[]): void {
+    const existing = tempPermittedUsers.get(channelId) || new Set();
+    for (const userId of userIds) {
+        existing.add(userId);
+    }
+    tempPermittedUsers.set(channelId, existing);
+}
+
+/**
+ * Check if user has temporary access to channel
+ */
+export function hasTempPermission(channelId: string, userId: string): boolean {
+    const users = tempPermittedUsers.get(channelId);
+    return users?.has(userId) || false;
+}
+
+/**
+ * Clear temporary permissions for a channel
+ */
+export function clearTempPermissions(channelId: string): void {
+    tempPermittedUsers.delete(channelId);
 }

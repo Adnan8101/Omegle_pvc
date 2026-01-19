@@ -13,6 +13,7 @@ import {
     transferOwnership,
     isOnCooldown,
     setCooldown,
+    hasTempPermission,
 } from '../utils/voiceManager';
 import { getOwnerPermissions } from '../utils/permissions';
 import { executeWithRateLimit, executeParallel, Priority } from '../utils/rateLimit';
@@ -95,6 +96,9 @@ async function handleAccessProtection(
         p => p.targetId === member.id && p.permission === 'permit'
     );
     if (isUserPermitted) return false;
+
+    // Check if user has temporary permission (was in channel when it was locked)
+    if (hasTempPermission(newChannelId, member.id)) return false;
 
     // Check if user has a permitted role
     const isRolePermitted = channelPerms.some(

@@ -13,7 +13,7 @@ import {
     ButtonBuilder,
     ButtonStyle,
 } from 'discord.js';
-import { getChannelByOwner, getChannelState, transferOwnership, unregisterChannel, getGuildChannels } from '../../utils/voiceManager';
+import { getChannelByOwner, getChannelState, transferOwnership, unregisterChannel, getGuildChannels, addTempPermittedUsers } from '../../utils/voiceManager';
 import { executeWithRateLimit, Priority } from '../../utils/rateLimit';
 import { safeEditPermissions, safeSetChannelName, validateVoiceChannel } from '../../utils/discordApi';
 import prisma from '../../utils/database';
@@ -261,6 +261,12 @@ async function sendSelectionMenu(
 
 // Handlers using helpers
 async function handleLock(interaction: ButtonInteraction, channel: any): Promise<void> {
+    // Add all current members as temporary permitted users
+    const memberIds = channel.members.map((m: any) => m.id);
+    if (memberIds.length > 0) {
+        addTempPermittedUsers(channel.id, memberIds);
+    }
+    
     await updateChannelPermission(interaction, channel, { Connect: false }, 'Your voice channel has been locked.');
     await logAction({
         action: LogAction.CHANNEL_LOCKED,

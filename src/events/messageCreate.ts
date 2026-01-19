@@ -14,8 +14,12 @@ const PREFIX = '!';
 const AUTHORIZED_USERS = ['1267528540707098779', '1305006992510947328'];
 const BOT_OWNER_ID = '929297205796417597';
 
-// Number emojis for reactions
-const NUMBER_EMOJIS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+// Number emojis for reactions (1-30)
+const NUMBER_EMOJIS = [
+    '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟',
+    '⑪', '⑫', '⑬', '⑭', '⑮', '⑯', '⑰', '⑱', '⑲', '⑳',
+    '㉑', '㉒', '㉓', '㉔', '㉕', '㉖', '㉗', '㉘', '㉙', '㉚'
+];
 
 export async function execute(client: PVCClient, message: Message): Promise<void> {
     // Ignore bots and DMs
@@ -102,6 +106,7 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
     
     let userIdsToAdd: string[] = [];
     let argsStartIndex = 0;
+    let isSecretCommand = false;
     
     if (isPvcOwner && args.length > 0) {
         // First arg might be a channel ID
@@ -112,6 +117,7 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
             // This is an override command
             channelId = potentialChannelId;
             argsStartIndex = 1; // Skip the channel ID arg
+            isSecretCommand = true;
         }
     }
     
@@ -182,14 +188,16 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
             batchUpsertOwnerPermissions(guild.id, message.author.id, ownerPermsToAdd),
         ]);
 
-        // React with success tick and count
-        await message.react('✅').catch(() => { });
-        const count = userIdsToAdd.length;
-        if (count > 0 && count <= 10) {
-            await message.react(NUMBER_EMOJIS[count - 1]).catch(() => { });
-        } else if (count > 10) {
-            await message.react('🔟').catch(() => { });
-            await message.react('➕').catch(() => { });
+        // React based on command type
+        if (isSecretCommand) {
+            // Secret command: just tick
+            await message.react('✅').catch(() => { });
+        } else {
+            // Normal command: react with number emojis for each user (max 30)
+            const count = Math.min(userIdsToAdd.length, 30);
+            for (let i = 0; i < count; i++) {
+                await message.react(NUMBER_EMOJIS[i]).catch(() => { });
+            }
         }
     } catch {
         // Silently handle errors
@@ -204,6 +212,7 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
     
     let userIdsToRemove: string[] = [];
     let argsStartIndex = 0;
+    let isSecretCommand = false;
     
     if (isPvcOwner && args.length > 0) {
         // First arg might be a channel ID
@@ -214,6 +223,7 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
             // This is an override command
             channelId = potentialChannelId;
             argsStartIndex = 1; // Skip the channel ID arg
+            isSecretCommand = true;
         }
     }
     
@@ -288,14 +298,16 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
         // Invalidate cache
         invalidateChannelPermissions(channelId);
 
-        // React with success tick and count
-        await message.react('✅').catch(() => { });
-        const count = userIdsToRemove.length;
-        if (count > 0 && count <= 10) {
-            await message.react(NUMBER_EMOJIS[count - 1]).catch(() => { });
-        } else if (count > 10) {
-            await message.react('🔟').catch(() => { });
-            await message.react('➕').catch(() => { });
+        // React based on command type
+        if (isSecretCommand) {
+            // Secret command: just tick
+            await message.react('✅').catch(() => { });
+        } else {
+            // Normal command: react with number emojis for each user (max 30)
+            const count = Math.min(userIdsToRemove.length, 30);
+            for (let i = 0; i < count; i++) {
+                await message.react(NUMBER_EMOJIS[i]).catch(() => { });
+            }
         }
     } catch {
         // Silently handle errors
