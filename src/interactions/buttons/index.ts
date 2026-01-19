@@ -262,18 +262,50 @@ async function sendSelectionMenu(
 // Handlers using helpers
 async function handleLock(interaction: ButtonInteraction, channel: any): Promise<void> {
     await updateChannelPermission(interaction, channel, { Connect: false }, 'Your voice channel has been locked.');
+    await logAction({
+        action: LogAction.CHANNEL_LOCKED,
+        guild: interaction.guild!,
+        user: interaction.user,
+        channelName: channel.name,
+        channelId: channel.id,
+        details: 'Channel locked - users cannot join',
+    });
 }
 
 async function handleUnlock(interaction: ButtonInteraction, channel: any): Promise<void> {
     await updateChannelPermission(interaction, channel, { Connect: null }, 'Your voice channel has been unlocked.');
+    await logAction({
+        action: LogAction.CHANNEL_UNLOCKED,
+        guild: interaction.guild!,
+        user: interaction.user,
+        channelName: channel.name,
+        channelId: channel.id,
+        details: 'Channel unlocked - users can now join',
+    });
 }
 
 async function handleHide(interaction: ButtonInteraction, channel: any): Promise<void> {
     await updateChannelPermission(interaction, channel, { ViewChannel: false }, 'Your voice channel is now hidden.');
+    await logAction({
+        action: LogAction.CHANNEL_HIDDEN,
+        guild: interaction.guild!,
+        user: interaction.user,
+        channelName: channel.name,
+        channelId: channel.id,
+        details: 'Channel hidden from members',
+    });
 }
 
 async function handleUnhide(interaction: ButtonInteraction, channel: any): Promise<void> {
     await updateChannelPermission(interaction, channel, { ViewChannel: null }, 'Your voice channel is now visible.');
+    await logAction({
+        action: LogAction.CHANNEL_UNHIDDEN,
+        guild: interaction.guild!,
+        user: interaction.user,
+        channelName: channel.name,
+        channelId: channel.id,
+        details: 'Channel made visible to members',
+    });
 }
 
 async function handleInvite(interaction: ButtonInteraction): Promise<void> {
@@ -535,9 +567,19 @@ async function handleDeleteConfirm(interaction: ButtonInteraction): Promise<void
     }
 
     try {
+        const channelName = channel.name;
         unregisterChannel(channelId);
         await channel.delete();
         await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => {});
+
+        await logAction({
+            action: LogAction.CHANNEL_DELETED,
+            guild: guild,
+            user: interaction.user,
+            channelName: channelName,
+            channelId: channelId,
+            details: 'Voice channel deleted by owner',
+        });
 
         await interaction.update({
             content: 'Voice channel deleted successfully.',

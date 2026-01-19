@@ -14,6 +14,8 @@ import prisma from '../utils/database';
 import type { Command } from '../client';
 import { generateInterfaceImage, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
 import { canRunAdminCommand } from '../utils/permissions';
+import { logAction, LogAction } from '../utils/logger';
+import { invalidateGuildSettings } from '../utils/cache';
 
 const MAIN_BUTTONS = [
     { id: 'pvc_lock' },
@@ -28,9 +30,23 @@ const MAIN_BUTTONS = [
 
 const data = new SlashCommandBuilder()
     .setName('refresh_pvc')
-    .setDescription('Refresh the PVC interface with latest buttons, embeds, and image')
+    .setDescription('Refresh the entire PVC setup (interface, logs webhook, command channel)')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .setDMPermission(false);
+    .setDMPermission(false)
+    .addChannelOption(option =>
+        option
+            .setName('logs_channel')
+            .setDescription('Update logs channel (optional)')
+            .setRequired(false)
+            .addChannelTypes(ChannelType.GuildText)
+    )
+    .addChannelOption(option =>
+        option
+            .setName('command_channel')
+            .setDescription('Update command channel (optional)')
+            .setRequired(false)
+            .addChannelTypes(ChannelType.GuildText)
+    );
 
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guild) {
@@ -47,6 +63,8 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     await interaction.deferReply({ ephemeral: true });
 
     const guild = interaction.guild;
+    const logsChannel = interaction.options.getChannel('logs_channel');
+    const commandChannel = interaction.options.getChannel('command_channel');
 
     const settings = await prisma.guildSettings.findUnique({
         where: { guildId: guild.id },
@@ -56,6 +74,35 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         await interaction.editReply('PVC system is not set up. Use `/pvc_setup` first.');
         return;
     }
+
+    // Update logs webhook if channel provided
+    let logsWebhookUrl = settings.logsWebhookUrl;
+    if (logsChannel && logsChannel.type === ChannelType.GuildText) {
+        try {
+            const webhook = await (logsChannel as any).createWebhook({
+                name: 'PVC Logger',
+                reason: 'PVC Logs Refresh',
+            });
+            logsWebhookUrl = webhook.url;
+        } catch {
+            await interaction.editReply('Failed to create logs webhook. Check bot permissions.');
+            return;
+        }
+    }
+
+    // Update database with new settings
+    await prisma.guildSettings.update({
+        where: { guildId: guild.id },
+        data: {
+            ...(logsWebhookUrl && logsWebhookUrl !== settings.logsWebhookUrl && { 
+                logsWebhookUrl,
+                logsChannelId: logsChannel?.id 
+            }),
+            ...(commandChannel && { commandChannelId: commandChannel.id }),
+        },
+    });
+
+    invalidateGuildSettings(guild.id);
 
     const interfaceTextChannel = guild.channels.cache.get(settings.interfaceTextId);
     if (!interfaceTextChannel || interfaceTextChannel.type !== ChannelType.GuildText) {
@@ -116,15 +163,28 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 files: [attachment],
                 components,
             });
-            await interaction.editReply('PVC interface refreshed successfully! Updated embed, buttons, and image.');
         } else {
             await interfaceTextChannel.send({
                 embeds: [embed],
                 files: [attachment],
                 components,
             });
-            await interaction.editReply('PVC interface message not found, created a new one.');
         }
+
+        await logAction({
+            action: LogAction.PVC_REFRESHED,
+            guild: guild,
+            user: interaction.user,
+            details: `PVC setup refreshed${logsChannel ? `, logs: ${logsChannel}` : ''}${commandChannel ? `, commands: ${commandChannel}` : ''}`,
+        });
+
+        let response = '✅ PVC System refreshed successfully!\n\n';
+        response += '**Updated:**\n';
+        response += '- Interface message and buttons\n';
+        if (logsChannel) response += `- Logs channel: ${logsChannel}\n`;
+        if (commandChannel) response += `- Command channel: ${commandChannel}\n`;
+
+        await interaction.editReply(response);
 
     } catch (err) {
         console.error('[RefreshPVC] Failed to refresh interface:', err);

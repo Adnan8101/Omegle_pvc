@@ -17,6 +17,7 @@ import {
     getWhitelist,
     batchUpsertPermissions,
 } from '../utils/cache';
+import { logAction, LogAction } from '../utils/logger';
 
 export const name = Events.VoiceStateUpdate;
 export const once = false;
@@ -52,16 +53,44 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
 
     const channelState = getChannelState(channelId);
     if (channelState) {
+        // Log user joined PVC
+        const channel = guild.channels.cache.get(channelId);
+        if (channel) {
+            await logAction({
+                action: LogAction.USER_ADDED,
+                guild: guild,
+                user: member.user,
+                channelName: channel.name,
+                channelId: channelId,
+                details: `${member.user.username} joined the voice channel`,
+            });
+        }
+        
         await enforceAdminStrictness(client, state, channelState.ownerId);
     }
 }
 
 async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> {
-    const { channelId, guild } = state;
+    const { channelId, guild, member } = state;
     if (!channelId) return;
 
     const channelState = getChannelState(channelId);
     if (!channelState) return;
+
+    // Log user left PVC
+    if (member) {
+        const channel = guild.channels.cache.get(channelId);
+        if (channel) {
+            await logAction({
+                action: LogAction.USER_REMOVED,
+                guild: guild,
+                user: member.user,
+                channelName: channel.name,
+                channelId: channelId,
+                details: `${member.user.username} left the voice channel`,
+            });
+        }
+    }
 }
 
 async function createPrivateChannel(client: PVCClient, state: VoiceState): Promise<void> {
@@ -117,6 +146,16 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
         if (freshMember.voice.channelId) {
             await freshMember.voice.setChannel(newChannel);
             console.log(`[PVC] Moved ${member.user.tag} to new channel ${newChannel.name}`);
+            
+            // Log new channel creation
+            await logAction({
+                action: LogAction.CHANNEL_CREATED,
+                guild: guild,
+                user: member.user,
+                channelName: newChannel.name,
+                channelId: newChannel.id,
+                details: `Private voice channel created`,
+            });
         } else {
             console.log(`[PVC] User ${member.user.tag} left voice before move, cleaning up`);
             await newChannel.delete();
