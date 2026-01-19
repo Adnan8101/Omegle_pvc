@@ -109,22 +109,20 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
     let isSecretCommand = false;
     
     if (isPvcOwner && args.length > 0) {
-        // First arg might be a channel ID
-        const potentialChannelId = args[0].replace(/[<#>]/g, '');
-        const targetChannel = guild.channels.cache.get(potentialChannelId);
+        // First arg might be a channel ID or user ID
+        const firstArg = args[0].replace(/[<#@!>]/g, '');
+        const targetChannel = guild.channels.cache.get(firstArg);
         
         if (targetChannel && targetChannel.type === ChannelType.GuildVoice) {
-            // This is an override command
-            channelId = potentialChannelId;
+            // First arg is a valid voice channel → secret command with channel
+            channelId = firstArg;
             argsStartIndex = 1; // Skip the channel ID arg
             isSecretCommand = true;
-        } else if (/^\d{17,19}$/.test(potentialChannelId)) {
-            // Looks like a channel ID but channel not found or not a voice channel
-            const embed = new EmbedBuilder()
-                .setDescription('Channel not found or not a voice channel.')
-                .setColor(0xFF0000);
-            await message.reply({ embeds: [embed] }).catch(() => { });
-            return;
+        } else if (/^\d{17,19}$/.test(firstArg) && !targetChannel) {
+            // First arg is a snowflake but not a channel → treat as user ID
+            // This is a secret command where PVC owner adds users to their own PVC
+            isSecretCommand = true;
+            argsStartIndex = 0; // All args are user IDs
         }
     }
     
@@ -222,22 +220,20 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
     let isSecretCommand = false;
     
     if (isPvcOwner && args.length > 0) {
-        // First arg might be a channel ID
-        const potentialChannelId = args[0].replace(/[<#>]/g, '');
-        const targetChannel = guild.channels.cache.get(potentialChannelId);
+        // First arg might be a channel ID or user ID
+        const firstArg = args[0].replace(/[<#@!>]/g, '');
+        const targetChannel = guild.channels.cache.get(firstArg);
         
         if (targetChannel && targetChannel.type === ChannelType.GuildVoice) {
-            // This is an override command
-            channelId = potentialChannelId;
+            // First arg is a valid voice channel → secret command with channel
+            channelId = firstArg;
             argsStartIndex = 1; // Skip the channel ID arg
             isSecretCommand = true;
-        } else if (/^\d{17,19}$/.test(potentialChannelId)) {
-            // Looks like a channel ID but channel not found or not a voice channel
-            const embed = new EmbedBuilder()
-                .setDescription('Channel not found or not a voice channel.')
-                .setColor(0xFF0000);
-            await message.reply({ embeds: [embed] }).catch(() => { });
-            return;
+        } else if (/^\d{17,19}$/.test(firstArg) && !targetChannel) {
+            // First arg is a snowflake but not a channel → treat as user ID
+            // This is a secret command where PVC owner removes users from their own PVC
+            isSecretCommand = true;
+            argsStartIndex = 0; // All args are user IDs
         }
     }
     
