@@ -24,7 +24,23 @@ export async function handleSelectMenuInteraction(
     const userId = interaction.user.id;
     const ownedChannelId = getChannelByOwner(guild.id, userId);
 
-    // Transfer and invite work on channels you own
+    // Admin delete select doesn't require ownership
+    if (customId === 'pvc_admin_delete_select') {
+        await handleAdminDeleteSelect(interaction as StringSelectMenuInteraction);
+        return;
+    }
+
+    // Strictness whitelist selects don't require ownership
+    if (customId === 'strictness_wl_user_select') {
+        await handleStrictnessUserSelect(interaction as UserSelectMenuInteraction);
+        return;
+    }
+    if (customId === 'strictness_wl_role_select') {
+        await handleStrictnessRoleSelect(interaction as RoleSelectMenuInteraction);
+        return;
+    }
+
+    // All other selects require channel ownership
     if (!ownedChannelId && customId !== 'pvc_transfer_select') {
         await interaction.reply({
             content: 'You do not own a private voice channel.',
@@ -57,15 +73,6 @@ export async function handleSelectMenuInteraction(
         case 'pvc_transfer_select':
             await handleTransferSelect(interaction as UserSelectMenuInteraction, ownedChannelId);
             break;
-        case 'strictness_wl_user_select':
-            await handleStrictnessUserSelect(interaction as UserSelectMenuInteraction);
-            return;
-        case 'strictness_wl_role_select':
-            await handleStrictnessRoleSelect(interaction as RoleSelectMenuInteraction);
-            return;
-        case 'pvc_admin_delete_select':
-            await handleAdminDeleteSelect(interaction as StringSelectMenuInteraction);
-            return;
         default:
             await interaction.reply({ content: 'Unknown selection.', ephemeral: true });
     }
