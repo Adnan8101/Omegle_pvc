@@ -8,6 +8,7 @@ import { command as pvcStaffRole } from './commands/pvc_staff_role';
 import { command as pvcCleanup } from './commands/pvc_setup_delete';
 import { command as invite } from './commands/invite';
 import { command as refreshPvc } from './commands/refresh_pvc';
+import { command as deployCommands } from './commands/deploy_commands';
 import * as readyEvent from './events/ready';
 import * as voiceStateUpdateEvent from './events/voiceStateUpdate';
 import * as interactionCreateEvent from './events/interactionCreate';
@@ -25,6 +26,7 @@ client.commands.set(pvcStaffRole.data.name, pvcStaffRole);
 client.commands.set(pvcCleanup.data.name, pvcCleanup);
 client.commands.set(invite.data.name, invite);
 client.commands.set(refreshPvc.data.name, refreshPvc);
+client.commands.set(deployCommands.data.name, deployCommands);
 
 // Register events
 client.once(readyEvent.name, () => {

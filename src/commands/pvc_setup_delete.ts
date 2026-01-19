@@ -20,15 +20,11 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         await interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
         return;
     }
-
-    // Check admin permissions
     if (!await canRunAdminCommand(interaction)) {
         await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', ephemeral: true });
         return;
     }
 
-    // Confirmation logic could be added here, but user asked for direct deletion or just the command functionality.
-    // To be safe, let's defer ephemeral.
     await interaction.deferReply({ ephemeral: true });
 
     try {

@@ -38,11 +38,89 @@ export async function execute(
     if (!member || member.user.bot) return;
 
     if (newState.channelId && newState.channelId !== oldState.channelId) {
+        // Check if user was dragged to a protected PVC
+        if (oldState.channelId) {
+            await handleDragProtection(client, oldState, newState);
+        }
         await handleJoin(client, newState);
     }
 
     if (oldState.channelId && oldState.channelId !== newState.channelId) {
         await handleLeave(client, oldState);
+    }
+}
+
+async function handleDragProtection(
+    client: PVCClient,
+    oldState: VoiceState,
+    newState: VoiceState
+): Promise<void> {
+    const { channelId: newChannelId, guild, member } = newState;
+    if (!newChannelId || !member) return;
+
+    const channelState = getChannelState(newChannelId);
+    if (!channelState) return; // Not a PVC
+
+    const channel = guild.channels.cache.get(newChannelId);
+    if (!channel || channel.type !== ChannelType.GuildVoice) return;
+
+    // Check if channel is locked or hidden
+    const everyonePerms = channel.permissionOverwrites.cache.get(guild.id);
+    const isLocked = everyonePerms?.deny.has('Connect') ?? false;
+    const isHidden = everyonePerms?.deny.has('ViewChannel') ?? false;
+
+    if (!isLocked && !isHidden) return; // Channel not protected
+
+    // User was dragged - check if they have permission
+    const memberRoleIds = member.roles.cache.map(r => r.id);
+    const [channelPerms, settings, whitelist] = await Promise.all([
+        getChannelPermissions(newChannelId),
+        getGuildSettings(guild.id),
+        getWhitelist(guild.id),
+    ]);
+
+    // Check if user is owner
+    if (member.id === channelState.ownerId) return;
+
+    // Check if user is permitted
+    const isUserPermitted = channelPerms.some(
+        p => p.targetId === member.id && p.permission === 'permit'
+    );
+    if (isUserPermitted) return;
+
+    const isRolePermitted = channelPerms.some(
+        p => memberRoleIds.includes(p.targetId) && p.targetType === 'role' && p.permission === 'permit'
+    );
+    if (isRolePermitted) return;
+
+    // Check if user is whitelisted (if admin strictness is on)
+    if (settings?.adminStrictness) {
+        const isWhitelisted = whitelist.some(
+            w => w.targetId === member.id || memberRoleIds.includes(w.targetId)
+        );
+        if (isWhitelisted) return;
+    }
+
+    // User doesn't have permission - kick them
+    const reason = isLocked ? 'locked' : 'hidden';
+    console.log(`[DragProtection] Kicking ${member.user.tag} from ${channel.name} (dragged to ${reason} channel)`);
+
+    try {
+        await member.voice.disconnect();
+
+        const owner = guild.members.cache.get(channelState.ownerId);
+        const ownerName = owner?.displayName || 'the owner';
+        const embed = new EmbedBuilder()
+            .setColor(0xFF6B6B)
+            .setTitle('Access Denied')
+            .setDescription(
+                `You were removed from **${channel.name}** because the channel is ${reason}.\n\n` +
+                `Ask **${ownerName}** to give you access to join.`
+            )
+            .setTimestamp();
+        member.send({ embeds: [embed] }).catch(() => {});
+    } catch (err) {
+        console.error(`[DragProtection] Failed to kick ${member.id}:`, err);
     }
 }
 
@@ -522,7 +600,7 @@ async function startInactivityTimer(
                     .setTitle('⚠️ Voice Channel Inactive')
                     .setDescription(
                         `Your voice channel **${channelName}** is currently empty.\n\n` +
-                        `It will be automatically deleted after **5 minutes** of inactivity.\n\n` +
+                        `It will be automatically deleted after **3 minutes** of inactivity.\n\n` +
                         `Join the channel to prevent deletion.`
                     )
                     .setTimestamp();
@@ -555,7 +633,7 @@ async function startInactivityTimer(
                     guild: guild,
                     channelName: channelName,
                     channelId: channelId,
-                    details: `Channel deleted due to 5 minutes of inactivity`,
+                    details: `Channel deleted due to 3 minutes of inactivity`,
                 });
 
                 await deletePrivateChannel(channelId, guildId);
@@ -565,5 +643,5 @@ async function startInactivityTimer(
         } catch (err) {
             console.error(`[Inactivity] Error deleting channel ${channelId}:`, err);
         }
-    }, 5 * 60 * 1000); // 5 minutes
+    }, 3 * 60 * 1000); // 3 minutes
 }
