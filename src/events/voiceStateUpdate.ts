@@ -7,13 +7,10 @@ import {
     registerChannel,
     unregisterChannel,
     getChannelByOwner,
-    setInactivityTimer,
-    clearInactivityTimer,
     addUserToJoinOrder,
     removeUserFromJoinOrder,
     getNextUserInOrder,
     transferOwnership,
-    hasInactivityTimer,
     isOnCooldown,
     setCooldown,
 } from '../utils/voiceManager';
@@ -227,79 +224,9 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
     const channelState = getChannelState(channelId);
     if (channelState) {
         const channel = guild.channels.cache.get(channelId);
-        const wasInactive = hasInactivityTimer(channelId);
         
-        // Clear inactivity timer when someone joins
-        clearInactivityTimer(channelId);
-        
-        // If channel was inactive and this person is not the owner, transfer ownership
-        if (wasInactive && member.id !== channelState.ownerId && channel && channel.type === ChannelType.GuildVoice) {
-            console.log(`[Ownership] Channel was inactive, transferring to ${member.user.tag}`);
-            
-            // Clear previous join order and start fresh
-            removeUserFromJoinOrder(channelId, channelState.ownerId);
-            addUserToJoinOrder(channelId, member.id);
-            
-            // Transfer ownership
-            transferOwnership(channelId, member.id);
-            
-            await prisma.privateVoiceChannel.update({
-                where: { channelId },
-                data: { ownerId: member.id },
-            });
-            
-            // Update channel permissions for new owner
-            const ownerPerms = getOwnerPermissions();
-            await channel.permissionOverwrites.edit(member.id, {
-                ViewChannel: true,
-                Connect: true,
-                Speak: true,
-                Stream: true,
-                MuteMembers: true,
-                DeafenMembers: true,
-                MoveMembers: true,
-                ManageChannels: true,
-            });
-            
-            // Rename voice channel to new owner (with rate limit handling)
-            try {
-                await executeWithRateLimit(
-                    `rename:${channelId}`,
-                    () => channel.setName(member.displayName),
-                    Priority.LOW
-                );
-            } catch (err) {
-                console.log(`[Ownership] Skipped rename due to rate limit`);
-            }
-            
-            // Send claim notification to voice channel chat
-            try {
-                const embed = new EmbedBuilder()
-                    .setColor(0xFFD700)
-                    .setTitle('👑 Channel Claimed')
-                    .setDescription(
-                        `<@${member.id}> claimed this inactive channel and is now the owner!`
-                    )
-                    .setTimestamp();
-                
-                await channel.send({ embeds: [embed] });
-            } catch (err) {
-                console.log(`[Ownership] Failed to send claim message:`, err);
-            }
-            
-            // Log the transfer
-            await logAction({
-                action: LogAction.CHANNEL_CLAIMED,
-                guild: guild,
-                user: member.user,
-                channelName: channel.name,
-                channelId: channelId,
-                details: `Claimed inactive voice channel`,
-            });
-        } else {
-            // Normal join - just add to join order
-            addUserToJoinOrder(channelId, member.id);
-        }
+        // Add user to join order for ownership transfer tracking
+        addUserToJoinOrder(channelId, member.id);
         
         // Log user joined PVC
         if (channel) {
@@ -348,8 +275,19 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
     const channel = guild.channels.cache.get(channelId);
     if (channel && channel.type === ChannelType.GuildVoice) {
         if (channel.members.size === 0) {
-            // Channel is now empty - start inactivity timer
-            await startInactivityTimer(client, channelId, guild.id, channelState.ownerId, channel.name);
+            // Channel is now empty - delete immediately
+            console.log(`[PVC] Channel ${channel.name} is empty, deleting immediately`);
+            
+            // Log channel deletion
+            await logAction({
+                action: LogAction.CHANNEL_DELETED,
+                guild: guild,
+                channelName: channel.name,
+                channelId: channelId,
+                details: `Channel deleted (empty)`,
+            });
+            
+            await deletePrivateChannel(channelId, guild.id);
         } else if (member && member.id === channelState.ownerId) {
             // Owner left but channel is not empty - transfer ownership
             await transferChannelOwnership(client, channelId, guild, channel);
@@ -698,92 +636,4 @@ async function enforceAdminStrictness(
     }
 }
 
-async function startInactivityTimer(
-    client: PVCClient,
-    channelId: string,
-    guildId: string,
-    ownerId: string,
-    channelName: string
-): Promise<void> {
-    console.log(`[Inactivity] Starting 3-minute timer for ${channelName} (${channelId})`);
 
-    // Send DM to owner
-    try {
-        const guild = client.guilds.cache.get(guildId);
-        if (guild) {
-            const owner = await guild.members.fetch(ownerId).catch(() => null);
-            if (owner) {
-                const embed = new EmbedBuilder()
-                    .setColor(0xFFA500)
-                    .setTitle('⚠️ Voice Channel Inactive')
-                    .setDescription(
-                        `Your voice channel **${channelName}** is currently empty.\n\n` +
-                        `It will be automatically deleted after **3 minutes** of inactivity.\n\n` +
-                        `Join the channel to prevent deletion.`
-                    )
-                    .setTimestamp();
-
-                await owner.send({ embeds: [embed] }).catch((err) => {
-                    console.log(`[Inactivity] Could not DM owner ${ownerId}:`, err.message);
-                });
-            }
-        }
-    } catch (err) {
-        console.error(`[Inactivity] Error sending DM to owner:`, err);
-    }
-
-    // Set 3-minute timer
-    setInactivityTimer(channelId, async () => {
-        try {
-            // First check if channel is still registered in our state
-            const channelState = getChannelState(channelId);
-            if (!channelState) {
-                console.log(`[Inactivity] Channel ${channelId} no longer in state, skipping deletion`);
-                return;
-            }
-
-            const guild = client.guilds.cache.get(guildId);
-            if (!guild) {
-                console.log(`[Inactivity] Guild ${guildId} not found, cleaning up state`);
-                await deletePrivateChannel(channelId, guildId);
-                return;
-            }
-
-            const channel = guild.channels.cache.get(channelId);
-            if (!channel) {
-                console.log(`[Inactivity] Channel ${channelId} not found in Discord, cleaning up state`);
-                await deletePrivateChannel(channelId, guildId);
-                return;
-            }
-            
-            if (channel.type !== ChannelType.GuildVoice) {
-                console.log(`[Inactivity] Channel ${channelId} is not a voice channel, skipping`);
-                return;
-            }
-
-            // Double-check channel is still empty
-            if (channel.members.size === 0) {
-                console.log(`[Inactivity] Deleting inactive channel ${channelName} (${channelId})`);
-                
-                // Log channel deletion
-                await logAction({
-                    action: LogAction.CHANNEL_DELETED,
-                    guild: guild,
-                    channelName: channelName,
-                    channelId: channelId,
-                    details: `Channel deleted due to 3 minutes of inactivity`,
-                });
-
-                await deletePrivateChannel(channelId, guildId);
-            } else {
-                console.log(`[Inactivity] Channel ${channelName} has ${channel.members.size} members, canceling deletion`);
-            }
-        } catch (err) {
-            console.error(`[Inactivity] Error in timer callback for ${channelId}:`, err);
-            // Try to cleanup anyway
-            try {
-                await deletePrivateChannel(channelId, guildId);
-            } catch {}
-        }
-    }, 3 * 60 * 1000); // 3 minutes
-}
