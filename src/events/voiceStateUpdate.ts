@@ -134,25 +134,53 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
 
         const ownerPermissions = await getCachedOwnerPerms(guild.id, member.id);
         if (ownerPermissions.length > 0) {
-            const discordTasks = ownerPermissions.map(perm => ({
-                route: `perms:${newChannel.id}:${perm.targetId}`,
-                task: () => newChannel.permissionOverwrites.edit(perm.targetId, {
-                    ViewChannel: true,
-                    Connect: true,
-                }),
-                priority: Priority.NORMAL,
-            }));
+            const validPermissions: typeof ownerPermissions = [];
+            const invalidTargetIds: string[] = [];
 
-            await executeParallel(discordTasks);
+            for (const perm of ownerPermissions) {
+                const isValidTarget = perm.targetType === 'role'
+                    ? guild.roles.cache.has(perm.targetId)
+                    : guild.members.cache.has(perm.targetId) || await guild.members.fetch(perm.targetId).catch(() => null);
 
-            await batchUpsertPermissions(
-                newChannel.id,
-                ownerPermissions.map(p => ({
-                    targetId: p.targetId,
-                    targetType: p.targetType,
-                    permission: 'permit',
-                }))
-            );
+                if (isValidTarget) {
+                    validPermissions.push(perm);
+                } else {
+                    invalidTargetIds.push(perm.targetId);
+                    console.log(`[PVC] Skipping invalid ${perm.targetType} ${perm.targetId} - no longer exists`);
+                }
+            }
+
+            if (invalidTargetIds.length > 0) {
+                await prisma.ownerPermission.deleteMany({
+                    where: {
+                        guildId: guild.id,
+                        ownerId: member.id,
+                        targetId: { in: invalidTargetIds },
+                    },
+                }).catch(() => {});
+            }
+
+            if (validPermissions.length > 0) {
+                const discordTasks = validPermissions.map(perm => ({
+                    route: `perms:${newChannel.id}:${perm.targetId}`,
+                    task: () => newChannel.permissionOverwrites.edit(perm.targetId, {
+                        ViewChannel: true,
+                        Connect: true,
+                    }),
+                    priority: Priority.NORMAL,
+                }));
+
+                await executeParallel(discordTasks);
+
+                await batchUpsertPermissions(
+                    newChannel.id,
+                    validPermissions.map(p => ({
+                        targetId: p.targetId,
+                        targetType: p.targetType,
+                        permission: 'permit',
+                    }))
+                );
+            }
         }
     } catch (err) {
         console.error(`[PVC] Failed to create private channel for ${member.id}:`, err);
