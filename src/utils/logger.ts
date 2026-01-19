@@ -84,36 +84,34 @@ export async function logAction(data: LogData): Promise<void> {
             return; // No webhook configured, skip logging
         }
 
+        const username = data.user instanceof GuildMember ? data.user.user.username : data.user.username;
+        const userId = data.user instanceof GuildMember ? data.user.user.id : data.user.id;
+
+        // Build clean description
+        let description = `**User:** <@${userId}>`;
+        
+        if (data.channelName) {
+            description += `\n**Channel:** ${data.channelName}`;
+        }
+
+        if (data.targetUser) {
+            const targetUserId = data.targetUser instanceof GuildMember ? data.targetUser.user.id : data.targetUser.id;
+            description += `\n**Target:** <@${targetUserId}>`;
+        }
+
+        if (data.details) {
+            description += `\n**Details:** ${data.details}`;
+        }
+
         const embed = new EmbedBuilder()
-            .setTitle(`📝 ${data.action}`)
+            .setTitle(data.action)
+            .setDescription(description)
             .setColor(ACTION_COLORS[data.action])
             .setTimestamp();
 
-        // Add user info
-        const username = data.user instanceof GuildMember ? data.user.user.username : data.user.username;
-        const userId = data.user instanceof GuildMember ? data.user.user.id : data.user.id;
-        embed.addFields({ name: 'User', value: `<@${userId}> (${username})`, inline: true });
-
-        // Add channel info if provided
-        if (data.channelName) {
-            embed.addFields({ name: 'Channel', value: data.channelName, inline: true });
-        }
-
-        if (data.channelId) {
-            embed.addFields({ name: 'Channel ID', value: data.channelId, inline: true });
-        }
-
-        // Add target user if provided
-        if (data.targetUser) {
-            const targetUsername = data.targetUser instanceof GuildMember ? data.targetUser.user.username : data.targetUser.username;
-            const targetUserId = data.targetUser instanceof GuildMember ? data.targetUser.user.id : data.targetUser.id;
-            embed.addFields({ name: 'Target', value: `<@${targetUserId}> (${targetUsername})`, inline: true });
-        }
-
-        // Add details if provided
-        if (data.details) {
-            embed.setDescription(data.details);
-        }
+        // Get bot user for avatar
+        const botUser = data.guild.client.user;
+        const avatarURL = botUser?.displayAvatarURL() || undefined;
 
         // Send to webhook
         await fetch(settings.logsWebhookUrl, {
@@ -121,7 +119,8 @@ export async function logAction(data: LogData): Promise<void> {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 embeds: [embed.toJSON()],
-                username: 'PVC Logger',
+                username: 'PVC Logs',
+                avatar_url: avatarURL,
             }),
         });
     } catch (error) {
