@@ -1,27 +1,21 @@
 import {
     SlashCommandBuilder,
-    PermissionFlagsBits,
     type ChatInputCommandInteraction,
     EmbedBuilder,
 } from 'discord.js';
 import type { Command } from '../client';
-import { canRunAdminCommand } from '../utils/permissions';
+
+const BOT_DEVELOPER_ID = '929297205796417597';
 
 const data = new SlashCommandBuilder()
     .setName('deploy_commands')
-    .setDescription('Deploy all slash commands globally to all servers')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .setDMPermission(false);
+    .setDescription('Deploy all slash commands globally to all servers (Developer only)')
+    .setDMPermission(true);
 
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    if (!interaction.guild) {
-        await interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
-        return;
-    }
-
-    // Check admin permissions
-    if (!await canRunAdminCommand(interaction)) {
-        await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', ephemeral: true });
+    // Only bot developer can use this command
+    if (interaction.user.id !== BOT_DEVELOPER_ID) {
+        await interaction.reply({ content: '❌ This command is only available to the bot developer.', ephemeral: true });
         return;
     }
 
