@@ -165,7 +165,8 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
             batchUpsertOwnerPermissions(guild.id, message.author.id, ownerPermsToAdd),
         ]);
 
-        // React with count
+        // React with success tick and count
+        await message.react('✅').catch(() => { });
         const count = userIdsToAdd.length;
         if (count > 0 && count <= 10) {
             await message.react(NUMBER_EMOJIS[count - 1]).catch(() => { });
@@ -270,7 +271,8 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
         // Invalidate cache
         invalidateChannelPermissions(channelId);
 
-        // React with count
+        // React with success tick and count
+        await message.react('✅').catch(() => { });
         const count = userIdsToRemove.length;
         if (count > 0 && count <= 10) {
             await message.react(NUMBER_EMOJIS[count - 1]).catch(() => { });
