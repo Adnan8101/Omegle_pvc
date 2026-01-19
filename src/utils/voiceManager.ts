@@ -14,6 +14,51 @@ const guildInterfaces = new Map<string, string>(); // guildId -> interfaceChanne
 const inactivityTimers = new Map<string, NodeJS.Timeout>(); // channelId -> timeout
 const joinOrder = new Map<string, string[]>(); // channelId -> array of userIds in join order
 
+// Anti-spam: Track user actions for rate limiting
+const userCooldowns = new Map<string, number>(); // `userId:action` -> timestamp
+const COOLDOWNS = {
+    CREATE_CHANNEL: 5000,    // 5 seconds between channel creations
+    JOIN_PROTECTED: 2000,    // 2 seconds between join attempts to protected channels
+};
+
+/**
+ * Check if user is on cooldown for an action
+ * Returns true if on cooldown, false if allowed
+ */
+export function isOnCooldown(userId: string, action: keyof typeof COOLDOWNS): boolean {
+    const key = `${userId}:${action}`;
+    const lastAction = userCooldowns.get(key);
+    if (!lastAction) return false;
+    
+    const cooldownTime = COOLDOWNS[action];
+    return Date.now() - lastAction < cooldownTime;
+}
+
+/**
+ * Set cooldown for user action
+ */
+export function setCooldown(userId: string, action: keyof typeof COOLDOWNS): void {
+    const key = `${userId}:${action}`;
+    userCooldowns.set(key, Date.now());
+}
+
+/**
+ * Cleanup expired cooldowns (call periodically)
+ */
+export function cleanupCooldowns(): void {
+    const now = Date.now();
+    const maxCooldown = Math.max(...Object.values(COOLDOWNS));
+    
+    for (const [key, timestamp] of userCooldowns) {
+        if (now - timestamp > maxCooldown) {
+            userCooldowns.delete(key);
+        }
+    }
+}
+
+// Cleanup cooldowns every minute
+setInterval(cleanupCooldowns, 60000);
+
 /**
  * Register a private voice channel
  */

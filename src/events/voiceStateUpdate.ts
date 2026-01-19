@@ -14,6 +14,8 @@ import {
     getNextUserInOrder,
     transferOwnership,
     hasInactivityTimer,
+    isOnCooldown,
+    setCooldown,
 } from '../utils/voiceManager';
 import { getOwnerPermissions } from '../utils/permissions';
 import { executeWithRateLimit, executeParallel, Priority } from '../utils/rateLimit';
@@ -103,21 +105,22 @@ async function handleAccessProtection(
     );
     if (isRolePermitted) return false;
 
-    // Check admin strictness whitelist
-    // If admin strictness is OFF, admins can still join - but we check whitelist anyway
-    // If admin strictness is ON, only whitelisted admins can bypass
-    const isWhitelisted = whitelist.some(
-        w => w.targetId === member.id || memberRoleIds.includes(w.targetId)
-    );
+    // Admin Strictness Logic:
+    // - If strictness is OFF: Admins can freely join any locked/hidden PVC (default Discord behavior)
+    // - If strictness is ON: Even admins are blocked UNLESS they're whitelisted
     
-    // If admin strictness is ON, whitelisted users can bypass
-    if (settings?.adminStrictness && isWhitelisted) return false;
+    const hasAdminPerm = member.permissions.has('Administrator') || member.permissions.has('ManageChannels');
     
-    // If admin strictness is OFF, check if user has admin perms - they can bypass
-    // But ONLY if they're not explicitly denied
     if (!settings?.adminStrictness) {
-        const hasAdminPerm = member.permissions.has('Administrator') || member.permissions.has('ManageChannels');
+        // Strictness OFF - admins can bypass, regular users still blocked
         if (hasAdminPerm) return false;
+    } else {
+        // Strictness ON - check whitelist for admins
+        const isWhitelisted = whitelist.some(
+            w => w.targetId === member.id || memberRoleIds.includes(w.targetId)
+        );
+        if (isWhitelisted) return false;
+        // Even admins are blocked if strictness is ON and not whitelisted
     }
 
     // USER IS NOT AUTHORIZED - KICK THEM
@@ -306,6 +309,15 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
     const { guild, member, channel: interfaceChannel } = state;
     if (!member || !interfaceChannel) return;
 
+    // Anti-spam: Check cooldown
+    if (isOnCooldown(member.id, 'CREATE_CHANNEL')) {
+        console.log(`[PVC] User ${member.user.tag} on cooldown, skipping channel creation`);
+        try {
+            await member.voice.disconnect();
+        } catch {}
+        return;
+    }
+
     const existingChannel = getChannelByOwner(guild.id, member.id);
     if (existingChannel) {
         const channel = guild.channels.cache.get(existingChannel);
@@ -321,6 +333,9 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
             return;
         }
     }
+
+    // Set cooldown for channel creation
+    setCooldown(member.id, 'CREATE_CHANNEL');
 
     try {
         const ownerPerms = getOwnerPermissions();
@@ -647,7 +662,7 @@ async function startInactivityTimer(
         console.error(`[Inactivity] Error sending DM to owner:`, err);
     }
 
-    // Set 5-minute timer
+    // Set 3-minute timer
     setInactivityTimer(channelId, async () => {
         try {
             const guild = client.guilds.cache.get(guildId);

@@ -7,6 +7,39 @@ import { handleSelectMenuInteraction } from '../interactions/selects';
 export const name = Events.InteractionCreate;
 export const once = false;
 
+// Per-user rate limiting for interactions
+const userRateLimits = new Map<string, { count: number; resetAt: number }>();
+const RATE_LIMIT = {
+    MAX_INTERACTIONS: 15,  // Max interactions per window
+    WINDOW_MS: 10000,      // 10 second window
+};
+
+function isRateLimited(userId: string): boolean {
+    const now = Date.now();
+    const userLimit = userRateLimits.get(userId);
+    
+    if (!userLimit || now > userLimit.resetAt) {
+        userRateLimits.set(userId, { count: 1, resetAt: now + RATE_LIMIT.WINDOW_MS });
+        return false;
+    }
+    
+    userLimit.count++;
+    if (userLimit.count > RATE_LIMIT.MAX_INTERACTIONS) {
+        return true;
+    }
+    return false;
+}
+
+// Cleanup old rate limit entries every minute
+setInterval(() => {
+    const now = Date.now();
+    for (const [userId, limit] of userRateLimits) {
+        if (now > limit.resetAt) {
+            userRateLimits.delete(userId);
+        }
+    }
+}, 60000);
+
 // Safe reply helper - never throws
 async function safeReply(interaction: Interaction, content: string): Promise<void> {
     try {
@@ -40,6 +73,12 @@ function isStaleError(error: unknown): boolean {
 
 export async function execute(client: PVCClient, interaction: Interaction): Promise<void> {
     try {
+        // Anti-spam: Per-user rate limiting
+        if (isRateLimited(interaction.user.id)) {
+            await safeReply(interaction, '⏳ You\'re doing that too fast! Please wait a moment.');
+            return;
+        }
+
         // Handle slash commands
         if (interaction.isChatInputCommand()) {
             const command = client.commands.get(interaction.commandName);
