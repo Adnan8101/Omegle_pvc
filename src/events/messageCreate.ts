@@ -225,7 +225,6 @@ async function handleList(message: Message, channelId: string | undefined): Prom
     }
 
     const owner = guild.members.cache.get(pvcData.ownerId);
-    const state = channel && channel.type === ChannelType.GuildVoice ? getChannelState(channelId) : null;
     
     // Get permitted/banned lists
     const permittedUsers = pvcData.permissions.filter(p => p.permission === 'permit' && p.targetType === 'user');
@@ -246,11 +245,11 @@ async function handleList(message: Message, channelId: string | undefined): Prom
                 { name: 'Owner', value: owner ? `${owner} (${owner.displayName})` : `<@${pvcData.ownerId}>`, inline: true },
             );
 
-        if (channel) {
+        if (channel && channel.type === ChannelType.GuildVoice) {
             embed.addFields(
                 { name: 'Channel Link', value: `<#${channelId}>`, inline: true },
-                { name: 'Members', value: channel.type === ChannelType.GuildVoice ? `${channel.members.size}` : 'N/A', inline: true },
-                { name: 'Status', value: state?.isLocked ? 'Locked' : 'Unlocked', inline: true },
+                { name: 'Members', value: `${channel.members.size}`, inline: true },
+                { name: 'Created', value: `<t:${Math.floor(pvcData.createdAt.getTime() / 1000)}:R>`, inline: true },
             );
         }
 
