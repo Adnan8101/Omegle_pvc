@@ -1,4 +1,4 @@
-import { EmbedBuilder, type Guild, type GuildMember, type User } from 'discord.js';
+import { EmbedBuilder, GuildMember, type Guild, type User } from 'discord.js';
 import prisma from './database';
 
 export enum LogAction {

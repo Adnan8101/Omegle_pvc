@@ -252,10 +252,3 @@ async function handleBitrateModal(interaction: ModalSubmitInteraction, channelId
 
     await interaction.editReply({ content: `Bitrate set to ${bitrate} kbps.` });
 }
-    if (!result.success) {
-        await interaction.editReply({ content: `Failed to set bitrate: ${result.error}` });
-        return;
-    }
-
-    await interaction.editReply({ content: `Bitrate set to ${bitrate} kbps.` });
-}
