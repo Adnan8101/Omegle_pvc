@@ -40,6 +40,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         const { command: pvcCleanup } = await import('./pvc_setup_delete');
         const { command: invite } = await import('./invite');
         const { command: refreshPvc } = await import('./refresh_pvc');
+        const { command: deployCommandsCmd } = await import('./deploy_commands');
 
         const commands = [
             pvcSetup.data.toJSON(),
@@ -50,6 +51,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             pvcCleanup.data.toJSON(),
             invite.data.toJSON(),
             refreshPvc.data.toJSON(),
+            deployCommandsCmd.data.toJSON(),
         ];
 
         const rest = new REST().setToken(Config.token);
