@@ -14,8 +14,6 @@ import {
     getNextUserInOrder,
     transferOwnership,
     hasInactivityTimer,
-    getTextChannelId,
-    setTextChannelId,
 } from '../utils/voiceManager';
 import { getOwnerPermissions } from '../utils/permissions';
 import { executeWithRateLimit, executeParallel, Priority } from '../utils/rateLimit';
@@ -108,39 +106,19 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
                 console.log(`[Ownership] Skipped rename due to rate limit`);
             }
             
-            // Update text channel
-            const textChannelId = getTextChannelId(channelId);
-            if (textChannelId) {
-                const textChannel = guild.channels.cache.get(textChannelId);
-                if (textChannel && textChannel.type === ChannelType.GuildText) {
-                    await textChannel.permissionOverwrites.edit(member.id, {
-                        ViewChannel: true,
-                        SendMessages: true,
-                        ReadMessageHistory: true,
-                    });
-                    
-                    // Rename text channel
-                    try {
-                        await executeWithRateLimit(
-                            `renameText:${textChannelId}`,
-                            () => textChannel.setName(`💬-${member.displayName}`),
-                            Priority.LOW
-                        );
-                    } catch (err) {
-                        console.log(`[Ownership] Skipped text channel rename due to rate limit`);
-                    }
-                    
-                    // Send claim notification to text channel
-                    const embed = new EmbedBuilder()
-                        .setColor(0xFFD700)
-                        .setTitle('👑 Channel Claimed')
-                        .setDescription(
-                            `<@${member.id}> claimed this inactive channel and is now the owner!`
-                        )
-                        .setTimestamp();
-                    
-                    await textChannel.send({ embeds: [embed] }).catch(() => {});
-                }
+            // Send claim notification to voice channel chat
+            try {
+                const embed = new EmbedBuilder()
+                    .setColor(0xFFD700)
+                    .setTitle('👑 Channel Claimed')
+                    .setDescription(
+                        `<@${member.id}> claimed this inactive channel and is now the owner!`
+                    )
+                    .setTimestamp();
+                
+                await channel.send({ embeds: [embed] });
+            } catch (err) {
+                console.log(`[Ownership] Failed to send claim message:`, err);
             }
             
             // Log the transfer
@@ -155,21 +133,6 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
         } else {
             // Normal join - just add to join order
             addUserToJoinOrder(channelId, member.id);
-            
-            // Give text channel access
-            const textChannelId = getTextChannelId(channelId);
-            if (textChannelId) {
-                const textChannel = guild.channels.cache.get(textChannelId);
-                if (textChannel && textChannel.type === ChannelType.GuildText) {
-                    await textChannel.permissionOverwrites.edit(member.id, {
-                        ViewChannel: true,
-                        SendMessages: true,
-                        ReadMessageHistory: true,
-                    }).catch((err: any) => {
-                        console.log(`[PVC] Failed to update text channel perms for ${member.id}:`, err.message);
-                    });
-                }
-            }
         }
         
         // Log user joined PVC
@@ -198,19 +161,6 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
     // Remove user from join order
     if (member) {
         removeUserFromJoinOrder(channelId, member.id);
-        
-        // Remove text channel access (unless they're the owner)
-        if (member.id !== channelState.ownerId) {
-            const textChannelId = getTextChannelId(channelId);
-            if (textChannelId) {
-                const textChannel = guild.channels.cache.get(textChannelId);
-                if (textChannel && textChannel.type === ChannelType.GuildText) {
-                    await textChannel.permissionOverwrites.delete(member.id).catch((err: any) => {
-                        console.log(`[PVC] Failed to remove text channel perms for ${member.id}:`, err.message);
-                    });
-                }
-            }
-        }
     }
 
     // Log user left PVC
@@ -285,35 +235,6 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
         // Initialize join order with owner as first member
         addUserToJoinOrder(newChannel.id, member.id);
 
-        // Create dedicated text channel for this voice channel
-        let textChannel;
-        try {
-            textChannel = await executeWithRateLimit(
-                `createText:${guild.id}`,
-                () => guild.channels.create({
-                    name: `💬-${member.displayName}`,
-                    type: ChannelType.GuildText,
-                    parent: interfaceChannel.parent,
-                    permissionOverwrites: [
-                        {
-                            id: guild.id,
-                            deny: ['ViewChannel'],
-                        },
-                        {
-                            id: member.id,
-                            allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'],
-                        },
-                    ],
-                }),
-                Priority.NORMAL
-            );
-            
-            setTextChannelId(newChannel.id, textChannel.id);
-            console.log(`[PVC] Created text channel ${textChannel.name} for voice channel`);
-        } catch (err) {
-            console.error(`[PVC] Failed to create text channel:`, err);
-        }
-
         await prisma.privateVoiceChannel.create({
             data: {
                 channelId: newChannel.id,
@@ -326,6 +247,19 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
         if (freshMember.voice.channelId) {
             await freshMember.voice.setChannel(newChannel);
             console.log(`[PVC] Moved ${member.user.tag} to new channel ${newChannel.name}`);
+            
+            // Send welcome message to voice channel chat
+            try {
+                const welcomeEmbed = new EmbedBuilder()
+                    .setColor(0x5865F2)
+                    .setTitle('🎉 Welcome to Your PVC')
+                    .setDescription(`<@${member.id}>, your private voice channel has been created!`)
+                    .setTimestamp();
+                
+                await newChannel.send({ embeds: [welcomeEmbed] });
+            } catch (err) {
+                console.log(`[PVC] Failed to send welcome message:`, err);
+            }
             
             // Log new channel creation
             await logAction({
@@ -451,34 +385,6 @@ async function transferChannelOwnership(
             console.log(`[Ownership] Skipped rename due to rate limit`);
         }
 
-        // Update text channel permissions
-        const textChannelId = getTextChannelId(channelId);
-        if (textChannelId) {
-            const textChannel = guild.channels.cache.get(textChannelId);
-            if (textChannel && textChannel.isTextBased()) {
-                try {
-                    await textChannel.permissionOverwrites.edit(nextUserId, {
-                        ViewChannel: true,
-                        SendMessages: true,
-                        ReadMessageHistory: true,
-                    });
-                    
-                    // Rename text channel
-                    try {
-                        await executeWithRateLimit(
-                            `renameText:${textChannelId}`,
-                            () => textChannel.setName(`💬-${newOwner.displayName}`),
-                            Priority.LOW
-                        );
-                    } catch (err) {
-                        console.log(`[Ownership] Skipped text channel rename due to rate limit`);
-                    }
-                } catch (err) {
-                    console.error(`[Ownership] Failed to update text channel:`, err);
-                }
-            }
-        }
-
         console.log(`[Ownership] Transferred ownership of ${channel.name} to ${newOwner.user.tag}`);
 
         // Log the transfer
@@ -491,22 +397,19 @@ async function transferChannelOwnership(
             details: `Ownership transferred to ${newOwner.user.username}`,
         });
 
-        // Send notification to dedicated text channel
-        if (textChannelId) {
-            const textChannel = guild.channels.cache.get(textChannelId);
-            if (textChannel && textChannel.type === ChannelType.GuildText) {
-                const embed = new EmbedBuilder()
-                    .setColor(0x9B59B6)
-                    .setTitle('🔄 Ownership Transferred')
-                    .setDescription(
-                        `<@${nextUserId}> is now the owner of this voice channel!`
-                    )
-                    .setTimestamp();
+        // Send notification to voice channel chat
+        try {
+            const embed = new EmbedBuilder()
+                .setColor(0x9B59B6)
+                .setTitle('🔄 Ownership Transferred')
+                .setDescription(
+                    `<@${nextUserId}> is now the owner of this voice channel!`
+                )
+                .setTimestamp();
 
-                await textChannel.send({ embeds: [embed] }).catch((err: any) => {
-                    console.log(`[Ownership] Failed to send transfer message:`, err.message);
-                });
-            }
+            await channel.send({ embeds: [embed] });
+        } catch (err) {
+            console.log(`[Ownership] Failed to send transfer message:`, err);
         }
     } catch (err) {
         console.error(`[Ownership] Failed to transfer ownership:`, err);
@@ -520,17 +423,12 @@ async function deletePrivateChannel(channelId: string, guildId: string): Promise
         if (!guild) return;
 
         const channel = guild.channels.cache.get(channelId);
-        const textChannelId = getTextChannelId(channelId);
-        const textChannel = textChannelId ? guild.channels.cache.get(textChannelId) : null;
 
         unregisterChannel(channelId);
 
         await Promise.all([
             channel?.isVoiceBased()
                 ? executeWithRateLimit(`delete:${channelId}`, async () => { await channel.delete(); }, Priority.NORMAL)
-                : Promise.resolve(),
-            textChannel
-                ? executeWithRateLimit(`deleteText:${textChannelId}`, async () => { await textChannel.delete(); }, Priority.NORMAL)
                 : Promise.resolve(),
             prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { }),
         ]);
