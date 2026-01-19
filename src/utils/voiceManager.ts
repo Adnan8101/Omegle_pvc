@@ -5,6 +5,7 @@ interface VoiceChannelState {
     guildId: string;
     ownerId: string;
     interfaceChannel: boolean;
+    textChannelId?: string;
 }
 
 // In-memory cache for fast O(1) lookups
@@ -13,19 +14,24 @@ const ownerToChannel = new Map<string, string>(); // ownerId -> channelId
 const guildInterfaces = new Map<string, string>(); // guildId -> interfaceChannelId
 const inactivityTimers = new Map<string, NodeJS.Timeout>(); // channelId -> timeout
 const joinOrder = new Map<string, string[]>(); // channelId -> array of userIds in join order
+const textChannels = new Map<string, string>(); // voiceChannelId -> textChannelId
 
 /**
  * Register a private voice channel
  */
-export function registerChannel(channelId: string, guildId: string, ownerId: string): void {
+export function registerChannel(channelId: string, guildId: string, ownerId: string, textChannelId?: string): void {
     const state: VoiceChannelState = {
         channelId,
         guildId,
         ownerId,
         interfaceChannel: false,
+        textChannelId,
     };
     channelStates.set(channelId, state);
     ownerToChannel.set(`${guildId}:${ownerId}`, channelId);
+    if (textChannelId) {
+        textChannels.set(channelId, textChannelId);
+    }
 }
 
 /**
@@ -39,6 +45,7 @@ export function unregisterChannel(channelId: string): void {
     }
     clearInactivityTimer(channelId);
     joinOrder.delete(channelId);
+    textChannels.delete(channelId);
 }
 
 /**
@@ -195,4 +202,22 @@ export function getNextUserInOrder(channelId: string): string | undefined {
  */
 export function getJoinOrder(channelId: string): string[] {
     return joinOrder.get(channelId) || [];
+}
+
+/**
+ * Get text channel ID for a voice channel
+ */
+export function getTextChannelId(voiceChannelId: string): string | undefined {
+    return textChannels.get(voiceChannelId);
+}
+
+/**
+ * Set text channel ID for a voice channel
+ */
+export function setTextChannelId(voiceChannelId: string, textChannelId: string): void {
+    textChannels.set(voiceChannelId, textChannelId);
+    const state = channelStates.get(voiceChannelId);
+    if (state) {
+        state.textChannelId = textChannelId;
+    }
 }
