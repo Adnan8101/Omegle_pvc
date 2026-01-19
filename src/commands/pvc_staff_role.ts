@@ -5,6 +5,7 @@ import {
 } from 'discord.js';
 import prisma from '../utils/database';
 import type { Command } from '../client';
+import { invalidateGuildSettings } from '../utils/cache';
 
 const data = new SlashCommandBuilder()
     .setName('pvc_staff_role')
@@ -35,6 +36,8 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 staffRoleId: role.id,
             },
         });
+
+        invalidateGuildSettings(interaction.guild.id);
 
         await interaction.reply({
             content: `Staff role set to ${role}. Members with this role can approve rename requests.`,

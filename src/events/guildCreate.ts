@@ -12,6 +12,7 @@ import {
 import prisma from '../utils/database';
 import { registerInterfaceChannel } from '../utils/voiceManager';
 import { generateInterfaceImage, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
+import { invalidateGuildSettings } from '../utils/cache';
 
 // Main interface buttons (3x3 layout)
 const MAIN_BUTTONS = [
@@ -219,6 +220,8 @@ async function recreateSetup(guild: Guild, existingSettings: any) {
                 interfaceTextId: interfaceTextChannel.id,
             },
         });
+
+        invalidateGuildSettings(guild.id);
 
         // Register in memory
         registerInterfaceChannel(guild.id, interfaceVcChannel.id);

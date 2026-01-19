@@ -13,6 +13,7 @@ import prisma from '../utils/database';
 import { registerInterfaceChannel } from '../utils/voiceManager';
 import type { Command } from '../client';
 import { generateInterfaceImage, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
+import { invalidateGuildSettings } from '../utils/cache';
 
 // Main interface buttons (3x3 layout)
 const MAIN_BUTTONS = [
@@ -130,6 +131,8 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 interfaceTextId: interfaceTextChannel.id,
             },
         });
+
+        invalidateGuildSettings(guild.id);
 
         // 7. Register in memory
         registerInterfaceChannel(guild.id, joinToCreateVc.id);

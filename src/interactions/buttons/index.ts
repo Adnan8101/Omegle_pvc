@@ -21,83 +21,11 @@ import prisma from '../../utils/database';
 import { BUTTON_EMOJI_MAP } from '../../utils/canvasGenerator';
 import { getGuildSettings } from '../../utils/cache';
 
-// Cooldown tracking: userId -> last interaction timestamp
-const userCooldowns: Map<string, number> = new Map();
-const COOLDOWN_MS = 3000; // 3 seconds between interactions
-const RAPID_THRESHOLD = 5; // Number of rapid clicks before extended cooldown
-const EXTENDED_COOLDOWN_MS = 30000; // 30 seconds extended cooldown
-
-// Track rapid clicks: userId -> count of rapid clicks
-const rapidClickCounts: Map<string, { count: number; firstClick: number }> = new Map();
-
-function checkCooldown(userId: string): { allowed: boolean; remainingMs: number } {
-    const now = Date.now();
-    const lastUse = userCooldowns.get(userId);
-
-    // Check for rapid clicking pattern
-    const rapidData = rapidClickCounts.get(userId);
-    if (rapidData) {
-        // Reset rapid count if more than 10 seconds since first click
-        if (now - rapidData.firstClick > 10000) {
-            rapidClickCounts.delete(userId);
-        } else if (rapidData.count >= RAPID_THRESHOLD) {
-            // Apply extended cooldown
-            const extendedEnd = rapidData.firstClick + EXTENDED_COOLDOWN_MS;
-            if (now < extendedEnd) {
-                return { allowed: false, remainingMs: extendedEnd - now };
-            } else {
-                rapidClickCounts.delete(userId);
-            }
-        }
-    }
-
-    if (lastUse) {
-        const elapsed = now - lastUse;
-        if (elapsed < COOLDOWN_MS) {
-            // Track rapid click
-            const current = rapidClickCounts.get(userId) || { count: 0, firstClick: now };
-            current.count++;
-            rapidClickCounts.set(userId, current);
-
-            return { allowed: false, remainingMs: COOLDOWN_MS - elapsed };
-        }
-    }
-
-    userCooldowns.set(userId, now);
-    return { allowed: true, remainingMs: 0 };
-}
-
 export async function handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
     const { customId, guild, member } = interaction;
     if (!guild || !member) return;
 
     const userId = typeof member === 'string' ? member : member.user.id;
-
-    // Skip cooldown for staff actions
-    const isStaffAction = customId === 'pvc_rename_approve' || customId === 'pvc_rename_reject';
-
-    // Check cooldown for regular users
-    if (!isStaffAction) {
-        const cooldownCheck = checkCooldown(userId);
-        if (!cooldownCheck.allowed) {
-            const seconds = Math.ceil(cooldownCheck.remainingMs / 1000);
-
-            // Check if it's extended cooldown (from rapid clicking)
-            const rapidData = rapidClickCounts.get(userId);
-            if (rapidData && rapidData.count >= RAPID_THRESHOLD) {
-                await interaction.reply({
-                    content: `Slow down. You're clicking too fast. Please wait ${seconds} seconds before trying again.`,
-                    ephemeral: true,
-                });
-            } else {
-                await interaction.reply({
-                    content: `Cooldown active. Try again in ${seconds}s`,
-                    ephemeral: true,
-                });
-            }
-            return;
-        }
-    }
 
     // Handle rename approval buttons (staff only)
     if (customId === 'pvc_rename_approve') {
@@ -583,12 +511,15 @@ async function handleClaim(
     const { transferOwnership } = await import('../../utils/voiceManager');
     transferOwnership(voiceChannelId, userId);
 
+    const newOwner = await guild.members.fetch(userId);
+
     await executeWithRateLimit(`perms:${voiceChannelId}`, async () => {
         await channel.permissionOverwrites.delete(channelState.ownerId).catch(() => { });
         await channel.permissionOverwrites.edit(userId, {
             ViewChannel: true, Connect: true, Speak: true, Stream: true,
             MuteMembers: true, DeafenMembers: true, MoveMembers: true, ManageChannels: true,
         });
+        await channel.setName(newOwner.displayName).catch(() => {});
     });
 
     await prisma.privateVoiceChannel.update({

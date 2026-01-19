@@ -6,6 +6,7 @@ import { type Guild, ChannelType } from 'discord.js';
 import prisma from './database';
 import { unregisterChannel, registerChannel, registerInterfaceChannel } from './voiceManager';
 import { client } from '../client';
+import { invalidateGuildSettings } from './cache';
 
 let cleanupInterval: NodeJS.Timeout | null = null;
 
@@ -145,6 +146,10 @@ export async function validateGuildSettings(guild: Guild): Promise<boolean> {
             });
             updated = true;
         }
+    }
+
+    if (updated) {
+        invalidateGuildSettings(guild.id);
     }
 
     return updated;

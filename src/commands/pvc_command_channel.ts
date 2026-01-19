@@ -6,6 +6,7 @@ import {
 } from 'discord.js';
 import prisma from '../utils/database';
 import type { Command } from '../client';
+import { invalidateGuildSettings } from '../utils/cache';
 
 const data = new SlashCommandBuilder()
     .setName('pvc_command_channel')
@@ -37,6 +38,8 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 commandChannelId: channel.id,
             },
         });
+
+        invalidateGuildSettings(interaction.guild.id);
 
         await interaction.reply({
             content: `Prefix commands (!au, !ru, !l) will now only work in ${channel}`,

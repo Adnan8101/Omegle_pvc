@@ -270,10 +270,8 @@ async function handleTransferSelect(
     const oldOwnerId = interaction.user.id;
     const newOwnerId = selectedUser.id;
 
-    // Update memory first
     transferOwnership(channelId, newOwnerId);
 
-    // Parallel operations
     await Promise.all([
         executeWithRateLimit(`perms:${channelId}`, async () => {
             await channel.permissionOverwrites.delete(oldOwnerId).catch(() => { });
@@ -281,6 +279,7 @@ async function handleTransferSelect(
                 ViewChannel: true, Connect: true, Speak: true, Stream: true,
                 MuteMembers: true, DeafenMembers: true, MoveMembers: true, ManageChannels: true,
             });
+            await channel.setName(selectedUser.displayName).catch(() => {});
         }, Priority.HIGH),
         prisma.privateVoiceChannel.update({
             where: { channelId },

@@ -5,6 +5,7 @@ import {
 } from 'discord.js';
 import prisma from '../utils/database';
 import type { Command } from '../client';
+import { invalidateGuildSettings } from '../utils/cache';
 
 const data = new SlashCommandBuilder()
     .setName('admin_strictness')
@@ -40,6 +41,8 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 adminStrictness: enabled,
             },
         });
+
+        invalidateGuildSettings(interaction.guild.id);
 
         await interaction.reply({
             content: `Admin strictness has been turned **${mode}**.${enabled
