@@ -1,4 +1,4 @@
-import { ChannelType, Events, type VoiceState, EmbedBuilder } from 'discord.js';
+import { ChannelType, Events, type VoiceState, EmbedBuilder, AuditLogEvent } from 'discord.js';
 import type { PVCClient } from '../client';
 import prisma from '../utils/database';
 import {
@@ -121,6 +121,58 @@ async function handleAccessProtection(
         );
         if (isWhitelisted) return false;
         // Even admins are blocked if strictness is ON and not whitelisted
+    }
+
+    // Check if this was a bot move - inspect audit logs to find who commanded the move
+    try {
+        const auditLogs = await guild.fetchAuditLogs({
+            type: AuditLogEvent.MemberMove,
+            limit: 5,
+        });
+
+        const recentMove = auditLogs.entries.find(entry => {
+            // Check if this move was within the last 5 seconds and targets our user
+            const timeDiff = Date.now() - entry.createdTimestamp;
+            return timeDiff < 5000 && entry.target?.id === member.id;
+        });
+
+        if (recentMove) {
+            const executor = recentMove.executor;
+            
+            if (executor) {
+                // Check if executor (the one who used the move command) is authorized
+                const executorRoleIds = guild.members.cache.get(executor.id)?.roles.cache.map(r => r.id) || [];
+                
+                // Is executor the owner?
+                if (executor.id === channelState.ownerId) {
+                    console.log(`[AccessProtection] Bot move authorized by owner ${executor.tag}`);
+                    return false;
+                }
+                
+                // Is executor permitted?
+                const isExecutorPermitted = channelPerms.some(
+                    p => p.targetId === executor.id && p.permission === 'permit'
+                );
+                if (isExecutorPermitted) {
+                    console.log(`[AccessProtection] Bot move authorized by permitted user ${executor.tag}`);
+                    return false;
+                }
+                
+                // Is executor's role permitted?
+                const isExecutorRolePermitted = channelPerms.some(
+                    p => executorRoleIds.includes(p.targetId) && p.targetType === 'role' && p.permission === 'permit'
+                );
+                if (isExecutorRolePermitted) {
+                    console.log(`[AccessProtection] Bot move authorized by permitted role holder ${executor.tag}`);
+                    return false;
+                }
+                
+                console.log(`[AccessProtection] Unauthorized bot move by ${executor.tag} - kicking user`);
+            }
+        }
+    } catch (err) {
+        // Audit log fetch failed - continue with kick
+        console.log(`[AccessProtection] Could not fetch audit logs:`, err);
     }
 
     // USER IS NOT AUTHORIZED - KICK THEM
