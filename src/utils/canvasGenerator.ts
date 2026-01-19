@@ -38,6 +38,7 @@ export const BUTTON_EMOJI_MAP: Record<string, { id: string; name: string }> = {
     pvc_region: { id: '1462347844378689567', name: 'region' },
     pvc_claim: { id: '1462348069592109198', name: 'Crown_2' },
     pvc_transfer: { id: '1462348162567110767', name: 'transfer' },
+    pvc_delete: { id: '1462732078239059978', name: 'delete' },
 };
 
 // Helper to fetch image from URL

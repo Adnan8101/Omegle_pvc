@@ -4,8 +4,12 @@ import {
     type UserSelectMenuInteraction,
     type RoleSelectMenuInteraction,
     type StringSelectMenuInteraction,
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    EmbedBuilder,
 } from 'discord.js';
-import { getChannelByOwner, transferOwnership } from '../../utils/voiceManager';
+import { getChannelByOwner, transferOwnership, unregisterChannel, getGuildChannels } from '../../utils/voiceManager';
 import { executeWithRateLimit, executeParallel, Priority } from '../../utils/rateLimit';
 import { getOwnerPermissions } from '../../utils/permissions';
 import prisma from '../../utils/database';
@@ -58,6 +62,9 @@ export async function handleSelectMenuInteraction(
             return;
         case 'strictness_wl_role_select':
             await handleStrictnessRoleSelect(interaction as RoleSelectMenuInteraction);
+            return;
+        case 'pvc_admin_delete_select':
+            await handleAdminDeleteSelect(interaction as StringSelectMenuInteraction);
             return;
         default:
             await interaction.reply({ content: 'Unknown selection.', ephemeral: true });
@@ -292,4 +299,44 @@ async function handleStrictnessUserSelect(interaction: UserSelectMenuInteraction
 async function handleStrictnessRoleSelect(interaction: RoleSelectMenuInteraction): Promise<void> {
     const { added, removed } = await toggleStrictnessWhitelist(interaction.guild!.id, interaction.roles, 'role');
     await interaction.update({ content: `Whitelist updated: ${added} role(s) added, ${removed} role(s) removed.`, components: [] });
+}
+
+async function handleAdminDeleteSelect(interaction: StringSelectMenuInteraction): Promise<void> {
+    const { guild, user } = interaction;
+    if (!guild) return;
+
+    const member = await guild.members.fetch(user.id);
+    const hasAdminPerms = member.permissions.has('Administrator') || member.permissions.has('ManageGuild');
+
+    if (!hasAdminPerms) {
+        await interaction.reply({ content: 'You do not have permission to do this.', ephemeral: true });
+        return;
+    }
+
+    const channelId = interaction.values[0];
+    const channel = guild.channels.cache.get(channelId);
+
+    if (!channel) {
+        await interaction.update({ content: 'Channel not found.', embeds: [], components: [] });
+        return;
+    }
+
+    const confirmButton = new ButtonBuilder()
+        .setCustomId(`pvc_admin_delete:${channelId}`)
+        .setLabel('Confirm Delete')
+        .setStyle(ButtonStyle.Danger);
+
+    const cancelButton = new ButtonBuilder()
+        .setCustomId('pvc_delete_cancel')
+        .setLabel('Cancel')
+        .setStyle(ButtonStyle.Secondary);
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(confirmButton, cancelButton);
+
+    const embed = new EmbedBuilder()
+        .setColor(0xFF6B6B)
+        .setTitle('Confirm Deletion')
+        .setDescription(`Are you sure you want to delete **${channel.name}**?\n\nThis action cannot be undone.`);
+
+    await interaction.update({ embeds: [embed], components: [row] });
 }

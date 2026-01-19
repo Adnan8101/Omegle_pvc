@@ -14,14 +14,16 @@ import { registerInterfaceChannel } from '../utils/voiceManager';
 import type { Command } from '../client';
 import { generateInterfaceImage, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
 
-// Main interface buttons (5 + Settings)
+// Main interface buttons (3x3 layout)
 const MAIN_BUTTONS = [
     { id: 'pvc_lock' },
     { id: 'pvc_unlock' },
     { id: 'pvc_hide' },
     { id: 'pvc_unhide' },
     { id: 'pvc_add_user' },
+    { id: 'pvc_claim' },
     { id: 'pvc_settings' },
+    { id: 'pvc_delete' },
 ] as const;
 
 const data = new SlashCommandBuilder()
@@ -69,9 +71,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             parent: category.id,
         });
 
-        // 3. Create button rows (max 5 buttons per row)
+        // 3. Create button rows (3x3 layout)
         const row1 = new ActionRowBuilder<ButtonBuilder>();
         const row2 = new ActionRowBuilder<ButtonBuilder>();
+        const row3 = new ActionRowBuilder<ButtonBuilder>();
 
         MAIN_BUTTONS.forEach((btn, index) => {
             const emojiData = BUTTON_EMOJI_MAP[btn.id];
@@ -83,11 +86,12 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 button.setEmoji({ id: emojiData.id, name: emojiData.name });
             }
 
-            // First 3 buttons in row1, rest in row2
             if (index < 3) {
                 row1.addComponents(button);
-            } else {
+            } else if (index < 6) {
                 row2.addComponents(button);
+            } else {
+                row3.addComponents(button);
             }
         });
 
@@ -102,6 +106,9 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         const components = [row1];
         if (row2.components.length > 0) {
             components.push(row2);
+        }
+        if (row3.components.length > 0) {
+            components.push(row3);
         }
 
         await interfaceTextChannel.send({

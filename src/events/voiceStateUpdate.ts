@@ -1,4 +1,4 @@
-import { ChannelType, Events, type VoiceState } from 'discord.js';
+import { ChannelType, Events, type VoiceState, EmbedBuilder } from 'discord.js';
 import type { PVCClient } from '../client';
 import prisma from '../utils/database';
 import {
@@ -62,13 +62,6 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
 
     const channelState = getChannelState(channelId);
     if (!channelState) return;
-
-    const channel = guild.channels.cache.get(channelId);
-    if (!channel || channel.type !== ChannelType.GuildVoice) return;
-
-    if (channel.members.size === 0) {
-        await deletePrivateChannel(channelId, guild.id);
-    }
 }
 
 async function createPrivateChannel(client: PVCClient, state: VoiceState): Promise<void> {
@@ -215,17 +208,17 @@ async function enforceAdminStrictness(
     const { guild, member, channelId } = state;
     if (!member || !channelId) return;
 
+    if (member.id === ownerId) return;
+
     const channel = guild.channels.cache.get(channelId);
     if (!channel || !channel.isVoiceBased()) return;
 
     const everyonePerms = channel.permissionOverwrites.cache.get(guild.id);
     const isLocked = everyonePerms?.deny.has('Connect') ?? false;
     const isHidden = everyonePerms?.deny.has('ViewChannel') ?? false;
-    const isFull = channel.userLimit > 0 && channel.members.size >= channel.userLimit;
+    const isFull = channel.userLimit > 0 && channel.members.size > channel.userLimit;
 
     if (!isLocked && !isHidden && !isFull) return;
-
-    if (member.id === ownerId) return;
 
     const settings = await getGuildSettings(guild.id);
     if (!settings?.adminStrictness) return;
@@ -251,14 +244,24 @@ async function enforceAdminStrictness(
     );
     if (isWhitelisted) return;
 
+    const reason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
+    console.log(`[AdminStrictness] Disconnecting ${member.user.tag} from ${channel.name} (${reason})`);
+
     try {
         await member.voice.disconnect();
 
         const owner = guild.members.cache.get(ownerId);
         const ownerName = owner?.displayName || 'the owner';
-        member.send(
-            `You do not have access to this voice channel.\nAsk ${ownerName} to give you access to join.`
-        ).catch(() => { });
-    } catch {
+        const embed = new EmbedBuilder()
+            .setColor(0xFF6B6B)
+            .setTitle('Access Denied')
+            .setDescription(
+                `You were disconnected from **${channel.name}** because the channel is ${reason}.\n\n` +
+                `Ask **${ownerName}** to give you access to join.`
+            )
+            .setTimestamp();
+        member.send({ embeds: [embed] }).catch(() => {});
+    } catch (err) {
+        console.error(`[AdminStrictness] Failed to disconnect ${member.id}:`, err);
     }
 }

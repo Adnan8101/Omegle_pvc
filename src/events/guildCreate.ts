@@ -13,14 +13,16 @@ import prisma from '../utils/database';
 import { registerInterfaceChannel } from '../utils/voiceManager';
 import { generateInterfaceImage, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
 
-// Main interface buttons
+// Main interface buttons (3x3 layout)
 const MAIN_BUTTONS = [
     { id: 'pvc_lock' },
     { id: 'pvc_unlock' },
     { id: 'pvc_hide' },
     { id: 'pvc_unhide' },
     { id: 'pvc_add_user' },
+    { id: 'pvc_claim' },
     { id: 'pvc_settings' },
+    { id: 'pvc_delete' },
 ] as const;
 
 export const name = Events.GuildCreate;
@@ -163,9 +165,10 @@ async function recreateSetup(guild: Guild, existingSettings: any) {
             parent: category.id,
         });
 
-        // Create button rows
+        // Create button rows (3x3 layout)
         const row1 = new ActionRowBuilder<ButtonBuilder>();
         const row2 = new ActionRowBuilder<ButtonBuilder>();
+        const row3 = new ActionRowBuilder<ButtonBuilder>();
 
         MAIN_BUTTONS.forEach((btn, index) => {
             const emojiData = BUTTON_EMOJI_MAP[btn.id];
@@ -179,8 +182,10 @@ async function recreateSetup(guild: Guild, existingSettings: any) {
 
             if (index < 3) {
                 row1.addComponents(button);
-            } else {
+            } else if (index < 6) {
                 row2.addComponents(button);
+            } else {
+                row3.addComponents(button);
             }
         });
 
@@ -194,6 +199,9 @@ async function recreateSetup(guild: Guild, existingSettings: any) {
         const components = [row1];
         if (row2.components.length > 0) {
             components.push(row2);
+        }
+        if (row3.components.length > 0) {
+            components.push(row3);
         }
 
         // Send the control panel message

@@ -13,7 +13,7 @@ import {
     ButtonBuilder,
     ButtonStyle,
 } from 'discord.js';
-import { getChannelByOwner, getChannelState, transferOwnership } from '../../utils/voiceManager';
+import { getChannelByOwner, getChannelState, transferOwnership, unregisterChannel, getGuildChannels } from '../../utils/voiceManager';
 import { executeWithRateLimit, Priority } from '../../utils/rateLimit';
 import { safeEditPermissions, safeSetChannelName, validateVoiceChannel } from '../../utils/discordApi';
 import { pendingRenames } from '../modals/index';
@@ -122,6 +122,23 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
     // Settings menu doesn't require channel ownership
     if (customId === 'pvc_settings') {
         await handleSettings(interaction);
+        return;
+    }
+
+    // Delete button - special handling for owner vs admin
+    if (customId === 'pvc_delete') {
+        await handleDelete(interaction);
+        return;
+    }
+
+    // Handle delete confirmation buttons
+    if (customId.startsWith('pvc_delete_confirm:') || customId === 'pvc_delete_cancel') {
+        await handleDeleteConfirm(interaction);
+        return;
+    }
+
+    if (customId.startsWith('pvc_admin_delete:')) {
+        await handleAdminDelete(interaction);
         return;
     }
 
@@ -580,6 +597,160 @@ async function handleClaim(
     });
 
     await interaction.reply({ content: 'You have claimed ownership of this voice channel.', ephemeral: true });
+}
+
+async function handleDelete(interaction: ButtonInteraction): Promise<void> {
+    const { guild, user } = interaction;
+    if (!guild) return;
+
+    const ownedChannelId = getChannelByOwner(guild.id, user.id);
+
+    if (ownedChannelId) {
+        const channel = guild.channels.cache.get(ownedChannelId);
+        const channelName = channel?.name || 'your voice channel';
+
+        const confirmButton = new ButtonBuilder()
+            .setCustomId(`pvc_delete_confirm:${ownedChannelId}`)
+            .setLabel('Delete')
+            .setStyle(ButtonStyle.Danger);
+
+        const cancelButton = new ButtonBuilder()
+            .setCustomId('pvc_delete_cancel')
+            .setLabel('Cancel')
+            .setStyle(ButtonStyle.Secondary);
+
+        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(confirmButton, cancelButton);
+
+        const embed = new EmbedBuilder()
+            .setColor(0xFF6B6B)
+            .setTitle('Delete Voice Channel')
+            .setDescription(`Are you sure you want to delete **${channelName}**?\n\nThis action cannot be undone.`);
+
+        await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
+        return;
+    }
+
+    const member = await guild.members.fetch(user.id);
+    const hasAdminPerms = member.permissions.has('Administrator') || member.permissions.has('ManageGuild');
+
+    if (!hasAdminPerms) {
+        await interaction.reply({
+            content: 'You do not own a private voice channel.',
+            ephemeral: true,
+        });
+        return;
+    }
+
+    const allPVCs = getGuildChannels(guild.id);
+    if (allPVCs.length === 0) {
+        await interaction.reply({
+            content: 'There are no active private voice channels.',
+            ephemeral: true,
+        });
+        return;
+    }
+
+    const options = allPVCs.slice(0, 25).map(pvc => {
+        const channel = guild.channels.cache.get(pvc.channelId);
+        const owner = guild.members.cache.get(pvc.ownerId);
+        const channelName = channel?.name || 'Unknown';
+        const ownerName = owner?.displayName || pvc.ownerId;
+        return new StringSelectMenuOptionBuilder()
+            .setLabel(channelName)
+            .setDescription(`Owner: ${ownerName}`)
+            .setValue(pvc.channelId);
+    });
+
+    const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId('pvc_admin_delete_select')
+        .setPlaceholder('Select a channel to delete')
+        .addOptions(options);
+
+    const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
+
+    const embed = new EmbedBuilder()
+        .setColor(0xFF6B6B)
+        .setTitle('Admin: Delete Voice Channel')
+        .setDescription(`Select a private voice channel to delete.\n\n**Active PVCs:** ${allPVCs.length}`);
+
+    await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
+}
+
+async function handleDeleteConfirm(interaction: ButtonInteraction): Promise<void> {
+    const { guild, customId } = interaction;
+    if (!guild) return;
+
+    if (customId === 'pvc_delete_cancel') {
+        await interaction.update({ content: 'Cancelled.', embeds: [], components: [] });
+        return;
+    }
+
+    const channelId = customId.replace('pvc_delete_confirm:', '');
+    const channel = guild.channels.cache.get(channelId);
+
+    if (!channel) {
+        await interaction.update({ content: 'Channel not found.', embeds: [], components: [] });
+        return;
+    }
+
+    try {
+        unregisterChannel(channelId);
+        await channel.delete();
+        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => {});
+
+        await interaction.update({
+            content: 'Voice channel deleted successfully.',
+            embeds: [],
+            components: [],
+        });
+    } catch (err) {
+        console.error('[Delete] Failed to delete channel:', err);
+        await interaction.update({
+            content: 'Failed to delete the channel.',
+            embeds: [],
+            components: [],
+        });
+    }
+}
+
+async function handleAdminDelete(interaction: ButtonInteraction): Promise<void> {
+    const { guild, customId, user } = interaction;
+    if (!guild) return;
+
+    const member = await guild.members.fetch(user.id);
+    const hasAdminPerms = member.permissions.has('Administrator') || member.permissions.has('ManageGuild');
+
+    if (!hasAdminPerms) {
+        await interaction.reply({ content: 'You do not have permission to do this.', ephemeral: true });
+        return;
+    }
+
+    const channelId = customId.replace('pvc_admin_delete:', '');
+    const channel = guild.channels.cache.get(channelId);
+
+    if (!channel) {
+        await interaction.update({ content: 'Channel not found.', embeds: [], components: [] });
+        return;
+    }
+
+    try {
+        unregisterChannel(channelId);
+        await channel.delete();
+        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => {});
+
+        await interaction.update({
+            content: `Channel **${channel.name}** deleted successfully.`,
+            embeds: [],
+            components: [],
+        });
+    } catch (err) {
+        console.error('[AdminDelete] Failed to delete channel:', err);
+        await interaction.update({
+            content: 'Failed to delete the channel.',
+            embeds: [],
+            components: [],
+        });
+    }
 }
 
 async function handleLimit(interaction: ButtonInteraction): Promise<void> {
