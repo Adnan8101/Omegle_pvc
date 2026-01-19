@@ -38,11 +38,14 @@ export async function execute(
     if (!member || member.user.bot) return;
 
     if (newState.channelId && newState.channelId !== oldState.channelId) {
-        // Check if user was dragged to a protected PVC
-        if (oldState.channelId) {
-            await handleDragProtection(client, oldState, newState);
+        // CRITICAL: Check access protection FIRST before any other handling
+        // This covers: direct joins, drags, bot moves - ALL scenarios
+        const wasKicked = await handleAccessProtection(client, newState);
+        
+        // Only continue if user wasn't kicked
+        if (!wasKicked) {
+            await handleJoin(client, newState);
         }
-        await handleJoin(client, newState);
     }
 
     if (oldState.channelId && oldState.channelId !== newState.channelId) {
@@ -50,28 +53,37 @@ export async function execute(
     }
 }
 
-async function handleDragProtection(
+/**
+ * CRITICAL ACCESS PROTECTION - Runs BEFORE any other handling
+ * Handles ALL join scenarios: direct joins, drags, bot moves
+ * Returns true if user was kicked (unauthorized), false if allowed
+ */
+async function handleAccessProtection(
     client: PVCClient,
-    oldState: VoiceState,
     newState: VoiceState
-): Promise<void> {
+): Promise<boolean> {
     const { channelId: newChannelId, guild, member } = newState;
-    if (!newChannelId || !member) return;
+    if (!newChannelId || !member) return false;
 
     const channelState = getChannelState(newChannelId);
-    if (!channelState) return; // Not a PVC
+    if (!channelState) return false; // Not a PVC - allow
 
     const channel = guild.channels.cache.get(newChannelId);
-    if (!channel || channel.type !== ChannelType.GuildVoice) return;
+    if (!channel || channel.type !== ChannelType.GuildVoice) return false;
 
-    // Check if channel is locked or hidden
+    // Check if user is the owner - always allow
+    if (member.id === channelState.ownerId) return false;
+
+    // Check channel protection status
     const everyonePerms = channel.permissionOverwrites.cache.get(guild.id);
     const isLocked = everyonePerms?.deny.has('Connect') ?? false;
     const isHidden = everyonePerms?.deny.has('ViewChannel') ?? false;
+    const isFull = channel.userLimit > 0 && channel.members.size > channel.userLimit;
 
-    if (!isLocked && !isHidden) return; // Channel not protected
+    // If channel is not protected at all, allow
+    if (!isLocked && !isHidden && !isFull) return false;
 
-    // User was dragged - check if they have permission
+    // Fetch all permission data in parallel
     const memberRoleIds = member.roles.cache.map(r => r.id);
     const [channelPerms, settings, whitelist] = await Promise.all([
         getChannelPermissions(newChannelId),
@@ -79,48 +91,69 @@ async function handleDragProtection(
         getWhitelist(guild.id),
     ]);
 
-    // Check if user is owner
-    if (member.id === channelState.ownerId) return;
-
-    // Check if user is permitted
+    // Check if user is explicitly permitted
     const isUserPermitted = channelPerms.some(
         p => p.targetId === member.id && p.permission === 'permit'
     );
-    if (isUserPermitted) return;
+    if (isUserPermitted) return false;
 
+    // Check if user has a permitted role
     const isRolePermitted = channelPerms.some(
         p => memberRoleIds.includes(p.targetId) && p.targetType === 'role' && p.permission === 'permit'
     );
-    if (isRolePermitted) return;
+    if (isRolePermitted) return false;
 
-    // Check if user is whitelisted (if admin strictness is on)
-    if (settings?.adminStrictness) {
-        const isWhitelisted = whitelist.some(
-            w => w.targetId === member.id || memberRoleIds.includes(w.targetId)
-        );
-        if (isWhitelisted) return;
+    // Check admin strictness whitelist
+    // If admin strictness is OFF, admins can still join - but we check whitelist anyway
+    // If admin strictness is ON, only whitelisted admins can bypass
+    const isWhitelisted = whitelist.some(
+        w => w.targetId === member.id || memberRoleIds.includes(w.targetId)
+    );
+    
+    // If admin strictness is ON, whitelisted users can bypass
+    if (settings?.adminStrictness && isWhitelisted) return false;
+    
+    // If admin strictness is OFF, check if user has admin perms - they can bypass
+    // But ONLY if they're not explicitly denied
+    if (!settings?.adminStrictness) {
+        const hasAdminPerm = member.permissions.has('Administrator') || member.permissions.has('ManageChannels');
+        if (hasAdminPerm) return false;
     }
 
-    // User doesn't have permission - kick them
-    const reason = isLocked ? 'locked' : 'hidden';
-    console.log(`[DragProtection] Kicking ${member.user.tag} from ${channel.name} (dragged to ${reason} channel)`);
+    // USER IS NOT AUTHORIZED - KICK THEM
+    const reason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
+    console.log(`[AccessProtection] Kicking ${member.user.tag} from ${channel.name} (unauthorized access to ${reason} channel)`);
 
     try {
+        // Disconnect immediately
         await member.voice.disconnect();
 
         const owner = guild.members.cache.get(channelState.ownerId);
         const ownerName = owner?.displayName || 'the owner';
         const embed = new EmbedBuilder()
             .setColor(0xFF6B6B)
-            .setTitle('Access Denied')
+            .setTitle('🚫 Access Denied')
             .setDescription(
-                `You were removed from **${channel.name}** because the channel is ${reason}.\n\n` +
+                `You were removed from **${channel.name}** because the channel is **${reason}**.\n\n` +
                 `Ask **${ownerName}** to give you access to join.`
             )
             .setTimestamp();
         member.send({ embeds: [embed] }).catch(() => {});
+
+        // Log the unauthorized access attempt
+        await logAction({
+            action: LogAction.USER_REMOVED,
+            guild: guild,
+            user: member.user,
+            channelName: channel.name,
+            channelId: newChannelId,
+            details: `Unauthorized access attempt blocked (channel is ${reason})`,
+        });
+
+        return true; // User was kicked
     } catch (err) {
-        console.error(`[DragProtection] Failed to kick ${member.id}:`, err);
+        console.error(`[AccessProtection] Failed to kick ${member.id}:`, err);
+        return false; // Failed to kick but tried
     }
 }
 
@@ -225,7 +258,7 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
             });
         }
         
-        await enforceAdminStrictness(client, state, channelState.ownerId);
+        // Note: Access protection already ran BEFORE handleJoin, so no need to call enforceAdminStrictness
     }
 }
 
@@ -587,7 +620,7 @@ async function startInactivityTimer(
     ownerId: string,
     channelName: string
 ): Promise<void> {
-    console.log(`[Inactivity] Starting 5-minute timer for ${channelName} (${channelId})`);
+    console.log(`[Inactivity] Starting 3-minute timer for ${channelName} (${channelId})`);
 
     // Send DM to owner
     try {
