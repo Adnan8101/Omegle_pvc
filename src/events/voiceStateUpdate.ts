@@ -546,19 +546,37 @@ async function deletePrivateChannel(channelId: string, guildId: string): Promise
     try {
         const { client } = await import('../client');
         const guild = client.guilds.cache.get(guildId);
-        if (!guild) return;
+        if (!guild) {
+            console.log(`[Delete] Guild ${guildId} not found, cleaning up state only`);
+            unregisterChannel(channelId);
+            await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => {});
+            return;
+        }
 
         const channel = guild.channels.cache.get(channelId);
+        
+        // Delete from Discord first, then cleanup state
+        if (channel?.isVoiceBased()) {
+            try {
+                await executeWithRateLimit(`delete:${channelId}`, async () => { 
+                    await channel.delete(); 
+                }, Priority.NORMAL);
+                console.log(`[Delete] Successfully deleted channel ${channelId}`);
+            } catch (deleteErr) {
+                console.error(`[Delete] Failed to delete Discord channel ${channelId}:`, deleteErr);
+                // Continue with state cleanup even if Discord deletion fails
+            }
+        }
 
+        // Now cleanup state
         unregisterChannel(channelId);
-
-        await Promise.all([
-            channel?.isVoiceBased()
-                ? executeWithRateLimit(`delete:${channelId}`, async () => { await channel.delete(); }, Priority.NORMAL)
-                : Promise.resolve(),
-            prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { }),
-        ]);
-    } catch {
+        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => {});
+        
+    } catch (err) {
+        console.error(`[Delete] Error in deletePrivateChannel for ${channelId}:`, err);
+        // Still try to cleanup state
+        unregisterChannel(channelId);
+        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => {});
     }
 }
 

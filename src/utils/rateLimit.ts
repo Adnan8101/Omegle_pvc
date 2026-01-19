@@ -3,7 +3,6 @@
  * Prevents Discord API rate limits and handles extreme load gracefully
  */
 
-// Priority levels for operations
 export enum Priority {
     CRITICAL = 0,  // User-facing immediate actions (replies, modals)
     HIGH = 1,      // Channel creation, permission changes
