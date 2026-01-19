@@ -93,6 +93,9 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
                 channelName: channel.name,
                 channelId: channelId,
                 details: `${member.user.username} left the voice channel`,
+            });
+        }
+    }
 
     // Check if channel is now empty
     const channel = guild.channels.cache.get(channelId);
@@ -100,9 +103,6 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
         if (channel.members.size === 0) {
             // Channel is now empty - start inactivity timer
             await startInactivityTimer(client, channelId, guild.id, channelState.ownerId, channel.name);
-        }
-    }
-            });
         }
     }
 }
@@ -305,7 +305,19 @@ async function enforceAdminStrictness(
 
         const owner = guild.members.cache.get(ownerId);
         const ownerName = owner?.displayName || 'the owner';
- 
+        const embed = new EmbedBuilder()
+            .setColor(0xFF6B6B)
+            .setTitle('Access Denied')
+            .setDescription(
+                `You were disconnected from **${channel.name} PVC** because the channel is ${reason}.\n\n` +
+                `Ask **${ownerName}** to give you access to join.`
+            )
+            .setTimestamp();
+        member.send({ embeds: [embed] }).catch(() => {});
+    } catch (err) {
+        console.error(`[AdminStrictness] Failed to disconnect ${member.id}:`, err);
+    }
+}
 
 async function startInactivityTimer(
     client: PVCClient,
@@ -371,17 +383,4 @@ async function startInactivityTimer(
             console.error(`[Inactivity] Error deleting channel ${channelId}:`, err);
         }
     }, 5 * 60 * 1000); // 5 minutes
-}
-       const embed = new EmbedBuilder()
-            .setColor(0xFF6B6B)
-            .setTitle('Access Denied')
-            .setDescription(
-                `You were disconnected from **${channel.name} PVC ** because the channel is ${reason}.\n\n` +
-                `Ask **${ownerName}** to give you access to join.`
-            )
-            .setTimestamp();
-        member.send({ embeds: [embed] }).catch(() => {});
-    } catch (err) {
-        console.error(`[AdminStrictness] Failed to disconnect ${member.id}:`, err);
-    }
 }

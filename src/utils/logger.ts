@@ -40,7 +40,7 @@ export enum LogAction {
 interface LogData {
     action: LogAction;
     guild: Guild;
-    user: User | GuildMember;
+    user?: User | GuildMember;
     channelName?: string;
     channelId?: string;
     details?: string;
@@ -84,14 +84,17 @@ export async function logAction(data: LogData): Promise<void> {
             return; // No webhook configured, skip logging
         }
 
-        const username = data.user instanceof GuildMember ? data.user.user.username : data.user.username;
-        const userId = data.user instanceof GuildMember ? data.user.user.id : data.user.id;
-
         // Build clean description
-        let description = `**User:** <@${userId}>`;
+        let description = '';
+        
+        if (data.user) {
+            const username = data.user instanceof GuildMember ? data.user.user.username : data.user.username;
+            const userId = data.user instanceof GuildMember ? data.user.user.id : data.user.id;
+            description += `**User:** <@${userId}>`;
+        }
         
         if (data.channelName) {
-            description += `\n**Channel:** ${data.channelName}`;
+            description += `${description ? '\n' : ''}**Channel:** ${data.channelName}`;
         }
 
         if (data.targetUser) {

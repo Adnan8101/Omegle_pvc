@@ -124,7 +124,8 @@ export function clearAllState(): void {
  * Unregister an interface channel for a guild
  */
 export function unregisterInterfaceChannel(guildId: string): void {
- 
+    guildInterfaces.delete(guildId);
+}
 
 /**
  * Set inactivity timer for a channel
@@ -151,5 +152,4 @@ export function clearInactivityTimer(channelId: string): void {
  */
 export function hasInactivityTimer(channelId: string): boolean {
     return inactivityTimers.has(channelId);
-}   guildInterfaces.delete(guildId);
 }
