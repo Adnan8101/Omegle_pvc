@@ -65,7 +65,7 @@ async function handleRejectReasonModal(interaction: ModalSubmitInteraction): Pro
     pendingRenames.delete(messageId);
 
     const rejectedEmbed = new EmbedBuilder()
-        .setTitle('Rename Rejected ❌')
+        .setTitle('Rename Rejected')
         .setDescription(`<@${pendingRename.userId}>'s rename request to **"${pendingRename.newName}"** was rejected.\n\n**Reason:** ${reason}`)
         .setColor(0xFF0000)
         .setFooter({ text: `Rejected by ${staffUser.username}` })
@@ -146,8 +146,8 @@ async function handleRenameModal(interaction: ModalSubmitInteraction, channelId:
     // Create approve/reject buttons
     const row = new ActionRowBuilder<ButtonBuilder>()
         .addComponents(
-            new ButtonBuilder().setCustomId('pvc_rename_approve').setLabel('Approve').setStyle(ButtonStyle.Success).setEmoji('✅'),
-            new ButtonBuilder().setCustomId('pvc_rename_reject').setLabel('Reject').setStyle(ButtonStyle.Danger).setEmoji('❌')
+            new ButtonBuilder().setCustomId('pvc_rename_approve').setLabel('Approve').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('pvc_rename_reject').setLabel('Reject').setStyle(ButtonStyle.Danger)
         );
 
     const embed = new EmbedBuilder()

@@ -55,7 +55,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         )
         .setColor(0x5865F2)
         .addFields({
-            name: '🔗 Invite Link',
+            name: 'Invite Link',
             value: `[Click here to invite the bot](${inviteUrl})`,
         })
         .setFooter({ text: 'After adding, use /pvc_setup to configure the system' })

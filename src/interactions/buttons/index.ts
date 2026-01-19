@@ -290,7 +290,7 @@ async function handleRenameApprove(interaction: ButtonInteraction): Promise<void
     // Silently ignore rename failures
 
     const approvedEmbed = new EmbedBuilder()
-        .setTitle('Rename Approved ✅')
+        .setTitle('Rename Approved')
         .setDescription(`<@${pendingRename.userId}>'s VC has been renamed to **"${pendingRename.newName}"**`)
         .setColor(0x00FF00)
         .setFooter({ text: `Approved by ${staffUser.username}` })
@@ -407,19 +407,19 @@ async function sendSelectionMenu(
 
 // Handlers using helpers
 async function handleLock(interaction: ButtonInteraction, channel: any): Promise<void> {
-    await updateChannelPermission(interaction, channel, { Connect: false }, '🔒 Your voice channel has been **locked**.');
+    await updateChannelPermission(interaction, channel, { Connect: false }, 'Your voice channel has been locked.');
 }
 
 async function handleUnlock(interaction: ButtonInteraction, channel: any): Promise<void> {
-    await updateChannelPermission(interaction, channel, { Connect: null }, '🔓 Your voice channel has been **unlocked**.');
+    await updateChannelPermission(interaction, channel, { Connect: null }, 'Your voice channel has been unlocked.');
 }
 
 async function handleHide(interaction: ButtonInteraction, channel: any): Promise<void> {
-    await updateChannelPermission(interaction, channel, { ViewChannel: false }, '👁️ Your voice channel is now **hidden**.');
+    await updateChannelPermission(interaction, channel, { ViewChannel: false }, 'Your voice channel is now hidden.');
 }
 
 async function handleUnhide(interaction: ButtonInteraction, channel: any): Promise<void> {
-    await updateChannelPermission(interaction, channel, { ViewChannel: null }, '👁️‍🗨️ Your voice channel is now **visible**.');
+    await updateChannelPermission(interaction, channel, { ViewChannel: null }, 'Your voice channel is now visible.');
 }
 
 async function handleInvite(interaction: ButtonInteraction): Promise<void> {
@@ -580,7 +580,7 @@ async function handleClaim(
         data: { ownerId: userId },
     });
 
-    await interaction.reply({ content: '👑 You have **claimed ownership** of this voice channel.', ephemeral: true });
+    await interaction.reply({ content: 'You have claimed ownership of this voice channel.', ephemeral: true });
 }
 
 async function handleLimit(interaction: ButtonInteraction): Promise<void> {

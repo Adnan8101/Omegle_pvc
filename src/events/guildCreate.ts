@@ -67,7 +67,7 @@ export async function execute(guild: Guild): Promise<void> {
                 // Channels still exist, just re-register
                 registerInterfaceChannel(guild.id, existingSettings.interfaceVcId!);
                 restored = true;
-                restorationDetails = `✅ **Restored Existing Channels:**\n` +
+                restorationDetails = `**Restored Existing Channels:**\n` +
                     `• Control Panel: <#${existingSettings.interfaceTextId}>\n` +
                     `• Join to Create VC: <#${existingSettings.interfaceVcId}>\n`;
             } else {
@@ -75,7 +75,7 @@ export async function execute(guild: Guild): Promise<void> {
                 const restoredChannels = await recreateSetup(guild, existingSettings);
                 if (restoredChannels) {
                     restored = true;
-                    restorationDetails = `✅ **Recreated Missing Channels:**\n` +
+                    restorationDetails = `**Recreated Missing Channels:**\n` +
                         `• Control Panel: ${restoredChannels.interfaceTextChannel}\n` +
                         `• Join to Create VC: ${restoredChannels.interfaceVcChannel}\n`;
                 }
@@ -120,7 +120,7 @@ export async function execute(guild: Guild): Promise<void> {
                 otherSettings.push(`• Admin Strictness: Enabled`);
             }
 
-            restorationDetails += `\n📊 **Configuration Restored:**\n` +
+            restorationDetails += `\n**Configuration Restored:**\n` +
                 `• Active Private VCs: ${activePrivateChannels.length}\n` +
                 (otherSettings.length > 0 ? otherSettings.join('\n') + '\n' : '');
 
@@ -237,7 +237,7 @@ async function sendWelcomeDM(guild: Guild) {
         const addLog = auditLogs.entries.first();
         if (addLog && addLog.executor) {
             const embed = new EmbedBuilder()
-                .setTitle('🎉 Thanks for adding Private Voice Channel Bot!')
+                .setTitle('Thanks for adding Private Voice Channel Bot!')
                 .setDescription(
                     `Thank you for adding me to **${guild.name}**!\n\n` +
                     `To get started, use the \`/pvc_setup\` command in your server to configure the Private Voice Channel system.\n\n` +
@@ -270,11 +270,11 @@ async function sendRestorationSuccessDM(guild: Guild, restored: boolean, details
         const addLog = auditLogs.entries.first();
         if (addLog && addLog.executor) {
             const embed = new EmbedBuilder()
-                .setTitle('🔄 PVC Bot Restoration Complete!')
+                .setTitle('PVC Bot Restoration Complete')
                 .setDescription(
                     `Welcome back! I've been re-added to **${guild.name}** and ${restored ? 'successfully restored' : 'detected'} your previous setup.\n\n` +
                     details +
-                    `\n✨ **All systems are active and ready to use!**\n\n` +
+                    `\n**All systems are active and ready to use.**\n\n` +
                     `Your private voice channel system is now fully operational with all previous configurations intact.`
                 )
                 .setColor(0x00FF00)

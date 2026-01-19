@@ -20,8 +20,13 @@ export async function execute(client: PVCClient, message: Message): Promise<void
     // Get guild settings (cached)
     const settings = await getGuildSettings(message.guild.id);
 
-    // If no command channel set, ignore all prefix commands
-    if (!settings?.commandChannelId) return;
+    // If no command channel set, reply with error
+    if (!settings?.commandChannelId) {
+        if (message.content.startsWith('!au') || message.content.startsWith('!ru') || message.content.startsWith('!l')) {
+            await message.reply('Command channel not set. Use `/pvc_command_channel` to set it.').catch(() => {});
+        }
+        return;
+    }
 
     // Only allow in the designated command channel
     if (message.channel.id !== settings.commandChannelId) return;

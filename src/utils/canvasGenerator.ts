@@ -7,8 +7,8 @@ import * as http from 'http';
 const CANVAS_OPTIONS = [
     { emojiId: '1462346720611667978', label: 'Lock' },
     { emojiId: '1462347049562542163', label: 'Unlock' },
-    { emojiId: '1462346932956430387', label: 'Hide' },
-    { emojiId: '1462347257100898456', label: 'Unhide' },
+    { emojiId: '1462347257100898456', label: 'Hide' },
+    { emojiId: '1462346932956430387', label: 'Unhide' },
     { emojiId: '1462347509392343073', label: 'Add User' },
     { emojiId: '1462347302948569178', label: 'Settings' },
     { emojiId: '1462347409840537747', label: 'Limit' },
@@ -25,8 +25,8 @@ const CANVAS_OPTIONS = [
 export const BUTTON_EMOJI_MAP: Record<string, { id: string; name: string }> = {
     pvc_lock: { id: '1462346720611667978', name: 'E_Vc_Hidden' },
     pvc_unlock: { id: '1462347049562542163', name: 'lock' },
-    pvc_hide: { id: '1462346932956430387', name: 'vc_unhide' },
-    pvc_unhide: { id: '1462347257100898456', name: 'vc_hide' },
+    pvc_hide: { id: '1462347257100898456', name: 'vc_hide' },
+    pvc_unhide: { id: '1462346932956430387', name: 'vc_unhide' },
     pvc_add_user: { id: '1462347509392343073', name: 'invite_user' },
     pvc_settings: { id: '1462347302948569178', name: 'settings' },
     pvc_limit: { id: '1462347409840537747', name: 'Users' },
