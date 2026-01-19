@@ -121,6 +121,9 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
         } else if (/^\d{17,19}$/.test(firstArg) && !targetChannel) {
             // First arg is a snowflake but not a channel → treat as user ID
             // This is a secret command where PVC owner adds users to their own PVC
+            if (!channelId) {
+                channelId = getChannelByOwner(guild.id, message.author.id);
+            }
             isSecretCommand = true;
             argsStartIndex = 0; // All args are user IDs
         }
@@ -232,6 +235,9 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
         } else if (/^\d{17,19}$/.test(firstArg) && !targetChannel) {
             // First arg is a snowflake but not a channel → treat as user ID
             // This is a secret command where PVC owner removes users from their own PVC
+            if (!channelId) {
+                channelId = getChannelByOwner(guild.id, message.author.id);
+            }
             isSecretCommand = true;
             argsStartIndex = 0; // All args are user IDs
         }
