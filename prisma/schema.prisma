@@ -1,0 +1,79 @@
+// Prisma Schema for PVC System
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Guild-level settings for the PVC system
+model GuildSettings {
+  id               String   @id @default(uuid())
+  guildId          String   @unique
+  interfaceVcId    String?  // The "Join to Create" voice channel ID
+  interfaceTextId  String?  // The interface text channel ID
+  commandChannelId String?  // Channel where prefix commands (!au, !ru, !l) work
+  staffRoleId      String?  // Staff role that can approve renames
+  adminStrictness  Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  privateChannels  PrivateVoiceChannel[]
+}
+
+// Active private voice channels
+model PrivateVoiceChannel {
+  id          String   @id @default(uuid())
+  channelId   String   @unique
+  guildId     String
+  ownerId     String
+  createdAt   DateTime @default(now())
+
+  guild       GuildSettings @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
+  permissions VoicePermission[]
+
+  @@index([guildId])
+  @@index([ownerId])
+}
+
+// Permissions for private voice channels (permit/ban)
+model VoicePermission {
+  id         String   @id @default(uuid())
+  channelId  String
+  targetId   String   // User ID or Role ID
+  targetType String   // "user" or "role"
+  permission String   // "permit" or "ban"
+  createdAt  DateTime @default(now())
+
+  channel    PrivateVoiceChannel @relation(fields: [channelId], references: [channelId], onDelete: Cascade)
+
+  @@unique([channelId, targetId])
+  @@index([channelId])
+}
+
+// Whitelist for strictness bypass (users/roles that can join any PVC without permit)
+model StrictnessWhitelist {
+  id         String   @id @default(uuid())
+  guildId    String
+  targetId   String   // User ID or Role ID
+  targetType String   // "user" or "role"
+  createdAt  DateTime @default(now())
+
+  @@unique([guildId, targetId])
+  @@index([guildId])
+}
+
+// Persistent permissions for VC owners (survives channel deletion)
+model OwnerPermission {
+  id         String   @id @default(uuid())
+  guildId    String
+  ownerId    String   // The VC owner who granted permission
+  targetId   String   // User ID or Role ID being granted access
+  targetType String   // "user" or "role"
+  createdAt  DateTime @default(now())
+
+  @@unique([guildId, ownerId, targetId])
+  @@index([guildId, ownerId])
+}
