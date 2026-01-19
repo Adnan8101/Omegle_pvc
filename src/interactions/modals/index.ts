@@ -162,17 +162,14 @@ async function handleRenameModal(interaction: ModalSubmitInteraction, channelId:
         .setDescription(
             `**User:** <@${interaction.user.id}>\n` +
             `**New Name:** ${newName}\n\n` +
-            (settings?.staffRoleId ? `Pinging staff with role <@&${settings.staffRoleId}> for approval.\n\n` : '') +
+            (settings?.staffRoleId ? `You can ping any member having <@&${settings.staffRoleId}> for approval.\n\n` : '') +
             `React with ✅ to approve this rename request.`
         )
         .setColor(0xFFAA00)
         .setFooter({ text: '⏱️ Expires in 15 minutes' })
         .setTimestamp();
 
-    const approvalMessage = await commandChannel.send({ 
-        content: settings?.staffRoleId ? `<@&${settings.staffRoleId}>` : undefined,
-        embeds: [embed] 
-    });
+    const approvalMessage = await commandChannel.send({ embeds: [embed] });
     await approvalMessage.react('✅');
 
     // Save to database
