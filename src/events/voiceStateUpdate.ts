@@ -256,7 +256,7 @@ async function enforceAdminStrictness(
             .setColor(0xFF6B6B)
             .setTitle('Access Denied')
             .setDescription(
-                `You were disconnected from **${channel.name}** because the channel is ${reason}.\n\n` +
+                `You were disconnected from **${channel.name} PVC ** because the channel is ${reason}.\n\n` +
                 `Ask **${ownerName}** to give you access to join.`
             )
             .setTimestamp();

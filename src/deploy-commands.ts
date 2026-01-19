@@ -8,6 +8,7 @@ import { command as pvcStaffRole } from './commands/pvc_staff_role';
 import { command as strictnessWl } from './commands/strictness_wl';
 import { command as pvcCleanup } from './commands/pvc_setup_delete';
 import { command as invite } from './commands/invite';
+import { command as refreshPvc } from './commands/refresh_pvc';
 
 const commands = [
     pvcSetup.data.toJSON(),
@@ -18,6 +19,7 @@ const commands = [
     strictnessWl.data.toJSON(),
     pvcCleanup.data.toJSON(),
     invite.data.toJSON(),
+    refreshPvc.data.toJSON(),
 ];
 
 const rest = new REST().setToken(Config.token);
