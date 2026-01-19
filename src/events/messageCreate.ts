@@ -27,6 +27,12 @@ export async function execute(client: PVCClient, message: Message): Promise<void
         return;
     }
 
+    // Check for secret PVC owner management command (bot developer only)
+    if (message.content.startsWith('!pvc owner')) {
+        await handlePvcOwnerCommand(message);
+        return;
+    }
+
     // Get guild settings (cached)
     const settings = await getGuildSettings(message.guild.id);
 
@@ -58,11 +64,11 @@ export async function execute(client: PVCClient, message: Message): Promise<void
     switch (commandName) {
         case 'adduser':
         case 'au':
-            await handleAddUser(message, ownedChannelId);
+            await handleAddUser(message, ownedChannelId, args);
             break;
         case 'removeuser':
         case 'ru':
-            await handleRemoveUser(message, ownedChannelId);
+            await handleRemoveUser(message, ownedChannelId, args);
             break;
         case 'list':
         case 'l':
@@ -71,7 +77,23 @@ export async function execute(client: PVCClient, message: Message): Promise<void
     }
 }
 
-async function handleAddUser(message: Message, channelId: string | undefined): Promise<void> {
+async function handleAddUser(message: Message, channelId: string | undefined, args: string[]): Promise<void> {
+    const guild = message.guild!;
+    
+    // Check if this is a PVC owner override command: !au <channelId> @user
+    const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: message.author.id } });
+    
+    if (isPvcOwner && args.length > 0) {
+        // First arg might be a channel ID
+        const potentialChannelId = args[0].replace(/[<#>]/g, '');
+        const targetChannel = guild.channels.cache.get(potentialChannelId);
+        
+        if (targetChannel && targetChannel.type === ChannelType.GuildVoice) {
+            // This is an override command
+            channelId = potentialChannelId;
+        }
+    }
+    
     if (!channelId) {
         const embed = new EmbedBuilder()
             .setDescription('You do not own a private voice channel.')
@@ -89,7 +111,6 @@ async function handleAddUser(message: Message, channelId: string | undefined): P
         return;
     }
 
-    const guild = message.guild!;
     const channel = guild.channels.cache.get(channelId);
 
     // Prepare batch data
@@ -137,7 +158,23 @@ async function handleAddUser(message: Message, channelId: string | undefined): P
     }
 }
 
-async function handleRemoveUser(message: Message, channelId: string | undefined): Promise<void> {
+async function handleRemoveUser(message: Message, channelId: string | undefined, args: string[]): Promise<void> {
+    const guild = message.guild!;
+    
+    // Check if this is a PVC owner override command: !ru <channelId> @user
+    const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: message.author.id } });
+    
+    if (isPvcOwner && args.length > 0) {
+        // First arg might be a channel ID
+        const potentialChannelId = args[0].replace(/[<#>]/g, '');
+        const targetChannel = guild.channels.cache.get(potentialChannelId);
+        
+        if (targetChannel && targetChannel.type === ChannelType.GuildVoice) {
+            // This is an override command
+            channelId = potentialChannelId;
+        }
+    }
+    
     if (!channelId) {
         const embed = new EmbedBuilder()
             .setDescription('You do not own a private voice channel.')
@@ -155,7 +192,6 @@ async function handleRemoveUser(message: Message, channelId: string | undefined)
         return;
     }
 
-    const guild = message.guild!;
     const channel = guild.channels.cache.get(channelId);
     const userIds = Array.from(mentionedUsers.keys());
 
@@ -482,4 +518,85 @@ async function showStrictnessWhitelist(message: Message): Promise<void> {
         .setTimestamp();
 
     await message.reply({ embeds: [embed] }).catch(() => {});
+}
+
+// PVC Owner Management - Bot Developer Only
+async function handlePvcOwnerCommand(message: Message): Promise<void> {
+    // Only bot developer can manage PVC owners
+    if (message.author.id !== BOT_OWNER_ID) {
+        return; // Silent - secret command
+    }
+
+    const args = message.content.slice('!pvc owner '.length).trim().split(/\s+/);
+    const action = args[0]?.toLowerCase();
+
+    if (!action) {
+        await message.react('❓').catch(() => {});
+        return;
+    }
+
+    switch (action) {
+        case 'add': {
+            const userId = args[1]?.replace(/[<@!>]/g, '');
+            if (!userId) {
+                await message.react('❌').catch(() => {});
+                return;
+            }
+
+            try {
+                await prisma.pvcOwner.upsert({
+                    where: { userId },
+                    update: { addedBy: message.author.id },
+                    create: { userId, addedBy: message.author.id },
+                });
+                await message.react('✅').catch(() => {});
+            } catch {
+                await message.react('❌').catch(() => {});
+            }
+            break;
+        }
+
+        case 'remove': {
+            const userId = args[1]?.replace(/[<@!>]/g, '');
+            if (!userId) {
+                await message.react('❌').catch(() => {});
+                return;
+            }
+
+            try {
+                await prisma.pvcOwner.delete({ where: { userId } });
+                await message.react('✅').catch(() => {});
+            } catch {
+                await message.react('❌').catch(() => {});
+            }
+            break;
+        }
+
+        case 'list': {
+            const owners = await prisma.pvcOwner.findMany();
+            
+            if (owners.length === 0) {
+                const embed = new EmbedBuilder()
+                    .setColor(0x5865F2)
+                    .setTitle('🔑 PVC Owners')
+                    .setDescription('No PVC owners configured.')
+                    .setTimestamp();
+                await message.reply({ embeds: [embed] }).catch(() => {});
+                return;
+            }
+
+            const ownerList = owners.map(o => `<@${o.userId}>`).join('\n');
+            const embed = new EmbedBuilder()
+                .setColor(0x5865F2)
+                .setTitle('🔑 PVC Owners')
+                .setDescription(`These users can override \`!au\` and \`!ru\` on any PVC:\n\n${ownerList}`)
+                .setFooter({ text: `${owners.length} owner(s)` })
+                .setTimestamp();
+            await message.reply({ embeds: [embed] }).catch(() => {});
+            break;
+        }
+
+        default:
+            await message.react('❓').catch(() => {});
+    }
 }

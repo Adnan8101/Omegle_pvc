@@ -94,3 +94,12 @@ model OwnerPermission {
   @@unique([guildId, ownerId, targetId])
   @@index([guildId, ownerId])
 }
+
+model PvcOwner {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  addedBy   String
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
