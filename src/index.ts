@@ -14,6 +14,7 @@ import * as voiceStateUpdateEvent from './events/voiceStateUpdate';
 import * as interactionCreateEvent from './events/interactionCreate';
 import * as messageCreateEvent from './events/messageCreate';
 import * as guildCreateEvent from './events/guildCreate';
+import * as messageReactionAddEvent from './events/messageReactionAdd';
 import { startCleanupInterval, stopCleanupInterval } from './utils/stateManager';
 
 // Register commands
@@ -44,6 +45,9 @@ client.on(messageCreateEvent.name, (...args) =>
 );
 client.on(guildCreateEvent.name, (...args) =>
     guildCreateEvent.execute(...args)
+);
+client.on('messageReactionAdd', (reaction, user) =>
+    messageReactionAddEvent.handleMessageReactionAdd(reaction, user)
 );
 
 // Global error handlers - PREVENT CRASHES (silent for production stability)

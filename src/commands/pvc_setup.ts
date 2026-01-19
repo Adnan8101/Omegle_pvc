@@ -15,6 +15,7 @@ import type { Command } from '../client';
 import { generateInterfaceImage, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
 import { invalidateGuildSettings } from '../utils/cache';
 import { canRunAdminCommand } from '../utils/permissions';
+import { logAction, LogAction } from '../utils/logger';
 
 // Main interface buttons (3x3 layout)
 const MAIN_BUTTONS = [
@@ -39,6 +40,20 @@ const data = new SlashCommandBuilder()
             .setDescription('The category where PVC channels will be created')
             .setRequired(true)
             .addChannelTypes(ChannelType.GuildCategory)
+    )
+    .addChannelOption(option =>
+        option
+            .setName('logs_channel')
+            .setDescription('The channel where all PVC actions will be logged')
+            .setRequired(true)
+            .addChannelTypes(ChannelType.GuildText)
+    )
+    .addChannelOption(option =>
+        option
+            .setName('command_channel')
+            .setDescription('The channel where prefix commands (!au, !ru, !l) and approvals work')
+            .setRequired(true)
+            .addChannelTypes(ChannelType.GuildText)
     );
 
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -54,9 +69,21 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     }
 
     const category = interaction.options.getChannel('category', true);
+    const logsChannel = interaction.options.getChannel('logs_channel', true);
+    const commandChannel = interaction.options.getChannel('command_channel', true);
 
     if (category.type !== ChannelType.GuildCategory) {
         await interaction.reply({ content: 'Please select a valid category channel.', ephemeral: true });
+        return;
+    }
+
+    if (logsChannel.type !== ChannelType.GuildText) {
+        await interaction.reply({ content: 'Logs channel must be a text channel.', ephemeral: true });
+        return;
+    }
+
+    if (commandChannel.type !== ChannelType.GuildText) {
+        await interaction.reply({ content: 'Command channel must be a text channel.', ephemeral: true });
         return;
     }
 
@@ -125,30 +152,53 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             components,
         });
 
-        // 6. Save to database
+        // 6. Create webhook for logging
+        const logsWebhook = await (logsChannel as any).createWebhook({
+            name: 'PVC Logger',
+            reason: 'For logging PVC actions',
+        });
+
+        // 7. Save to database
         await prisma.guildSettings.upsert({
             where: { guildId: guild.id },
             update: {
                 interfaceVcId: joinToCreateVc.id,
                 interfaceTextId: interfaceTextChannel.id,
+                logsChannelId: logsChannel.id,
+                logsWebhookUrl: logsWebhook.url,
+                commandChannelId: commandChannel.id,
             },
             create: {
                 guildId: guild.id,
                 interfaceVcId: joinToCreateVc.id,
                 interfaceTextId: interfaceTextChannel.id,
+                logsChannelId: logsChannel.id,
+                logsWebhookUrl: logsWebhook.url,
+                commandChannelId: commandChannel.id,
             },
         });
 
         invalidateGuildSettings(guild.id);
 
-        // 7. Register in memory
+        // 8. Register in memory
         registerInterfaceChannel(guild.id, joinToCreateVc.id);
 
+        // 9. Log the setup
+        await logAction({
+            action: LogAction.PVC_SETUP,
+            guild: guild,
+            user: interaction.user,
+            details: `PVC System set up with category: ${category.name}, logs: ${logsChannel}, commands: ${commandChannel}`,
+        });
+
         await interaction.editReply(
-            `PVC System set up successfully!\n` +
-            `Category: ${category.name}\n` +
-            `Control Panel: ${interfaceTextChannel}\n` +
-            `Join to Create VC: ${joinToCreateVc}`
+            `✅ PVC System set up successfully!\n\n` +
+            `**Category:** ${category.name}\n` +
+            `**Control Panel:** ${interfaceTextChannel}\n` +
+            `**Join to Create VC:** ${joinToCreateVc}\n` +
+            `**Logs Channel:** ${logsChannel}\n` +
+            `**Command Channel:** ${commandChannel}\n\n` +
+            `All actions will now be logged to ${logsChannel}`
         );
     } catch {
         await interaction.editReply('Failed to set up PVC system. Check bot permissions.');

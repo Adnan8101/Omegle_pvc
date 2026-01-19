@@ -16,10 +16,10 @@ import {
 import { getChannelByOwner, getChannelState, transferOwnership, unregisterChannel, getGuildChannels } from '../../utils/voiceManager';
 import { executeWithRateLimit, Priority } from '../../utils/rateLimit';
 import { safeEditPermissions, safeSetChannelName, validateVoiceChannel } from '../../utils/discordApi';
-import { pendingRenames } from '../modals/index';
 import prisma from '../../utils/database';
 import { BUTTON_EMOJI_MAP } from '../../utils/canvasGenerator';
 import { getGuildSettings } from '../../utils/cache';
+import { logAction, LogAction } from '../../utils/logger';
 
 export async function handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
     const { customId, guild, member } = interaction;
@@ -27,13 +27,9 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
 
     const userId = typeof member === 'string' ? member : member.user.id;
 
-    // Handle rename approval buttons (staff only)
-    if (customId === 'pvc_rename_approve') {
-        await handleRenameApprove(interaction);
-        return;
-    }
-    if (customId === 'pvc_rename_reject') {
-        await handleRenameReject(interaction);
+    // Remove old approval button handlers
+    if (customId === 'pvc_rename_approve' || customId === 'pvc_rename_reject') {
+        await interaction.reply({ content: 'Button approvals are no longer supported. React with ✅ instead.', ephemeral: true });
         return;
     }
 
@@ -202,92 +198,6 @@ function createEmojiButton(customId: string, label: string): ButtonBuilder {
     }
 
     return button;
-}
-
-// Handle rename approval by staff
-async function handleRenameApprove(interaction: ButtonInteraction): Promise<void> {
-    const guild = interaction.guild!;
-    const staffUser = interaction.user;
-    const messageId = interaction.message.id;
-
-    const settings = await getGuildSettings(guild.id);
-
-    if (!settings?.staffRoleId) {
-        await interaction.reply({ content: 'Staff role not configured.', ephemeral: true });
-        return;
-    }
-
-    const member = await guild.members.fetch(staffUser.id);
-    if (!member.roles.cache.has(settings.staffRoleId)) {
-        await interaction.reply({ content: 'Only staff can approve rename requests.', ephemeral: true });
-        return;
-    }
-
-    const pendingRename = pendingRenames.get(messageId);
-    if (!pendingRename) {
-        await interaction.reply({ content: 'This rename request has expired or was already processed.', ephemeral: true });
-        return;
-    }
-
-    pendingRenames.delete(messageId);
-
-    const result = await safeSetChannelName(guild, pendingRename.channelId, pendingRename.newName);
-    // Silently ignore rename failures
-
-    const approvedEmbed = new EmbedBuilder()
-        .setTitle('Rename Approved')
-        .setDescription(`<@${pendingRename.userId}>'s VC has been renamed to **"${pendingRename.newName}"**`)
-        .setColor(0x00FF00)
-        .setFooter({ text: `Approved by ${staffUser.username}` })
-        .setTimestamp();
-
-    await interaction.update({
-        embeds: [approvedEmbed],
-        components: [],
-    });
-}
-
-// Handle rename rejection by staff
-async function handleRenameReject(interaction: ButtonInteraction): Promise<void> {
-    const guild = interaction.guild!;
-    const staffUser = interaction.user;
-    const messageId = interaction.message.id;
-
-    const settings = await getGuildSettings(guild.id);
-
-    if (!settings?.staffRoleId) {
-        await interaction.reply({ content: 'Staff role not configured.', ephemeral: true });
-        return;
-    }
-
-    const member = await guild.members.fetch(staffUser.id);
-    if (!member.roles.cache.has(settings.staffRoleId)) {
-        await interaction.reply({ content: 'Only staff can reject rename requests.', ephemeral: true });
-        return;
-    }
-
-    const pendingRename = pendingRenames.get(messageId);
-    if (!pendingRename) {
-        await interaction.reply({ content: 'This rename request has expired or was already processed.', ephemeral: true });
-        return;
-    }
-
-    const modal = new ModalBuilder()
-        .setCustomId(`pvc_reject_reason_${messageId}`)
-        .setTitle('Rejection Reason');
-
-    const reasonInput = new TextInputBuilder()
-        .setCustomId('reject_reason')
-        .setLabel('Why are you rejecting this request?')
-        .setStyle(TextInputStyle.Paragraph)
-        .setPlaceholder('Enter the reason for rejection...')
-        .setRequired(true)
-        .setMaxLength(500);
-
-    const row = new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput);
-    modal.addComponents(row);
-
-    await interaction.showModal(modal);
 }
 
 // Helper to update channel permissions using safe API

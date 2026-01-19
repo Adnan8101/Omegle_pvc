@@ -1,15 +1,8 @@
-import { type ModalSubmitInteraction, ChannelType, EmbedBuilder, TextChannel, MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { type ModalSubmitInteraction, ChannelType, EmbedBuilder, TextChannel, MessageFlags } from 'discord.js';
 import { getChannelByOwner } from '../../utils/voiceManager';
 import { safeSetChannelName, safeSetUserLimit, safeSetBitrate, validateVoiceChannel } from '../../utils/discordApi';
 import prisma from '../../utils/database';
-
-// Store pending rename requests
-export const pendingRenames = new Map<string, {
-    userId: string;
-    channelId: string;
-    newName: string;
-    guildId: string;
-}>();
+import { logAction, LogAction } from '../../utils/logger';
 
 export async function handleModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
     const { customId, guild } = interaction;
@@ -17,7 +10,7 @@ export async function handleModalSubmit(interaction: ModalSubmitInteraction): Pr
 
     // Handle rejection reason modal
     if (customId.startsWith('pvc_reject_reason_')) {
-        await handleRejectReasonModal(interaction);
+        await interaction.reply({ content: 'Rejection via button is no longer supported. React to the message instead.', flags: MessageFlags.Ephemeral });
         return;
     }
 
@@ -51,37 +44,6 @@ export async function handleModalSubmit(interaction: ModalSubmitInteraction): Pr
     }
 }
 
-async function handleRejectReasonModal(interaction: ModalSubmitInteraction): Promise<void> {
-    const messageId = interaction.customId.replace('pvc_reject_reason_', '');
-    const reason = interaction.fields.getTextInputValue('reject_reason');
-    const staffUser = interaction.user;
-
-    const pendingRename = pendingRenames.get(messageId);
-    if (!pendingRename) {
-        await interaction.reply({ content: 'This rename request has expired or was already processed.', flags: MessageFlags.Ephemeral });
-        return;
-    }
-
-    pendingRenames.delete(messageId);
-
-    const rejectedEmbed = new EmbedBuilder()
-        .setTitle('Rename Rejected')
-        .setDescription(`<@${pendingRename.userId}>'s rename request to **"${pendingRename.newName}"** was rejected.\n\n**Reason:** ${reason}`)
-        .setColor(0xFF0000)
-        .setFooter({ text: `Rejected by ${staffUser.username}` })
-        .setTimestamp();
-
-    try {
-        const originalMessage = interaction.message;
-        if (originalMessage) {
-            await originalMessage.edit({ embeds: [rejectedEmbed], components: [] }).catch(() => { });
-        }
-        await interaction.reply({ content: 'Rename request rejected.', flags: MessageFlags.Ephemeral });
-    } catch {
-        await interaction.reply({ content: 'Rename request rejected.', flags: MessageFlags.Ephemeral }).catch(() => { });
-    }
-}
-
 async function handleLimitModal(interaction: ModalSubmitInteraction, channelId: string): Promise<void> {
     const input = interaction.fields.getTextInputValue('limit_input');
     const limit = parseInt(input, 10);
@@ -98,6 +60,16 @@ async function handleLimitModal(interaction: ModalSubmitInteraction, channelId: 
         await interaction.editReply({ content: `Failed to set limit: ${result.error}` });
         return;
     }
+
+    const channel = await validateVoiceChannel(interaction.guild!, channelId);
+    await logAction({
+        action: LogAction.CHANNEL_LIMIT_SET,
+        guild: interaction.guild!,
+        user: interaction.user,
+        channelName: channel?.name,
+        channelId: channelId,
+        details: limit === 0 ? 'User limit removed' : `User limit set to ${limit}`,
+    });
 
     await interaction.editReply({
         content: limit === 0 ? 'User limit has been removed.' : `User limit set to ${limit}.`,
@@ -127,6 +99,16 @@ async function handleRenameModal(interaction: ModalSubmitInteraction, channelId:
             await interaction.editReply({ content: `Failed to rename: ${result.error}` });
             return;
         }
+        
+        await logAction({
+            action: LogAction.CHANNEL_RENAMED,
+            guild: guild,
+            user: interaction.user,
+            channelName: newName,
+            channelId: channelId,
+            details: `Channel renamed to "${newName}"`,
+        });
+        
         await interaction.editReply({ content: `Channel renamed to "${newName}".` });
         return;
     }
@@ -139,46 +121,101 @@ async function handleRenameModal(interaction: ModalSubmitInteraction, channelId:
             await interaction.editReply({ content: `Failed to rename: ${result.error}` });
             return;
         }
+        
+        await logAction({
+            action: LogAction.CHANNEL_RENAMED,
+            guild: guild,
+            user: interaction.user,
+            channelName: newName,
+            channelId: channelId,
+            details: `Channel renamed to "${newName}"`,
+        });
+        
         await interaction.editReply({ content: `Channel renamed to "${newName}".` });
         return;
     }
 
-    // Create approve/reject buttons
-    const row = new ActionRowBuilder<ButtonBuilder>()
-        .addComponents(
-            new ButtonBuilder().setCustomId('pvc_rename_approve').setLabel('Approve').setStyle(ButtonStyle.Success),
-            new ButtonBuilder().setCustomId('pvc_rename_reject').setLabel('Reject').setStyle(ButtonStyle.Danger)
-        );
-
-    const embed = new EmbedBuilder()
-        .setTitle('Rename Request')
-        .setDescription(`<@${interaction.user.id}> is requesting rename of VC to **"${newName}"**\n\nStaff can approve or reject below.`)
-        .setColor(0xFFAA00)
-        .setFooter({ text: '15 minute timeout' })
-        .setTimestamp();
-
-    const approvalMessage = await commandChannel.send({ embeds: [embed], components: [row] });
-
-    pendingRenames.set(approvalMessage.id, {
-        userId: interaction.user.id,
-        channelId: channelId,
-        newName: newName,
-        guildId: guild.id,
+    // Cancel any existing pending requests from this user
+    const existingRequests = await prisma.pendingRenameRequest.findMany({
+        where: { 
+            guildId: guild.id,
+            userId: interaction.user.id,
+        },
     });
 
-    await interaction.editReply({ content: 'Rename request sent! Waiting for staff approval...' });
+    for (const req of existingRequests) {
+        try {
+            const msg = await commandChannel.messages.fetch(req.messageId);
+            const cancelledEmbed = new EmbedBuilder()
+                .setTitle('Rename Request Cancelled')
+                .setDescription(`<@${req.userId}>'s previous rename request to "${req.newName}" was cancelled due to a new request.`)
+                .setColor(0x888888)
+                .setTimestamp();
+            await msg.edit({ embeds: [cancelledEmbed] }).catch(() => {});
+        } catch {}
+        
+        await prisma.pendingRenameRequest.delete({ where: { id: req.id } });
+    }
+
+    const embed = new EmbedBuilder()
+        .setTitle('✏️ Rename Request')
+        .setDescription(
+            `**User:** <@${interaction.user.id}>\n` +
+            `**New Name:** ${newName}\n\n` +
+            `React with ✅ to approve this rename request.`
+        )
+        .setColor(0xFFAA00)
+        .setFooter({ text: '⏱️ Expires in 15 minutes' })
+        .setTimestamp();
+
+    const approvalMessage = await commandChannel.send({ embeds: [embed] });
+    await approvalMessage.react('✅');
+
+    // Save to database
+    await prisma.pendingRenameRequest.create({
+        data: {
+            guildId: guild.id,
+            userId: interaction.user.id,
+            channelId: channelId,
+            newName: newName,
+            messageId: approvalMessage.id,
+        },
+    });
+
+    await logAction({
+        action: LogAction.RENAME_REQUESTED,
+        guild: guild,
+        user: interaction.user,
+        channelId: channelId,
+        details: `Rename request to "${newName}" sent for approval`,
+    });
+
+    await interaction.editReply({ content: '✅ Rename request sent! Waiting for staff approval...' });
 
     // Cleanup timeout
     setTimeout(async () => {
-        const pending = pendingRenames.get(approvalMessage.id);
+        const pending = await prisma.pendingRenameRequest.findUnique({
+            where: { messageId: approvalMessage.id },
+        });
+        
         if (pending) {
-            pendingRenames.delete(approvalMessage.id);
+            await prisma.pendingRenameRequest.delete({ where: { id: pending.id } });
+            
             const timeoutEmbed = new EmbedBuilder()
-                .setTitle('Rename Request Expired')
+                .setTitle('⏱️ Rename Request Expired')
                 .setDescription(`<@${pending.userId}>'s rename request to "${pending.newName}" expired.`)
                 .setColor(0x888888)
                 .setTimestamp();
-            await approvalMessage.edit({ embeds: [timeoutEmbed], components: [] }).catch(() => { });
+            
+            await approvalMessage.edit({ embeds: [timeoutEmbed] }).catch(() => {});
+            
+            await logAction({
+                action: LogAction.RENAME_EXPIRED,
+                guild: guild,
+                user: { id: pending.userId } as any,
+                channelId: pending.channelId,
+                details: `Rename request to "${pending.newName}" expired after 15 minutes`,
+            });
         }
     }, 15 * 60 * 1000);
 }
@@ -198,6 +235,23 @@ async function handleBitrateModal(interaction: ModalSubmitInteraction, channelId
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const result = await safeSetBitrate(guild, channelId, bitrate * 1000);
+    if (!result.success) {
+        await interaction.editReply({ content: `Failed to set bitrate: ${result.error}` });
+        return;
+    }
+
+    const channel = await validateVoiceChannel(guild, channelId);
+    await logAction({
+        action: LogAction.CHANNEL_BITRATE_SET,
+        guild: guild,
+        user: interaction.user,
+        channelName: channel?.name,
+        channelId: channelId,
+        details: `Bitrate set to ${bitrate} kbps`,
+    });
+
+    await interaction.editReply({ content: `Bitrate set to ${bitrate} kbps.` });
+}
     if (!result.success) {
         await interaction.editReply({ content: `Failed to set bitrate: ${result.error}` });
         return;

@@ -13,14 +13,33 @@ model GuildSettings {
   interfaceVcId    String?
   interfaceTextId  String?
   commandChannelId String?
+  logsChannelId    String?
+  logsWebhookUrl   String?
   staffRoleId      String?
   adminStrictness  Boolean  @default(false)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
   privateChannels  PrivateVoiceChannel[]
+  pendingRequests  PendingRenameRequest[]
   
   @@index([guildId])
+}
+
+model PendingRenameRequest {
+  id          String   @id @default(uuid())
+  guildId     String
+  userId      String
+  channelId   String
+  newName     String
+  messageId   String   @unique
+  createdAt   DateTime @default(now())
+  
+  guild       GuildSettings @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
+  
+  @@index([guildId])
+  @@index([userId])
+  @@index([messageId])
 }
 
 model PrivateVoiceChannel {
