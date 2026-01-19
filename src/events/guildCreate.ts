@@ -1,4 +1,5 @@
 import {
+    Events,
     type Guild,
     EmbedBuilder,
     ChannelType,
@@ -22,9 +23,10 @@ const MAIN_BUTTONS = [
     { id: 'pvc_settings' },
 ] as const;
 
-export default {
-    name: 'guildCreate',
-    async execute(guild: Guild) {
+export const name = Events.GuildCreate;
+export const once = false;
+
+export async function execute(guild: Guild): Promise<void> {
         try {
             console.log(`[GuildCreate] Bot added to guild: ${guild.name} (${guild.id})`);
 
@@ -130,8 +132,7 @@ export default {
         } catch (error) {
             console.error('[GuildCreate] Error handling guild create:', error);
         }
-    },
-};
+}
 
 async function recreateSetup(guild: Guild, existingSettings: any) {
     try {
