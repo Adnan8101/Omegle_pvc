@@ -683,11 +683,31 @@ async function startInactivityTimer(
     // Set 3-minute timer
     setInactivityTimer(channelId, async () => {
         try {
+            // First check if channel is still registered in our state
+            const channelState = getChannelState(channelId);
+            if (!channelState) {
+                console.log(`[Inactivity] Channel ${channelId} no longer in state, skipping deletion`);
+                return;
+            }
+
             const guild = client.guilds.cache.get(guildId);
-            if (!guild) return;
+            if (!guild) {
+                console.log(`[Inactivity] Guild ${guildId} not found, cleaning up state`);
+                await deletePrivateChannel(channelId, guildId);
+                return;
+            }
 
             const channel = guild.channels.cache.get(channelId);
-            if (!channel || channel.type !== ChannelType.GuildVoice) return;
+            if (!channel) {
+                console.log(`[Inactivity] Channel ${channelId} not found in Discord, cleaning up state`);
+                await deletePrivateChannel(channelId, guildId);
+                return;
+            }
+            
+            if (channel.type !== ChannelType.GuildVoice) {
+                console.log(`[Inactivity] Channel ${channelId} is not a voice channel, skipping`);
+                return;
+            }
 
             // Double-check channel is still empty
             if (channel.members.size === 0) {
@@ -704,10 +724,14 @@ async function startInactivityTimer(
 
                 await deletePrivateChannel(channelId, guildId);
             } else {
-                console.log(`[Inactivity] Channel ${channelName} is no longer empty, canceling deletion`);
+                console.log(`[Inactivity] Channel ${channelName} has ${channel.members.size} members, canceling deletion`);
             }
         } catch (err) {
-            console.error(`[Inactivity] Error deleting channel ${channelId}:`, err);
+            console.error(`[Inactivity] Error in timer callback for ${channelId}:`, err);
+            // Try to cleanup anyway
+            try {
+                await deletePrivateChannel(channelId, guildId);
+            } catch {}
         }
     }, 3 * 60 * 1000); // 3 minutes
 }
