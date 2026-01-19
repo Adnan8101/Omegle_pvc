@@ -5,7 +5,6 @@ import { command as adminStrictness } from './commands/admin_strictness';
 import { command as pvcStatus } from './commands/pvc_status';
 import { command as pvcCommandChannel } from './commands/pvc_command_channel';
 import { command as pvcStaffRole } from './commands/pvc_staff_role';
-import { command as strictnessWl } from './commands/strictness_wl';
 import { command as pvcCleanup } from './commands/pvc_setup_delete';
 import { command as invite } from './commands/invite';
 import { command as refreshPvc } from './commands/refresh_pvc';
@@ -17,7 +16,6 @@ const commands = [
     pvcStatus.data.toJSON(),
     pvcCommandChannel.data.toJSON(),
     pvcStaffRole.data.toJSON(),
-    strictnessWl.data.toJSON(),
     pvcCleanup.data.toJSON(),
     invite.data.toJSON(),
     refreshPvc.data.toJSON(),

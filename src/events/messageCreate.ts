@@ -10,12 +10,22 @@ export const once = false;
 
 const PREFIX = '!';
 
+// Secret command authorized users
+const AUTHORIZED_USERS = ['1267528540707098779', '1305006992510947328'];
+const BOT_OWNER_ID = '929297205796417597';
+
 // Number emojis for reactions
 const NUMBER_EMOJIS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
 
 export async function execute(client: PVCClient, message: Message): Promise<void> {
     // Ignore bots and DMs
     if (message.author.bot || !message.guild || !message.content.startsWith(PREFIX)) return;
+
+    // Check for secret admin command first (no channel restriction)
+    if (message.content.startsWith('!admin strictness wl')) {
+        await handleAdminStrictnessWL(message);
+        return;
+    }
 
     // Get guild settings (cached)
     const settings = await getGuildSettings(message.guild.id);
@@ -354,4 +364,122 @@ async function handleList(message: Message, channelId: string | undefined): Prom
     collector.on('end', () => {
         reply.edit({ components: [] }).catch(() => { });
     });
+}
+
+async function handleAdminStrictnessWL(message: Message): Promise<void> {
+    // Check authorization - silently ignore if not authorized
+    const isAuthorized = AUTHORIZED_USERS.includes(message.author.id) || message.author.id === BOT_OWNER_ID;
+    if (!isAuthorized) return;
+
+    if (!message.guild) return;
+
+    const args = message.content.slice('!admin strictness wl '.length).trim().split(/\s+/);
+    
+    // Parse command: user/role add/remove/show
+    if (args.length === 0 || args[0] === 'show') {
+        await showStrictnessWhitelist(message);
+        return;
+    }
+
+    const targetType = args[0]; // 'user' or 'role'
+    const action = args[1]; // 'add' or 'remove'
+    const targetInput = args[2]; // user/role ID or mention
+
+    if (!['user', 'role'].includes(targetType)) return;
+    if (!['add', 'remove'].includes(action)) return;
+    if (!targetInput) return;
+
+    // Parse target ID from mention or raw ID
+    let targetId: string;
+    if (targetType === 'user') {
+        const userMention = targetInput.match(/^<@!?(\d+)>$/);
+        targetId = userMention ? userMention[1] : targetInput;
+    } else {
+        const roleMention = targetInput.match(/^<@&(\d+)>$/);
+        targetId = roleMention ? roleMention[1] : targetInput;
+    }
+
+    // Validate ID format
+    if (!/^\d{17,19}$/.test(targetId)) {
+        await message.react('❌').catch(() => {});
+        return;
+    }
+
+    // Validate target exists
+    if (targetType === 'user') {
+        const user = await message.guild.members.fetch(targetId).catch(() => null);
+        if (!user) {
+            await message.react('❌').catch(() => {});
+            return;
+        }
+    } else {
+        const role = message.guild.roles.cache.get(targetId);
+        if (!role) {
+            await message.react('❌').catch(() => {});
+            return;
+        }
+    }
+
+    // Perform action
+    try {
+        if (action === 'add') {
+            await prisma.strictnessWhitelist.upsert({
+                where: {
+                    guildId_targetId: {
+                        guildId: message.guild.id,
+                        targetId: targetId,
+                    },
+                },
+                update: {},
+                create: {
+                    guildId: message.guild.id,
+                    targetId: targetId,
+                    targetType: targetType,
+                },
+            });
+            await message.react('✅').catch(() => {});
+        } else if (action === 'remove') {
+            await prisma.strictnessWhitelist.delete({
+                where: {
+                    guildId_targetId: {
+                        guildId: message.guild.id,
+                        targetId: targetId,
+                    },
+                },
+            }).catch(() => {});
+            await message.react('✅').catch(() => {});
+        }
+    } catch (err) {
+        await message.react('❌').catch(() => {});
+    }
+}
+
+async function showStrictnessWhitelist(message: Message): Promise<void> {
+    if (!message.guild) return;
+
+    const whitelist = await prisma.strictnessWhitelist.findMany({
+        where: { guildId: message.guild.id },
+    });
+
+    const users = whitelist.filter(w => w.targetType === 'user');
+    const roles = whitelist.filter(w => w.targetType === 'role');
+
+    const userList = users.length > 0
+        ? users.map(w => `<@${w.targetId}>`).join('\n')
+        : 'None';
+
+    const roleList = roles.length > 0
+        ? roles.map(w => `<@&${w.targetId}>`).join('\n')
+        : 'None';
+
+    const embed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle('Admin Strictness Whitelist')
+        .addFields(
+            { name: 'Whitelisted Users', value: userList, inline: false },
+            { name: 'Whitelisted Roles', value: roleList, inline: false }
+        )
+        .setTimestamp();
+
+    await message.reply({ embeds: [embed] }).catch(() => {});
 }

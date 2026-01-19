@@ -30,16 +30,6 @@ export async function handleSelectMenuInteraction(
         return;
     }
 
-    // Strictness whitelist selects don't require ownership
-    if (customId === 'strictness_wl_user_select') {
-        await handleStrictnessUserSelect(interaction as UserSelectMenuInteraction);
-        return;
-    }
-    if (customId === 'strictness_wl_role_select') {
-        await handleStrictnessRoleSelect(interaction as RoleSelectMenuInteraction);
-        return;
-    }
-
     // All other selects require channel ownership
     if (!ownedChannelId && customId !== 'pvc_transfer_select') {
         await interaction.reply({
@@ -133,42 +123,6 @@ async function updateVoicePermissions(
         channel.id,
         targetIds.map(id => ({ targetId: id, targetType: type, permission }))
     );
-}
-
-// Optimized batch whitelist toggle
-async function toggleStrictnessWhitelist(
-    guildId: string,
-    targets: Map<string, any>,
-    type: 'user' | 'role'
-): Promise<{ added: number; removed: number }> {
-    const targetIds = Array.from(targets.keys());
-
-    // Fetch existing in one query
-    const existing = await prisma.strictnessWhitelist.findMany({
-        where: { guildId, targetId: { in: targetIds } },
-        select: { id: true, targetId: true },
-    });
-
-    const existingMap = new Map(existing.map(e => [e.targetId, e.id]));
-    const toAdd = targetIds.filter(id => !existingMap.has(id));
-    const toRemove = existing.map(e => e.id);
-
-    // Batch operations
-    await Promise.all([
-        toRemove.length > 0
-            ? prisma.strictnessWhitelist.deleteMany({ where: { id: { in: toRemove } } })
-            : Promise.resolve(),
-        toAdd.length > 0
-            ? prisma.strictnessWhitelist.createMany({
-                data: toAdd.map(id => ({ guildId, targetId: id, targetType: type })),
-            })
-            : Promise.resolve(),
-    ]);
-
-    // Invalidate cache
-    invalidateWhitelist(guildId);
-
-    return { added: toAdd.length, removed: toRemove.length };
 }
 
 async function handleInviteSelect(
@@ -295,16 +249,6 @@ async function handleTransferSelect(
     ]);
 
     await interaction.update({ content: `Ownership transferred to ${selectedUser.displayName}.`, components: [] });
-}
-
-async function handleStrictnessUserSelect(interaction: UserSelectMenuInteraction): Promise<void> {
-    const { added, removed } = await toggleStrictnessWhitelist(interaction.guild!.id, interaction.users, 'user');
-    await interaction.update({ content: `Whitelist updated: ${added} user(s) added, ${removed} user(s) removed.`, components: [] });
-}
-
-async function handleStrictnessRoleSelect(interaction: RoleSelectMenuInteraction): Promise<void> {
-    const { added, removed } = await toggleStrictnessWhitelist(interaction.guild!.id, interaction.roles, 'role');
-    await interaction.update({ content: `Whitelist updated: ${added} role(s) added, ${removed} role(s) removed.`, components: [] });
 }
 
 async function handleAdminDeleteSelect(interaction: StringSelectMenuInteraction): Promise<void> {
