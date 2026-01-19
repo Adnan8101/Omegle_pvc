@@ -1,6 +1,7 @@
 import { PermissionsBitField, type VoiceChannel, type GuildMember, type ChatInputCommandInteraction } from 'discord.js';
 
 const BOT_DEVELOPER_ID = '929297205796417597';
+const AUTHORIZED_USER_IDS = ['929297205796417597', '1267528540707098779', '1305006992510947328'];
 
 export interface PermissionDiff {
     targetId: string;
@@ -33,6 +34,30 @@ export async function canRunAdminCommand(interaction: ChatInputCommandInteractio
 
     // User's role must be higher than bot's role
     return userHighestRole.position > botHighestRole.position;
+}
+
+/**
+ * Check if user can toggle admin strictness.
+ * Allowed if:
+ * 1. User is the server owner
+ * 2. User is one of the 3 authorized users (bot dev + 2 others)
+ */
+export async function canToggleStrictness(interaction: ChatInputCommandInteraction): Promise<boolean> {
+    if (!interaction.guild || !interaction.member) {
+        return false;
+    }
+
+    // Check if user is server owner
+    if (interaction.guild.ownerId === interaction.user.id) {
+        return true;
+    }
+
+    // Check if user is one of the authorized users
+    if (AUTHORIZED_USER_IDS.includes(interaction.user.id)) {
+        return true;
+    }
+
+    return false;
 }
 
 /**
