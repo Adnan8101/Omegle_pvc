@@ -80,8 +80,11 @@ export async function execute(client: PVCClient, message: Message): Promise<void
 async function handleAddUser(message: Message, channelId: string | undefined, args: string[]): Promise<void> {
     const guild = message.guild!;
     
-    // Check if this is a PVC owner override command: !au <channelId> @user
+    // Check if this is a PVC owner override command: !au <channelId> <userId/@user>
     const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: message.author.id } });
+    
+    let userIdsToAdd: string[] = [];
+    let argsStartIndex = 0;
     
     if (isPvcOwner && args.length > 0) {
         // First arg might be a channel ID
@@ -91,6 +94,7 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
         if (targetChannel && targetChannel.type === ChannelType.GuildVoice) {
             // This is an override command
             channelId = potentialChannelId;
+            argsStartIndex = 1; // Skip the channel ID arg
         }
     }
     
@@ -102,10 +106,26 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
         return;
     }
 
+    // Collect user IDs from mentions
     const mentionedUsers = message.mentions.users;
-    if (mentionedUsers.size === 0) {
+    userIdsToAdd.push(...mentionedUsers.keys());
+    
+    // Also collect user IDs from raw args (for PVC owners using ID format)
+    if (isPvcOwner) {
+        for (let i = argsStartIndex; i < args.length; i++) {
+            const arg = args[i].replace(/[<@!>]/g, '');
+            // Check if it's a valid snowflake (user ID) and not already added
+            if (/^\d{17,19}$/.test(arg) && !userIdsToAdd.includes(arg)) {
+                userIdsToAdd.push(arg);
+            }
+        }
+    }
+    
+    if (userIdsToAdd.length === 0) {
         const embed = new EmbedBuilder()
-            .setDescription('Please mention users to add. Usage: `!au @user1 @user2 ...`')
+            .setDescription(isPvcOwner 
+                ? 'Please provide users to add. Usage: `!au <channelId> <userId/@user> ...`'
+                : 'Please mention users to add. Usage: `!au @user1 @user2 ...`')
             .setColor(0xFF0000);
         await message.reply({ embeds: [embed] }).catch(() => { });
         return;
@@ -114,13 +134,13 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
     const channel = guild.channels.cache.get(channelId);
 
     // Prepare batch data
-    const permissionsToAdd = Array.from(mentionedUsers.keys()).map(userId => ({
+    const permissionsToAdd = userIdsToAdd.map(userId => ({
         targetId: userId,
         targetType: 'user' as const,
         permission: 'permit' as const,
     }));
 
-    const ownerPermsToAdd = Array.from(mentionedUsers.keys()).map(userId => ({
+    const ownerPermsToAdd = userIdsToAdd.map(userId => ({
         targetId: userId,
         targetType: 'user' as const,
     }));
@@ -128,7 +148,7 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
     try {
         // Batch Discord API calls in parallel
         if (channel && channel.type === ChannelType.GuildVoice) {
-            const discordTasks = Array.from(mentionedUsers.keys()).map(userId => ({
+            const discordTasks = userIdsToAdd.map(userId => ({
                 route: `perms:${channelId}:${userId}`,
                 task: () => channel.permissionOverwrites.edit(userId, {
                     ViewChannel: true,
@@ -146,7 +166,7 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
         ]);
 
         // React with count
-        const count = mentionedUsers.size;
+        const count = userIdsToAdd.length;
         if (count > 0 && count <= 10) {
             await message.react(NUMBER_EMOJIS[count - 1]).catch(() => { });
         } else if (count > 10) {
@@ -161,8 +181,11 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
 async function handleRemoveUser(message: Message, channelId: string | undefined, args: string[]): Promise<void> {
     const guild = message.guild!;
     
-    // Check if this is a PVC owner override command: !ru <channelId> @user
+    // Check if this is a PVC owner override command: !ru <channelId> <userId/@user>
     const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: message.author.id } });
+    
+    let userIdsToRemove: string[] = [];
+    let argsStartIndex = 0;
     
     if (isPvcOwner && args.length > 0) {
         // First arg might be a channel ID
@@ -172,6 +195,7 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
         if (targetChannel && targetChannel.type === ChannelType.GuildVoice) {
             // This is an override command
             channelId = potentialChannelId;
+            argsStartIndex = 1; // Skip the channel ID arg
         }
     }
     
@@ -183,24 +207,39 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
         return;
     }
 
+    // Collect user IDs from mentions
     const mentionedUsers = message.mentions.users;
-    if (mentionedUsers.size === 0) {
+    userIdsToRemove.push(...mentionedUsers.keys());
+    
+    // Also collect user IDs from raw args (for PVC owners using ID format)
+    if (isPvcOwner) {
+        for (let i = argsStartIndex; i < args.length; i++) {
+            const arg = args[i].replace(/[<@!>]/g, '');
+            // Check if it's a valid snowflake (user ID) and not already added
+            if (/^\d{17,19}$/.test(arg) && !userIdsToRemove.includes(arg)) {
+                userIdsToRemove.push(arg);
+            }
+        }
+    }
+    
+    if (userIdsToRemove.length === 0) {
         const embed = new EmbedBuilder()
-            .setDescription('Please mention users to remove. Usage: `!ru @user1 @user2 ...`')
+            .setDescription(isPvcOwner 
+                ? 'Please provide users to remove. Usage: `!ru <channelId> <userId/@user> ...`'
+                : 'Please mention users to remove. Usage: `!ru @user1 @user2 ...`')
             .setColor(0xFF0000);
         await message.reply({ embeds: [embed] }).catch(() => { });
         return;
     }
 
     const channel = guild.channels.cache.get(channelId);
-    const userIds = Array.from(mentionedUsers.keys());
 
     try {
         // Batch Discord API calls in parallel
         if (channel && channel.type === ChannelType.GuildVoice) {
             const discordTasks: Array<{ route: string; task: () => Promise<any>; priority: Priority }> = [];
 
-            for (const userId of userIds) {
+            for (const userId of userIdsToRemove) {
                 discordTasks.push({
                     route: `perms:${channelId}:${userId}`,
                     task: () => channel.permissionOverwrites.delete(userId).catch(() => { }),
@@ -223,16 +262,16 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
         // Batch DB deletes (run in parallel)
         await Promise.all([
             prisma.voicePermission.deleteMany({
-                where: { channelId, targetId: { in: userIds } },
+                where: { channelId, targetId: { in: userIdsToRemove } },
             }),
-            batchDeleteOwnerPermissions(guild.id, message.author.id, userIds),
+            batchDeleteOwnerPermissions(guild.id, message.author.id, userIdsToRemove),
         ]);
 
         // Invalidate cache
         invalidateChannelPermissions(channelId);
 
         // React with count
-        const count = mentionedUsers.size;
+        const count = userIdsToRemove.length;
         if (count > 0 && count <= 10) {
             await message.react(NUMBER_EMOJIS[count - 1]).catch(() => { });
         } else if (count > 10) {
