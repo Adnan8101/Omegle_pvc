@@ -9,6 +9,7 @@ import {
 } from 'discord.js';
 import prisma from '../utils/database';
 import type { Command } from '../client';
+import { canRunAdminCommand } from '../utils/permissions';
 
 const data = new SlashCommandBuilder()
     .setName('strictness_wl')
@@ -34,6 +35,12 @@ const data = new SlashCommandBuilder()
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guild) {
         await interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
+        return;
+    }
+
+    // Check admin permissions
+    if (!await canRunAdminCommand(interaction)) {
+        await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', ephemeral: true });
         return;
     }
 

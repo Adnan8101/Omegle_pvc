@@ -14,6 +14,7 @@ import { registerInterfaceChannel } from '../utils/voiceManager';
 import type { Command } from '../client';
 import { generateInterfaceImage, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
 import { invalidateGuildSettings } from '../utils/cache';
+import { canRunAdminCommand } from '../utils/permissions';
 
 // Main interface buttons (3x3 layout)
 const MAIN_BUTTONS = [
@@ -43,6 +44,12 @@ const data = new SlashCommandBuilder()
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guild) {
         await interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
+        return;
+    }
+
+    // Check admin permissions
+    if (!await canRunAdminCommand(interaction)) {
+        await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', ephemeral: true });
         return;
     }
 

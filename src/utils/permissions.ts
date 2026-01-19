@@ -1,9 +1,38 @@
-import { PermissionsBitField, type VoiceChannel } from 'discord.js';
+import { PermissionsBitField, type VoiceChannel, type GuildMember, type ChatInputCommandInteraction } from 'discord.js';
+
+const BOT_DEVELOPER_ID = '929297205796417597';
 
 export interface PermissionDiff {
     targetId: string;
     allow: bigint;
     deny: bigint;
+}
+
+/**
+ * Check if user can run admin commands.
+ * Allowed if:
+ * 1. User is the bot developer
+ * 2. User's highest role is above the bot's highest role
+ */
+export async function canRunAdminCommand(interaction: ChatInputCommandInteraction): Promise<boolean> {
+    if (!interaction.guild || !interaction.member) {
+        return false;
+    }
+
+    // Bot developer has full access
+    if (interaction.user.id === BOT_DEVELOPER_ID) {
+        return true;
+    }
+
+    const member = interaction.member as GuildMember;
+    const botMember = await interaction.guild.members.fetchMe();
+
+    // Get highest role positions
+    const userHighestRole = member.roles.highest;
+    const botHighestRole = botMember.roles.highest;
+
+    // User's role must be higher than bot's role
+    return userHighestRole.position > botHighestRole.position;
 }
 
 /**

@@ -13,6 +13,7 @@ import {
 import prisma from '../utils/database';
 import type { Command } from '../client';
 import { generateInterfaceImage, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
+import { canRunAdminCommand } from '../utils/permissions';
 
 const MAIN_BUTTONS = [
     { id: 'pvc_lock' },
@@ -34,6 +35,12 @@ const data = new SlashCommandBuilder()
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guild) {
         await interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
+        return;
+    }
+
+    // Check admin permissions
+    if (!await canRunAdminCommand(interaction)) {
+        await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', ephemeral: true });
         return;
     }
 
