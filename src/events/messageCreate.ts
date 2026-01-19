@@ -117,15 +117,15 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
             // First arg is a valid voice channel → secret command with channel
             channelId = firstArg;
             argsStartIndex = 1; // Skip the channel ID arg
-            isSecretCommand = true;
+            isSecretCommand = true; // Only true secret when using channel ID
         } else if (/^\d{17,19}$/.test(firstArg) && !targetChannel) {
             // First arg is a snowflake but not a channel → treat as user ID
-            // This is a secret command where PVC owner adds users to their own PVC
+            // Use secret powers but look like normal command (number reactions)
             if (!channelId) {
                 channelId = getChannelByOwner(guild.id, message.author.id);
             }
-            isSecretCommand = true;
             argsStartIndex = 0; // All args are user IDs
+            // isSecretCommand stays false - use normal reactions
         }
     }
     
@@ -154,9 +154,7 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
     
     if (userIdsToAdd.length === 0) {
         const embed = new EmbedBuilder()
-            .setDescription(isPvcOwner 
-                ? 'Please provide users to add. Usage: `!au <channelId> <userId/@user> ...`'
-                : 'Please mention users to add. Usage: `!au @user1 @user2 ...`')
+            .setDescription('Please mention users to add. Usage: `!au @user1 @user2 ...`')
             .setColor(0xFF0000);
         await message.reply({ embeds: [embed] }).catch(() => { });
         return;
@@ -231,15 +229,15 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
             // First arg is a valid voice channel → secret command with channel
             channelId = firstArg;
             argsStartIndex = 1; // Skip the channel ID arg
-            isSecretCommand = true;
+            isSecretCommand = true; // Only true secret when using channel ID
         } else if (/^\d{17,19}$/.test(firstArg) && !targetChannel) {
             // First arg is a snowflake but not a channel → treat as user ID
-            // This is a secret command where PVC owner removes users from their own PVC
+            // Use secret powers but look like normal command (number reactions)
             if (!channelId) {
                 channelId = getChannelByOwner(guild.id, message.author.id);
             }
-            isSecretCommand = true;
             argsStartIndex = 0; // All args are user IDs
+            // isSecretCommand stays false - use normal reactions
         }
     }
     
@@ -268,9 +266,7 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
     
     if (userIdsToRemove.length === 0) {
         const embed = new EmbedBuilder()
-            .setDescription(isPvcOwner 
-                ? 'Please provide users to remove. Usage: `!ru <channelId> <userId/@user> ...`'
-                : 'Please mention users to remove. Usage: `!ru @user1 @user2 ...`')
+            .setDescription('Please mention users to remove. Usage: `!ru @user1 @user2 ...`')
             .setColor(0xFF0000);
         await message.reply({ embeds: [embed] }).catch(() => { });
         return;
