@@ -24,6 +24,9 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
     const { customId, guild, member } = interaction;
     if (!guild || !member) return;
 
+    // Skip buttons handled by message collectors (from !l command)
+    if (customId.startsWith('list_')) return;
+
     const userId = typeof member === 'string' ? member : member.user.id;
 
     if (customId === 'pvc_rename_approve' || customId === 'pvc_rename_reject') {

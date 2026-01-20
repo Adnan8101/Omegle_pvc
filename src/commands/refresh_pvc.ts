@@ -14,7 +14,7 @@ import type { Command } from '../client';
 import { generateInterfaceEmbed, generateInterfaceImage, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
 import { canRunAdminCommand } from '../utils/permissions';
 import { logAction, LogAction } from '../utils/logger';
-import { invalidateGuildSettings, clearAllCaches as invalidateAllCaches } from '../utils/cache';
+import { invalidateGuildSettings, clearAllCaches as invalidateAllCaches, invalidateChannelPermissions } from '../utils/cache';
 import { clearGuildState, registerInterfaceChannel, registerChannel } from '../utils/voiceManager';
 
 const MAIN_BUTTONS = [
@@ -163,7 +163,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 // Delete all old permissions for this channel
                 await prisma.voicePermission.deleteMany({
                     where: { channelId: pvc.channelId, permission: 'permit' },
-                }).catch(() => { });
+                });
+
+                // Invalidate cache so !l shows fresh data
+                invalidateChannelPermissions(pvc.channelId);
 
                 // Create permissions for current members only
                 if (currentMemberIds.length > 0) {
