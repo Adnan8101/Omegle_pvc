@@ -2,22 +2,23 @@ import { EmbedBuilder, type Guild } from 'discord.js';
 import { createCanvas, loadImage } from 'canvas';
 
 export const BUTTON_EMOJI_MAP: Record<string, { id: string; name: string }> = {
-    pvc_lock: { id: '1462346720611667978', name: 'vc_locked' },
-    pvc_unlock: { id: '1462347049562542163', name: 'vc' },
-    pvc_privacy: { id: '1462347257100898456', name: 'iHorizon_VC_Privacy' },
-    pvc_add_user: { id: '1462347509392343073', name: 'invite' },
-    pvc_remove_user: { id: '1462346932956430387', name: 'iHorizon_VC_Untrust' },
-    pvc_invite: { id: '1462347509392343073', name: 'invite' },
-    pvc_name: { id: '1462347738069864552', name: 'iHorizon_VC_Name' },
-    pvc_kick: { id: '1462347609384419392', name: 'Rexor_Kick_VC' },
+    pvc_lock: { id: '1462741158047514717', name: 'vc_locked' },
+    pvc_unlock: { id: '1462741437798940703', name: 'vc' },
+    pvc_privacy: { id: '1463029462416232589', name: 'iHorizon_VC_Privacy' },
+    pvc_add_user: { id: '1463028805005344901', name: 'invite' },
+    pvc_remove_user: { id: '1463028427811590339', name: 'iHorizon_VC_Untrust' },
+    pvc_invite: { id: '1463028805005344901', name: 'invite' },
+    pvc_name: { id: '1463027975254577356', name: 'iHorizon_VC_Name' },
+    pvc_kick: { id: '1463029009301639262', name: 'Rexor_Kick_VC' },
     pvc_region: { id: '1462347844378689567', name: 'region' },
-    pvc_block: { id: '1462347609384419392', name: 'iHorizon_VC_Block' },
-    pvc_unblock: { id: '1462346932956430387', name: 'iHorizon_VC_Untrust' },
+    pvc_block: { id: '1463029852159344818', name: 'iHorizon_VC_Block' },
+    pvc_unblock: { id: '1463028427811590339', name: 'iHorizon_VC_Untrust' },
     pvc_claim: { id: '1462348069592109198', name: 'Crown_2' },
     pvc_transfer: { id: '1462348162567110767', name: 'transfer' },
     pvc_delete: { id: '1462732078239059978', name: 'delete' },
     pvc_chat: { id: '1463034848917721363', name: 'Chat' },
     pvc_info: { id: '1463034934611673264', name: 'info' },
+    settings: { id: '1462347302948569178', name: 'settings' },
 };
 
 const BUTTON_LAYOUT = [
@@ -85,7 +86,8 @@ export async function generateInterfaceImage(): Promise<Buffer> {
 
             // Draw Text
             ctx.fillStyle = '#FFFFFF';
-            ctx.font = 'bold 24px Arial, sans-serif';
+            // Use system font or a standard safe font stack - bold weights render better on canvas
+            ctx.font = 'bold 24px "Verdana", "Arial", sans-serif';
             ctx.textAlign = 'left';
             ctx.textBaseline = 'middle';
             ctx.fillText(btn.label, x + 65, y + buttonHeight / 2);
@@ -115,7 +117,7 @@ export function generateInterfaceEmbed(guild: Guild, imageName: string = 'interf
         .setImage(`attachment://${imageName}`)
         .setFooter({
             text: 'Press the buttons below to use the interface',
-            iconURL: 'https://cdn.discordapp.com/emojis/1462347302948569178.png'
+            iconURL: `https://cdn.discordapp.com/emojis/${BUTTON_EMOJI_MAP.settings.id}.png`
         });
 
     return embed;
