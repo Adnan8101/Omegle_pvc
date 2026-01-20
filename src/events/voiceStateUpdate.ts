@@ -102,49 +102,18 @@ async function handleAccessProtection(
         if (isWhitelisted) return false;
     }
 
-    try {
-        const auditLogs = await guild.fetchAuditLogs({
-            type: AuditLogEvent.MemberMove,
-            limit: 5,
-        });
-
-        const recentMove = auditLogs.entries.find(entry => {
-            const timeDiff = Date.now() - entry.createdTimestamp;
-            return timeDiff < 5000 && entry.target?.id === member.id;
-        });
-
-        if (recentMove) {
-            const executor = recentMove.executor;
-
-            if (executor) {
-                const executorRoleIds = guild.members.cache.get(executor.id)?.roles.cache.map(r => r.id) || [];
-
-                if (executor.id === channelState.ownerId) {
-                    return false;
-                }
-
-                const isExecutorPermitted = channelPerms.some(
-                    p => p.targetId === executor.id && p.permission === 'permit'
-                );
-                if (isExecutorPermitted) {
-                    return false;
-                }
-
-                const isExecutorRolePermitted = channelPerms.some(
-                    p => executorRoleIds.includes(p.targetId) && p.targetType === 'role' && p.permission === 'permit'
-                );
-                if (isExecutorRolePermitted) {
-                    return false;
-                }
-            }
-        }
-    } catch {
-    }
+    // STRICT MODE: Audit Log check removed to enforce database-only permissions and improve performance during mass joins.
+    // Previously, this allowed users moved by admins to stay. Now, if not in DB, they get kicked.
 
     const reason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
 
     try {
-        await member.voice.disconnect();
+        // Use rate limiter to handle mass kicks preventing 429 errors
+        await executeWithRateLimit(
+            `disconnect:${guild.id}`,
+            () => member.voice.disconnect(),
+            Priority.CRITICAL
+        );
 
         const owner = guild.members.cache.get(channelState.ownerId);
         const ownerName = owner?.displayName || 'the owner';
@@ -169,7 +138,8 @@ async function handleAccessProtection(
 
         return true;
     } catch {
-        return false;
+        // Even if kicking fails (e.g. network error), return TRUE to prevent "Join" logic from running
+        return true;
     }
 }
 
