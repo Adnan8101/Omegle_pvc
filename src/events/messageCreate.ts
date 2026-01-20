@@ -675,8 +675,15 @@ async function handleEval(message: Message): Promise<void> {
     const msg = message;
 
     try {
-        // Direct eval with async support
-        let evaled = await eval(`(async () => { ${code} })()`);
+        // Try to evaluate as expression first (e.g., "1+1", "guild.memberCount")
+        // If that fails, evaluate as statement (e.g., "const x = 1; return x")
+        let evaled;
+        try {
+            evaled = await eval(`(async () => { return ${code} })()`);
+        } catch {
+            // If expression fails, try as statement block
+            evaled = await eval(`(async () => { ${code} })()`);
+        }
 
         if (typeof evaled !== 'string') {
             evaled = inspect(evaled, { depth: 2 });
