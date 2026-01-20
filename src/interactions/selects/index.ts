@@ -141,7 +141,7 @@ async function handleAddUserSelect(
         return;
     }
 
-    await updateVoicePermissions(channel, users, 'user', 'permit', { ViewChannel: true, Connect: true });
+    await updateVoicePermissions(channel, users, 'user', 'permit', { ViewChannel: true, Connect: true, SendMessages: true, EmbedLinks: true, AttachFiles: true });
 
     // Persistent History: Save to OwnerPermission using Cache Helper
     const targetIds = Array.from(users.keys());
@@ -240,7 +240,7 @@ async function handleInviteSelect(
         return;
     }
 
-    await updateVoicePermissions(channel, users, 'user', 'permit', { ViewChannel: true, Connect: true });
+    await updateVoicePermissions(channel, users, 'user', 'permit', { ViewChannel: true, Connect: true, SendMessages: true, EmbedLinks: true, AttachFiles: true });
 
     for (const [, user] of users) {
         user.send(`<@${inviter.id}> is inviting you to join <#${channel.id}>`).catch(() => { });

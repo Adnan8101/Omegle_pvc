@@ -52,7 +52,77 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
 
         embed.setFooter({ text: '/permanent_access add/remove' }).setTimestamp();
 
-        await interaction.update({ embeds: [embed], components: [] });
+        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`list_normal_${targetUserId}`)
+                .setLabel('Back to Channel Info')
+                .setStyle(ButtonStyle.Secondary)
+        );
+
+        await interaction.update({ embeds: [embed], components: [row] });
+        return;
+    }
+
+    // Handle list_normal button - go back to channel info
+    if (customId.startsWith('list_normal_')) {
+        const targetUserId = customId.replace('list_normal_', '');
+
+        if (interaction.user.id !== targetUserId) {
+            await interaction.reply({ content: 'This button is not for you.', ephemeral: true });
+            return;
+        }
+
+        // Get user's PVC
+        const pvc = await prisma.privateVoiceChannel.findFirst({
+            where: { guildId: guild.id, ownerId: targetUserId },
+            include: { permissions: true },
+        });
+
+        if (!pvc) {
+            await interaction.reply({ content: 'You do not have an active voice channel.', ephemeral: true });
+            return;
+        }
+
+        const channel = guild.channels.cache.get(pvc.channelId);
+        const owner = guild.members.cache.get(pvc.ownerId);
+        const permittedUsers = pvc.permissions.filter(p => p.permission === 'permit' && p.targetType === 'user');
+        const bannedUsers = pvc.permissions.filter(p => p.permission === 'ban' && p.targetType === 'user');
+        const permanentCount = await prisma.ownerPermission.count({
+            where: { guildId: guild.id, ownerId: targetUserId },
+        });
+
+        const embed = new EmbedBuilder()
+            .setTitle('Voice Channel Information')
+            .setColor(0x5865F2)
+            .addFields(
+                { name: 'Channel', value: channel?.name || 'Unknown', inline: true },
+                { name: 'Owner', value: owner ? `${owner}` : `<@${pvc.ownerId}>`, inline: true },
+                { name: 'Members', value: channel && 'members' in channel ? `${(channel as any).members.size}` : '-', inline: true },
+            );
+
+        if (permittedUsers.length > 0) {
+            const userMentions = permittedUsers.slice(0, 10).map(p => `<@${p.targetId}>`).join(', ');
+            const more = permittedUsers.length > 10 ? ` +${permittedUsers.length - 10} more` : '';
+            embed.addFields({ name: `Permitted (${permittedUsers.length})`, value: userMentions + more, inline: false });
+        }
+
+        if (bannedUsers.length > 0) {
+            const bannedMentions = bannedUsers.slice(0, 5).map(p => `<@${p.targetId}>`).join(', ');
+            const more = bannedUsers.length > 5 ? ` +${bannedUsers.length - 5} more` : '';
+            embed.addFields({ name: `Blocked (${bannedUsers.length})`, value: bannedMentions + more, inline: false });
+        }
+
+        embed.addFields({ name: 'Permanent Access', value: `${permanentCount} user(s)`, inline: true });
+        embed.setFooter({ text: 'Use /permanent_access to manage trusted users' }).setTimestamp();
+
+        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`list_permanent_${targetUserId}`)
+                .setLabel('View Permanent Access')
+                .setStyle(ButtonStyle.Secondary)
+        );
+
+        await interaction.update({ embeds: [embed], components: [row] });
         return;
     }
 
@@ -146,6 +216,9 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
             break;
         case 'pvc_info':
             await handleInfo(interaction, channel);
+            break;
+        case 'pvc_limit':
+            await handleLimit(interaction);
             break;
         default:
             await interaction.reply({ content: 'Unknown button.', ephemeral: true });
@@ -448,6 +521,7 @@ async function handleClaim(
         await channel.permissionOverwrites.delete(channelState.ownerId).catch(() => { });
         await channel.permissionOverwrites.edit(userId, {
             ViewChannel: true, Connect: true, Speak: true, Stream: true,
+            SendMessages: true, EmbedLinks: true, AttachFiles: true,
             MuteMembers: true, DeafenMembers: true, MoveMembers: true, ManageChannels: true,
         });
         await channel.setName(newOwner.displayName).catch(() => { });
@@ -674,3 +748,22 @@ async function handleInfo(interaction: ButtonInteraction, channel: any): Promise
     });
 }
 
+async function handleLimit(interaction: ButtonInteraction): Promise<void> {
+    const modal = new ModalBuilder()
+        .setCustomId('pvc_limit_modal')
+        .setTitle('Set User Limit');
+
+    const limitInput = new TextInputBuilder()
+        .setCustomId('limit_input')
+        .setLabel('User Limit (0 = unlimited, max 99)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('Enter a number between 0 and 99')
+        .setRequired(true)
+        .setMinLength(1)
+        .setMaxLength(2);
+
+    const row = new ActionRowBuilder<TextInputBuilder>().addComponents(limitInput);
+    modal.addComponents(row);
+
+    await interaction.showModal(modal);
+}

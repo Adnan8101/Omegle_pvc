@@ -176,6 +176,9 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
                 task: () => channel.permissionOverwrites.edit(userId, {
                     ViewChannel: true,
                     Connect: true,
+                    SendMessages: true,
+                    EmbedLinks: true,
+                    AttachFiles: true,
                 }),
                 priority: Priority.NORMAL,
             }));

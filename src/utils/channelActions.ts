@@ -32,6 +32,7 @@ export async function transferChannelOwnership(
             // Grant Owner Perms to new owner
             await channel.permissionOverwrites.edit(newOwnerId, {
                 ViewChannel: true, Connect: true, Speak: true, Stream: true,
+                SendMessages: true, EmbedLinks: true, AttachFiles: true,
                 MuteMembers: true, DeafenMembers: true, MoveMembers: true, ManageChannels: true,
             });
 
@@ -49,7 +50,7 @@ export async function transferChannelOwnership(
             // Add New Friends
             for (const friend of newOwnerFriends) {
                 await channel.permissionOverwrites.edit(friend.targetId, {
-                    ViewChannel: true, Connect: true
+                    ViewChannel: true, Connect: true, SendMessages: true, EmbedLinks: true, AttachFiles: true
                 });
             }
 

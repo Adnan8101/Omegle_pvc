@@ -23,7 +23,7 @@ const MAIN_BUTTONS = [
     { id: 'pvc_privacy' },
     { id: 'pvc_add_user' },
     { id: 'pvc_remove_user' },
-    { id: 'pvc_invite' },
+    { id: 'pvc_limit' },
     { id: 'pvc_name' },
     { id: 'pvc_kick' },
     { id: 'pvc_region' },

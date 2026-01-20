@@ -7,7 +7,7 @@ export const BUTTON_EMOJI_MAP: Record<string, { id: string; name: string }> = {
     pvc_privacy: { id: '1463029462416232589', name: 'iHorizon_VC_Privacy' },
     pvc_add_user: { id: '1463028805005344901', name: 'invite' },
     pvc_remove_user: { id: '1463028427811590339', name: 'iHorizon_VC_Untrust' },
-    pvc_invite: { id: '1463028805005344901', name: 'invite' },
+    pvc_limit: { id: '1463028040933183532', name: 'iHorizon_VC_Limit' },
     pvc_name: { id: '1463027975254577356', name: 'iHorizon_VC_Name' },
     pvc_kick: { id: '1463029009301639262', name: 'Rexor_Kick_VC' },
     pvc_region: { id: '1462347844378689567', name: 'region' },
@@ -30,7 +30,7 @@ const BUTTON_LAYOUT = [
     ],
     [
         { id: 'pvc_remove_user', label: 'REMOVE USER' },
-        { id: 'pvc_invite', label: 'INVITE' },
+        { id: 'pvc_limit', label: 'LIMIT' },
         { id: 'pvc_name', label: 'NAME' },
         { id: 'pvc_kick', label: 'KICK' }
     ],

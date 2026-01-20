@@ -299,7 +299,7 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
             if (isValidMember || isValidRole) {
                 permissionOverwrites.push({
                     id: p.targetId,
-                    allow: ['ViewChannel', 'Connect'],
+                    allow: ['ViewChannel', 'Connect', 'SendMessages', 'EmbedLinks', 'AttachFiles'],
                 });
             } else {
                 invalidTargetIds.push(p.targetId);

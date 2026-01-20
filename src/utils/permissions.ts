@@ -136,7 +136,9 @@ export function getUnhidePermissions(): { allow: bigint; deny: bigint } {
  */
 export function getPermitPermissions(): { allow: bigint; deny: bigint } {
     return {
-        allow: PermissionsBitField.Flags.ViewChannel | PermissionsBitField.Flags.Connect,
+        allow: PermissionsBitField.Flags.ViewChannel | PermissionsBitField.Flags.Connect |
+            PermissionsBitField.Flags.SendMessages | PermissionsBitField.Flags.EmbedLinks |
+            PermissionsBitField.Flags.AttachFiles,
         deny: 0n,
     };
 }
@@ -161,6 +163,9 @@ export function getOwnerPermissions(): { allow: bigint; deny: bigint } {
             PermissionsBitField.Flags.Connect |
             PermissionsBitField.Flags.Speak |
             PermissionsBitField.Flags.Stream |
+            PermissionsBitField.Flags.SendMessages |
+            PermissionsBitField.Flags.EmbedLinks |
+            PermissionsBitField.Flags.AttachFiles |
             PermissionsBitField.Flags.MuteMembers |
             PermissionsBitField.Flags.DeafenMembers |
             PermissionsBitField.Flags.MoveMembers |
