@@ -27,7 +27,6 @@ export async function execute(client: PVCClient, channel: DMChannel | GuildChann
         }).catch(() => { });
 
         invalidateGuildSettings(guildId);
-        console.log(`[ChannelDelete] Interface channel ${channelId} deleted in guild ${guildId}`);
         return;
     }
 
@@ -42,7 +41,5 @@ export async function execute(client: PVCClient, channel: DMChannel | GuildChann
         await prisma.privateVoiceChannel.delete({
             where: { channelId },
         }).catch(() => { });
-
-        console.log(`[ChannelDelete] PVC ${channelId} deleted in guild ${guildId}`);
     }
 }

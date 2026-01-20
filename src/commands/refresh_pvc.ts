@@ -149,6 +149,39 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
 
+    // PERMISSION SYNC: Update permissions to match current VC members
+    let permsSynced = 0;
+    if (freshSettings?.privateChannels) {
+        for (const pvc of freshSettings.privateChannels) {
+            const channel = guild.channels.cache.get(pvc.channelId);
+            if (channel && channel.type === ChannelType.GuildVoice) {
+                // Get current members in the VC (excluding the owner)
+                const currentMemberIds = channel.members
+                    .filter(m => m.id !== pvc.ownerId)
+                    .map(m => m.id);
+
+                // Delete all old permissions for this channel
+                await prisma.voicePermission.deleteMany({
+                    where: { channelId: pvc.channelId, permission: 'permit' },
+                }).catch(() => { });
+
+                // Create permissions for current members only
+                if (currentMemberIds.length > 0) {
+                    await prisma.voicePermission.createMany({
+                        data: currentMemberIds.map(userId => ({
+                            channelId: pvc.channelId,
+                            targetId: userId,
+                            targetType: 'user',
+                            permission: 'permit',
+                        })),
+                        skipDuplicates: true,
+                    }).catch(() => { });
+                    permsSynced += currentMemberIds.length;
+                }
+            }
+        }
+    }
+
     const interfaceTextChannel = guild.channels.cache.get(freshSettings?.interfaceTextId || settings.interfaceTextId);
     if (!interfaceTextChannel || interfaceTextChannel.type !== ChannelType.GuildText) {
         await interaction.editReply('Interface text channel not found. Run `/pvc_setup` again.');
@@ -219,11 +252,14 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             details: `PVC setup refreshed${logsChannel ? `, logs: ${logsChannel}` : ''}${commandChannel ? `, commands: ${commandChannel}` : ''}`,
         });
 
-        let response = '✅ PVC System refreshed successfully!\n\n';
-        response += '**Updated:**\n';
-        response += '- Interface message and buttons\n';
-        if (logsChannel) response += `- Logs channel: ${logsChannel}\n`;
-        if (commandChannel) response += `- Command channel: ${commandChannel}\n`;
+        let response = '✅ **PVC System Refreshed**\n\n';
+        response += '**State Reloaded:**\n';
+        response += '• Interface & buttons refreshed\n';
+        response += '• In-memory state resynced from DB\n';
+        response += `• Permissions synced (${permsSynced} users)\n`;
+        if (logsChannel) response += `• Logs: ${logsChannel}\n`;
+        if (commandChannel) response += `• Commands: ${commandChannel}\n`;
+        response += '\n> Only current VC members retain access. All stale permissions cleared.';
 
         await interaction.editReply(response);
 

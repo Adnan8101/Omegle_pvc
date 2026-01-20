@@ -39,15 +39,10 @@ export async function execute(
     const member = newState.member || oldState.member;
     if (!member || member.user.bot) return;
 
-    console.log(`[VSU] User ${member.user.username} | Old: ${oldState.channelId} | New: ${newState.channelId}`);
-
     if (newState.channelId && newState.channelId !== oldState.channelId) {
-        console.log(`[VSU] Processing JOIN for channel ${newState.channelId}`);
         const wasKicked = await handleAccessProtection(client, newState);
 
-        console.log(`[VSU] wasKicked: ${wasKicked}`);
         if (!wasKicked) {
-            console.log(`[VSU] Calling handleJoin...`);
             await handleJoin(client, newState);
         }
     }
@@ -155,27 +150,19 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
     const { channelId, guild, member } = state;
     if (!channelId || !member) return;
 
-    console.log(`[handleJoin] Channel: ${channelId} | Guild: ${guild.id}`);
-
     let isInterface = isInterfaceChannel(channelId);
-    console.log(`[handleJoin] isInterface (memory): ${isInterface}`);
 
     // FALLBACK: If not in memory, check DB (handles restart edge cases)
     if (!isInterface) {
         const settings = await getGuildSettings(guild.id);
-        console.log(`[handleJoin] DB Settings:`, settings ? `interfaceVcId=${settings.interfaceVcId}` : 'null');
         if (settings?.interfaceVcId === channelId) {
             // Found in DB but not in memory - register it now
-            console.log(`[handleJoin] Found in DB! Registering interface channel...`);
             registerInterfaceChannel(guild.id, channelId);
             isInterface = true;
         }
     }
 
-    console.log(`[handleJoin] Final isInterface: ${isInterface}`);
-
     if (isInterface) {
-        console.log(`[handleJoin] Calling createPrivateChannel...`);
         await createPrivateChannel(client, state);
         return;
     }
@@ -244,15 +231,10 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
 
 async function createPrivateChannel(client: PVCClient, state: VoiceState): Promise<void> {
     const { guild, member, channel: interfaceChannel } = state;
-    console.log(`[createPVC] Starting... Member: ${member?.user.username} | Interface: ${interfaceChannel?.id}`);
 
-    if (!member || !interfaceChannel) {
-        console.log(`[createPVC] EARLY RETURN: member=${!!member} interfaceChannel=${!!interfaceChannel}`);
-        return;
-    }
+    if (!member || !interfaceChannel) return;
 
     if (isOnCooldown(member.id, 'CREATE_CHANNEL')) {
-        console.log(`[createPVC] EARLY RETURN: On cooldown`);
         try {
             await member.voice.disconnect();
         } catch { }
@@ -260,25 +242,19 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
     }
 
     const existingChannel = getChannelByOwner(guild.id, member.id);
-    console.log(`[createPVC] existingChannel: ${existingChannel}`);
 
     if (existingChannel) {
         const channel = guild.channels.cache.get(existingChannel);
-        console.log(`[createPVC] Found existing channel in memory, exists in Discord: ${!!channel}`);
         if (channel && channel.type === ChannelType.GuildVoice) {
-            console.log(`[createPVC] Moving user to existing channel...`);
             try {
                 const freshMember = await guild.members.fetch(member.id);
                 if (freshMember.voice.channelId) {
                     await freshMember.voice.setChannel(channel);
                 }
-            } catch (e) {
-                console.log(`[createPVC] Move failed:`, e);
-            }
+            } catch { }
             return;
         } else {
             // Channel exists in memory but not in Discord - clean up stale data
-            console.log(`[createPVC] Cleaning up stale channel data...`);
             unregisterChannel(existingChannel);
             await prisma.privateVoiceChannel.delete({
                 where: { channelId: existingChannel },
@@ -298,15 +274,12 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
     }
 
     setCooldown(member.id, 'CREATE_CHANNEL');
-    console.log(`[createPVC] Set cooldown, proceeding with channel creation...`);
 
     try {
         const ownerPerms = getOwnerPermissions();
-        console.log(`[createPVC] Got ownerPerms`);
 
         // Persistent History: Load from Cache
         const savedPermissions = await getCachedOwnerPerms(guild.id, member.id);
-        console.log(`[createPVC] Loaded ${savedPermissions.length} saved permissions`);
 
         const permissionOverwrites: any[] = [
             {
@@ -329,7 +302,6 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                     allow: ['ViewChannel', 'Connect'],
                 });
             } else {
-                console.log(`[createPVC] Skipping invalid target: ${p.targetId} (not in cache)`);
                 invalidTargetIds.push(p.targetId);
             }
         }
@@ -345,9 +317,6 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
             }).catch(() => { });
         }
 
-        console.log(`[createPVC] Creating channel with ${permissionOverwrites.length} permission overwrites...`);
-        console.log(`[createPVC] Parent category: ${interfaceChannel.parent?.id || 'none'}`);
-
         // IMMEDIATE priority - J2C must NEVER wait in queue
         const newChannel = await executeWithRateLimit(
             `create:${guild.id}`,
@@ -359,8 +328,6 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
             }),
             Priority.IMMEDIATE
         );
-
-        console.log(`[createPVC] Channel created! ID: ${newChannel.id}`);
 
         registerChannel(newChannel.id, guild.id, member.id);
 
@@ -461,9 +428,7 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                 );
             }
         }
-    } catch (error) {
-        console.error(`[createPVC] ERROR:`, error);
-    }
+    } catch { }
 }
 
 async function transferChannelOwnership(

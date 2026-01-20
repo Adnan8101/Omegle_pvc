@@ -169,11 +169,6 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
         permission: 'permit' as const,
     }));
 
-    const ownerPermsToAdd = userIdsToAdd.map(userId => ({
-        targetId: userId,
-        targetType: 'user' as const,
-    }));
-
     try {
         if (channel && channel.type === ChannelType.GuildVoice) {
             const discordTasks = userIdsToAdd.map(userId => ({
@@ -187,10 +182,7 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
             await executeParallel(discordTasks);
         }
 
-        await Promise.all([
-            batchUpsertPermissions(channelId, permissionsToAdd),
-            batchUpsertOwnerPermissions(guild.id, message.author.id, ownerPermsToAdd),
-        ]);
+        await batchUpsertPermissions(channelId, permissionsToAdd);
 
         if (isSecretCommand) {
             await message.react('✅').catch(() => { });
@@ -292,12 +284,9 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
             await executeParallel(discordTasks);
         }
 
-        await Promise.all([
-            prisma.voicePermission.deleteMany({
-                where: { channelId, targetId: { in: userIdsToRemove } },
-            }),
-            batchDeleteOwnerPermissions(guild.id, message.author.id, userIdsToRemove),
-        ]);
+        await prisma.voicePermission.deleteMany({
+            where: { channelId, targetId: { in: userIdsToRemove } },
+        });
 
         invalidateChannelPermissions(channelId);
 
@@ -313,15 +302,41 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
 }
 
 async function handleList(message: Message, channelId: string | undefined): Promise<void> {
+    const guild = message.guild!;
+
+    // If user doesn't own a PVC, show their permanent access list
     if (!channelId) {
+        const permanentAccess = await prisma.ownerPermission.findMany({
+            where: { guildId: guild.id, ownerId: message.author.id },
+            orderBy: { createdAt: 'desc' },
+        });
+
+        if (permanentAccess.length === 0) {
+            const embed = new EmbedBuilder()
+                .setColor(0x5865F2)
+                .setTitle('Permanent Access List')
+                .setDescription('You have no users with permanent access.')
+                .setFooter({ text: 'Use /permanent_access add @user to add someone' })
+                .setTimestamp();
+
+            await message.reply({ embeds: [embed] }).catch(() => { });
+            return;
+        }
+
+        const userList = permanentAccess.map((p, i) => `${i + 1}. <@${p.targetId}>`).join('\n');
+
         const embed = new EmbedBuilder()
-            .setDescription('You do not own a private voice channel.')
-            .setColor(0xFF0000);
+            .setColor(0x5865F2)
+            .setTitle('Permanent Access List')
+            .setDescription(userList)
+            .setFooter({ text: `${permanentAccess.length} user(s) • /permanent_access add/remove` })
+            .setTimestamp();
+
         await message.reply({ embeds: [embed] }).catch(() => { });
         return;
     }
 
-    const guild = message.guild!;
+    // User owns a PVC - show channel info
     const channel = guild.channels.cache.get(channelId);
 
     const pvcData = await prisma.privateVoiceChannel.findUnique({
@@ -338,123 +353,74 @@ async function handleList(message: Message, channelId: string | undefined): Prom
     }
 
     const owner = guild.members.cache.get(pvcData.ownerId);
-
     const permittedUsers = pvcData.permissions.filter(p => p.permission === 'permit' && p.targetType === 'user');
-    const permittedRoles = pvcData.permissions.filter(p => p.permission === 'permit' && p.targetType === 'role');
     const bannedUsers = pvcData.permissions.filter(p => p.permission === 'ban' && p.targetType === 'user');
 
-    const ITEMS_PER_PAGE = 10;
-    let currentPage = 0;
+    // Get permanent access count
+    const permanentCount = await prisma.ownerPermission.count({
+        where: { guildId: guild.id, ownerId: message.author.id },
+    });
 
-    const createEmbed = (page: number) => {
-        const embed = new EmbedBuilder()
-            .setTitle('Voice Channel Information')
-            .setColor(0x5865F2)
-            .addFields(
-                { name: 'Channel Name', value: channel?.name || 'Unknown', inline: true },
-                { name: 'Channel ID', value: channelId, inline: true },
-                { name: 'Owner', value: owner ? `${owner} (${owner.displayName})` : `<@${pvcData.ownerId}>`, inline: true },
-            );
-
-        if (channel && channel.type === ChannelType.GuildVoice) {
-            embed.addFields(
-                { name: 'Channel Link', value: `<#${channelId}>`, inline: true },
-                { name: 'Members', value: `${channel.members.size}`, inline: true },
-                { name: 'Created', value: `<t:${Math.floor(pvcData.createdAt.getTime() / 1000)}:R>`, inline: true },
-            );
-        }
-
-        if (permittedUsers.length > 0) {
-            const start = page * ITEMS_PER_PAGE;
-            const end = start + ITEMS_PER_PAGE;
-            const pageUsers = permittedUsers.slice(start, end);
-            const userMentions = pageUsers.map(p => `• <@${p.targetId}>`).join('\n');
-            const totalPages = Math.ceil(permittedUsers.length / ITEMS_PER_PAGE);
-            embed.addFields({
-                name: `Permitted Users (${permittedUsers.length}) - Page ${page + 1}/${totalPages}`,
-                value: userMentions || 'None',
-                inline: false
-            });
-        } else {
-            embed.addFields({ name: 'Permitted Users', value: 'None', inline: false });
-        }
-
-        if (permittedRoles.length > 0) {
-            const roleMentions = permittedRoles.map(p => `• <@&${p.targetId}>`).join('\n');
-            embed.addFields({
-                name: `Permitted Roles (${permittedRoles.length})`,
-                value: roleMentions,
-                inline: false
-            });
-        }
-
-        if (bannedUsers.length > 0) {
-            const bannedMentions = bannedUsers.slice(0, 10).map(p => `• <@${p.targetId}>`).join('\n');
-            const more = bannedUsers.length > 10 ? `\n...and ${bannedUsers.length - 10} more` : '';
-            embed.addFields({
-                name: `Banned Users (${bannedUsers.length})`,
-                value: bannedMentions + more,
-                inline: false
-            });
-        }
-
-        embed.setFooter({ text: `Created ${pvcData.createdAt.toLocaleString()}` })
-            .setTimestamp();
-
-        return embed;
-    };
-
-    const totalPages = Math.ceil(permittedUsers.length / ITEMS_PER_PAGE) || 1;
-
-    const embed = createEmbed(currentPage);
-    const components: ActionRowBuilder<ButtonBuilder>[] = [];
-
-    if (totalPages > 1) {
-        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder()
-                .setCustomId(`list_prev_${message.id}`)
-                .setLabel('Previous')
-                .setStyle(ButtonStyle.Secondary)
-                .setDisabled(currentPage === 0),
-            new ButtonBuilder()
-                .setCustomId(`list_next_${message.id}`)
-                .setLabel('Next')
-                .setStyle(ButtonStyle.Secondary)
-                .setDisabled(currentPage === totalPages - 1)
+    const embed = new EmbedBuilder()
+        .setTitle('Voice Channel Information')
+        .setColor(0x5865F2)
+        .addFields(
+            { name: 'Channel', value: channel?.name || 'Unknown', inline: true },
+            { name: 'Owner', value: owner ? `${owner}` : `<@${pvcData.ownerId}>`, inline: true },
+            { name: 'Members', value: channel && channel.type === ChannelType.GuildVoice ? `${channel.members.size}` : '-', inline: true },
         );
-        components.push(row);
+
+    if (permittedUsers.length > 0) {
+        const userMentions = permittedUsers.slice(0, 10).map(p => `<@${p.targetId}>`).join(', ');
+        const more = permittedUsers.length > 10 ? ` +${permittedUsers.length - 10} more` : '';
+        embed.addFields({ name: `Permitted (${permittedUsers.length})`, value: userMentions + more, inline: false });
     }
 
-    const reply = await message.reply({ embeds: [embed], components }).catch(() => null);
-    if (!reply || totalPages <= 1) return;
+    if (bannedUsers.length > 0) {
+        const bannedMentions = bannedUsers.slice(0, 5).map(p => `<@${p.targetId}>`).join(', ');
+        const more = bannedUsers.length > 5 ? ` +${bannedUsers.length - 5} more` : '';
+        embed.addFields({ name: `Blocked (${bannedUsers.length})`, value: bannedMentions + more, inline: false });
+    }
+
+    embed.addFields({ name: 'Permanent Access', value: `${permanentCount} user(s)`, inline: true });
+    embed.setFooter({ text: 'Use /permanent_access to manage trusted users' }).setTimestamp();
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`list_permanent_${message.author.id}`)
+            .setLabel('View Permanent Access')
+            .setStyle(ButtonStyle.Secondary)
+    );
+
+    const reply = await message.reply({ embeds: [embed], components: [row] }).catch(() => null);
+    if (!reply) return;
 
     const collector = reply.createMessageComponentCollector({
-        filter: (i) => i.user.id === message.author.id,
-        time: 300000,
+        filter: (i) => i.user.id === message.author.id && i.customId === `list_permanent_${message.author.id}`,
+        time: 60000,
+        max: 1,
     });
 
     collector.on('collect', async (interaction) => {
-        if (interaction.customId === `list_prev_${message.id}`) {
-            currentPage = Math.max(0, currentPage - 1);
-        } else if (interaction.customId === `list_next_${message.id}`) {
-            currentPage = Math.min(totalPages - 1, currentPage + 1);
+        const permanentAccess = await prisma.ownerPermission.findMany({
+            where: { guildId: guild.id, ownerId: message.author.id },
+            orderBy: { createdAt: 'desc' },
+        });
+
+        const permEmbed = new EmbedBuilder()
+            .setColor(0x5865F2)
+            .setTitle('Permanent Access List');
+
+        if (permanentAccess.length === 0) {
+            permEmbed.setDescription('No users with permanent access.');
+        } else {
+            const userList = permanentAccess.map((p, i) => `${i + 1}. <@${p.targetId}>`).join('\n');
+            permEmbed.setDescription(userList);
         }
 
-        const newEmbed = createEmbed(currentPage);
-        const newRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder()
-                .setCustomId(`list_prev_${message.id}`)
-                .setLabel('Previous')
-                .setStyle(ButtonStyle.Secondary)
-                .setDisabled(currentPage === 0),
-            new ButtonBuilder()
-                .setCustomId(`list_next_${message.id}`)
-                .setLabel('Next')
-                .setStyle(ButtonStyle.Secondary)
-                .setDisabled(currentPage === totalPages - 1)
-        );
+        permEmbed.setFooter({ text: '/permanent_access add/remove' }).setTimestamp();
 
-        await interaction.update({ embeds: [newEmbed], components: [newRow] }).catch(() => { });
+        await interaction.update({ embeds: [permEmbed], components: [] }).catch(() => { });
     });
 
     collector.on('end', () => {
