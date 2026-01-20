@@ -6,11 +6,12 @@ import {
     ButtonStyle,
     PermissionFlagsBits,
     type ChatInputCommandInteraction,
+    AttachmentBuilder,
 } from 'discord.js';
 import prisma from '../utils/database';
 import { registerInterfaceChannel } from '../utils/voiceManager';
 import type { Command } from '../client';
-import { generateInterfaceEmbed, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
+import { generateInterfaceEmbed, generateInterfaceImage, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
 import { invalidateGuildSettings } from '../utils/cache';
 import { canRunAdminCommand } from '../utils/permissions';
 import { logAction, LogAction } from '../utils/logger';
@@ -134,12 +135,15 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }
         });
 
-        const embed = generateInterfaceEmbed(guild);
+        const imageBuffer = await generateInterfaceImage();
+        const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
+        const embed = generateInterfaceEmbed(guild, 'interface.png');
 
         const components = [row1, row2, row3, row4];
 
         await interfaceTextChannel.send({
             embeds: [embed],
+            files: [attachment],
             components,
         });
 
@@ -147,6 +151,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             name: 'PVC Logger',
             reason: 'For logging PVC actions',
         });
+
 
         await prisma.guildSettings.upsert({
             where: { guildId: guild.id },

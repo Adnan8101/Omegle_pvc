@@ -7,10 +7,11 @@ import {
     ButtonBuilder,
     ButtonStyle,
     PermissionFlagsBits,
+    AttachmentBuilder,
 } from 'discord.js';
 import prisma from '../utils/database';
 import { registerInterfaceChannel } from '../utils/voiceManager';
-import { generateInterfaceEmbed, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
+import { generateInterfaceEmbed, generateInterfaceImage, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
 import { invalidateGuildSettings } from '../utils/cache';
 
 const MAIN_BUTTONS = [
@@ -176,14 +177,18 @@ async function recreateSetup(guild: Guild, existingSettings: any) {
             }
         });
 
-        const embed = generateInterfaceEmbed(guild);
+        const imageBuffer = await generateInterfaceImage();
+        const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
+        const embed = generateInterfaceEmbed(guild, 'interface.png');
 
         const components = [row1, row2, row3, row4];
 
         await interfaceTextChannel.send({
             embeds: [embed],
+            files: [attachment],
             components,
         });
+
 
         await prisma.guildSettings.update({
             where: { guildId: guild.id },

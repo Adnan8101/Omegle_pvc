@@ -1,4 +1,5 @@
 import { EmbedBuilder, type Guild } from 'discord.js';
+import { createCanvas, loadImage } from 'canvas';
 
 export const BUTTON_EMOJI_MAP: Record<string, { id: string; name: string }> = {
     pvc_lock: { id: '1462346720611667978', name: 'vc_locked' },
@@ -19,40 +20,103 @@ export const BUTTON_EMOJI_MAP: Record<string, { id: string; name: string }> = {
     pvc_info: { id: '1463034934611673264', name: 'info' },
 };
 
-const INTERFACE_OPTIONS = [
-    { emoji: '<:vc_locked:1462346720611667978>', label: 'LOCK' },
-    { emoji: '<:vc:1462347049562542163>', label: 'UNLOCK' },
-    { emoji: '<:iHorizon_VC_Privacy:1462347257100898456>', label: 'PRIVACY' },
-    { emoji: '<:invite:1462347509392343073>', label: 'ADD' },
-    { emoji: '<:iHorizon_VC_Untrust:1462346932956430387>', label: 'REMOVE' },
-    { emoji: '<:invite:1462347509392343073>', label: 'INVITE' },
-    { emoji: '<:iHorizon_VC_Name:1462347738069864552>', label: 'NAME' },
-    { emoji: '<:Rexor_Kick_VC:1462347609384419392>', label: 'KICK' },
-    { emoji: '<:region:1462347844378689567>', label: 'REGION' },
-    { emoji: '<:iHorizon_VC_Block:1462347609384419392>', label: 'BLOCK' },
-    { emoji: '<:iHorizon_VC_Untrust:1462346932956430387>', label: 'UNBLOCK' },
-    { emoji: '<:Crown_2:1462348069592109198>', label: 'CLAIM' },
-    { emoji: '<:transfer:1462348162567110767>', label: 'TRANSFER' },
-    { emoji: '<:delete:1462732078239059978>', label: 'DELETE' },
-    { emoji: '<:Chat:1463034848917721363>', label: 'CHAT' },
-    { emoji: '<:info:1463034934611673264>', label: 'INFO' },
+const BUTTON_LAYOUT = [
+    [
+        { id: 'pvc_lock', label: 'LOCK' },
+        { id: 'pvc_unlock', label: 'UNLOCK' },
+        { id: 'pvc_privacy', label: 'PRIVACY' },
+        { id: 'pvc_add_user', label: 'TRUST' }
+    ],
+    [
+        { id: 'pvc_remove_user', label: 'UNTRUST' },
+        { id: 'pvc_invite', label: 'INVITE' },
+        { id: 'pvc_name', label: 'NAME' },
+        { id: 'pvc_kick', label: 'KICK' }
+    ],
+    [
+        { id: 'pvc_region', label: 'REGION' },
+        { id: 'pvc_block', label: 'BLOCK' },
+        { id: 'pvc_unblock', label: 'UNBLOCK' },
+        { id: 'pvc_claim', label: 'CLAIM' }
+    ],
+    [
+        { id: 'pvc_transfer', label: 'TRANSFER' },
+        { id: 'pvc_delete', label: 'DELETE' },
+        { id: 'pvc_chat', label: 'CHAT' },
+        { id: 'pvc_info', label: 'INFO' }
+    ]
 ];
 
-export function generateInterfaceEmbed(guild: Guild): EmbedBuilder {
-    const row1 = INTERFACE_OPTIONS.slice(0, 4).map(opt => `${opt.emoji} **${opt.label}**`).join('   ');
-    const row2 = INTERFACE_OPTIONS.slice(4, 8).map(opt => `${opt.emoji} **${opt.label}**`).join('   ');
-    const row3 = INTERFACE_OPTIONS.slice(8, 12).map(opt => `${opt.emoji} **${opt.label}**`).join('   ');
-    const row4 = INTERFACE_OPTIONS.slice(12, 16).map(opt => `${opt.emoji} **${opt.label}**`).join('   ');
+export async function generateInterfaceImage(): Promise<Buffer> {
+    const canvasWidth = 960;
+    const canvasHeight = 340;
+    const buttonWidth = 220;
+    const buttonHeight = 60;
+    const gap = 20;
+    const startX = 10;
+    const startY = 10;
 
+    const canvas = createCanvas(canvasWidth, canvasHeight);
+    const ctx = canvas.getContext('2d');
+
+    // Draw buttons
+    for (let r = 0; r < 4; r++) {
+        for (let c = 0; c < 4; c++) {
+            const btn = BUTTON_LAYOUT[r][c];
+            const x = startX + c * (buttonWidth + gap);
+            const y = startY + r * (buttonHeight + gap);
+
+            // Draw button background (rounded rect)
+            ctx.fillStyle = '#232428'; // Discord button dark color
+            roundRect(ctx, x, y, buttonWidth, buttonHeight, 15);
+            ctx.fill();
+
+            // Draw Emoji
+            try {
+                const emojiData = BUTTON_EMOJI_MAP[btn.id];
+                if (emojiData) {
+                    const emojiUrl = `https://cdn.discordapp.com/emojis/${emojiData.id}.png`;
+                    const emojiImg = await loadImage(emojiUrl);
+                    ctx.drawImage(emojiImg, x + 15, y + 12, 36, 36);
+                }
+            } catch (e) {
+                // Fallback if emoji fails to load
+            }
+
+            // Draw Text
+            ctx.fillStyle = '#FFFFFF';
+            ctx.font = 'bold 24px Arial, sans-serif';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(btn.label, x + 65, y + buttonHeight / 2);
+        }
+    }
+
+    return canvas.toBuffer();
+}
+
+function roundRect(ctx: any, x: number, y: number, w: number, h: number, r: number) {
+    if (w < 2 * r) r = w / 2;
+    if (h < 2 * r) r = h / 2;
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+}
+
+export function generateInterfaceEmbed(guild: Guild, imageName: string = 'interface.png'): EmbedBuilder {
     const embed = new EmbedBuilder()
-        .setTitle(`${guild.name} Interface`)
-        .setDescription(
-            `This **interface** can be used to manage temporary voice channels.\n\n` +
-            `${row1}\n${row2}\n${row3}\n${row4}\n\n` +
-            `⚙️ Press the buttons below to use the interface`
-        )
+        .setTitle(`${guild.name} PVC`)
+        .setDescription('This interface can be used to manage Private voice channels.')
         .setColor(0x2F3136)
-        .setThumbnail(guild.iconURL({ size: 128 }) || null);
+        .setImage(`attachment://${imageName}`)
+        .setFooter({
+            text: 'Press the buttons below to use the interface',
+            iconURL: 'https://cdn.discordapp.com/emojis/1462347302948569178.png'
+        });
 
     return embed;
 }

@@ -7,10 +7,11 @@ import {
     PermissionFlagsBits,
     type ChatInputCommandInteraction,
     type Message,
+    AttachmentBuilder,
 } from 'discord.js';
 import prisma from '../utils/database';
 import type { Command } from '../client';
-import { generateInterfaceEmbed, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
+import { generateInterfaceEmbed, generateInterfaceImage, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
 import { canRunAdminCommand } from '../utils/permissions';
 import { logAction, LogAction } from '../utils/logger';
 import { invalidateGuildSettings } from '../utils/cache';
@@ -149,21 +150,26 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }
         });
 
-        const embed = generateInterfaceEmbed(guild);
+        const imageBuffer = await generateInterfaceImage();
+        const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
+        const embed = generateInterfaceEmbed(guild, 'interface.png');
 
         const components = [row1, row2, row3, row4];
 
         if (oldMessage) {
             await oldMessage.edit({
                 embeds: [embed],
+                files: [attachment],
                 components,
             });
         } else {
             await interfaceTextChannel.send({
                 embeds: [embed],
+                files: [attachment],
                 components,
             });
         }
+
 
         await logAction({
             action: LogAction.PVC_REFRESHED,
