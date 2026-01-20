@@ -10,7 +10,7 @@ import { transferChannelOwnership } from '../utils/channelActions';
 import { isChannelOwner, getChannelState } from '../utils/voiceManager';
 import { logAction, LogAction } from '../utils/logger';
 
-const DEVELOPER_IDS = ['1232861270030221353', '985442502150397984', '946669037213880340']; // Replace with actual IDs if provided, or empty
+const DEVELOPER_IDS = ['929297205796417597', '1267528540707098779', '1305006992510947328'];
 
 export const command: Command = {
     data: new SlashCommandBuilder()
@@ -28,8 +28,7 @@ export const command: Command = {
                 .setName('owner')
                 .setDescription('The new owner')
                 .setRequired(true)
-        )
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator) as SlashCommandBuilder,
+        ) as SlashCommandBuilder,
 
     async execute(interaction: ChatInputCommandInteraction) {
         if (!interaction.guild) return;
@@ -39,22 +38,19 @@ export const command: Command = {
         const newOwnerUser = interaction.options.getUser('owner', true);
 
 
-        // Security Check: Developer or Admin Role > Bot Role
+        // Security Check: Developer ID, or Admin with Higher Role than Bot
         const isDeveloper = DEVELOPER_IDS.includes(user.id);
 
-        let hasHigherRole = false;
         const guildMember = member as GuildMember;
         const botMember = interaction.guild.members.me;
 
-        if (botMember && guildMember.roles.highest.position > botMember.roles.highest.position) {
-            hasHigherRole = true;
-        }
+        const hasHigherRole = botMember && guildMember.roles.highest.position > botMember.roles.highest.position;
+        const hasAdminPerm = guildMember.permissions.has(PermissionFlagsBits.Administrator);
 
-        // Allow if Developer OR (Admin Perms AND Higher Role)
-        // Note: Default permissions already restrict to Admin, but adding strict hierarchy check as requested
-        if (!isDeveloper && !hasHigherRole) {
+        // Allow if: Developer OR (Admin Permission AND Higher Role than Bot)
+        if (!isDeveloper && !(hasAdminPerm && hasHigherRole)) {
             await interaction.reply({
-                content: '🚫 Access Denied. You must be a Developer or have a role higher than the bot to use this.',
+                content: '🚫 Access Denied. You must be a Bot Developer or an Administrator with a role higher than the bot.',
                 ephemeral: true,
             });
             return;
