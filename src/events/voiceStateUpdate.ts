@@ -16,7 +16,7 @@ import {
     hasTempPermission,
 } from '../utils/voiceManager';
 import { getOwnerPermissions } from '../utils/permissions';
-import { executeWithRateLimit, executeParallel, Priority } from '../utils/rateLimit';
+import { executeWithRateLimit, executeParallel, Priority, fireAndForget } from '../utils/rateLimit';
 import {
     getGuildSettings,
     getOwnerPermissions as getCachedOwnerPerms,
@@ -107,40 +107,41 @@ async function handleAccessProtection(
 
     const reason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
 
-    try {
-        // Use rate limiter to handle mass kicks preventing 429 errors
-        await executeWithRateLimit(
-            `disconnect:${guild.id}`,
-            () => member.voice.disconnect(),
-            Priority.CRITICAL
-        );
+    // FIRE AND FORGET: Don't wait for kick to complete - J2C must never be blocked
+    // Use unique route per user to maximize parallelism
+    fireAndForget(
+        `kick:${member.id}`,
+        async () => {
+            await member.voice.disconnect();
 
-        const owner = guild.members.cache.get(channelState.ownerId);
-        const ownerName = owner?.displayName || 'the owner';
-        const embed = new EmbedBuilder()
-            .setColor(0xFF6B6B)
-            .setTitle('🚫 Access Denied')
-            .setDescription(
-                `You were removed from **${channel.name}** because the channel is **${reason}**.\n\n` +
-                `Ask **${ownerName}** to give you access to join.`
-            )
-            .setTimestamp();
-        member.send({ embeds: [embed] }).catch(() => { });
+            // Send DM after disconnect (also fire and forget)
+            const owner = guild.members.cache.get(channelState.ownerId);
+            const ownerName = owner?.displayName || 'the owner';
+            const embed = new EmbedBuilder()
+                .setColor(0xFF6B6B)
+                .setTitle('🚫 Access Denied')
+                .setDescription(
+                    `You were removed from **${channel.name}** because the channel is **${reason}**.\n\n` +
+                    `Ask **${ownerName}** to give you access to join.`
+                )
+                .setTimestamp();
+            member.send({ embeds: [embed] }).catch(() => { });
+        },
+        Priority.LOW
+    );
 
-        await logAction({
-            action: LogAction.USER_REMOVED,
-            guild: guild,
-            user: member.user,
-            channelName: channel.name,
-            channelId: newChannelId,
-            details: `Unauthorized access attempt blocked (channel is ${reason})`,
-        });
+    // Log asynchronously - don't block
+    logAction({
+        action: LogAction.USER_REMOVED,
+        guild: guild,
+        user: member.user,
+        channelName: channel.name,
+        channelId: newChannelId,
+        details: `Unauthorized access attempt blocked (channel is ${reason})`,
+    }).catch(() => { });
 
-        return true;
-    } catch {
-        // Even if kicking fails (e.g. network error), return TRUE to prevent "Join" logic from running
-        return true;
-    }
+    // Return true immediately - kick is queued, don't wait
+    return true;
 }
 
 async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
@@ -265,6 +266,7 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
             });
         }
 
+        // IMMEDIATE priority - J2C must NEVER wait in queue
         const newChannel = await executeWithRateLimit(
             `create:${guild.id}`,
             () => guild.channels.create({
@@ -273,7 +275,7 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                 parent: interfaceChannel.parent,
                 permissionOverwrites,
             }),
-            Priority.HIGH
+            Priority.IMMEDIATE
         );
 
         registerChannel(newChannel.id, guild.id, member.id);

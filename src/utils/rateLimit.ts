@@ -4,10 +4,11 @@
  */
 
 export enum Priority {
-    CRITICAL = 0,  // User-facing immediate actions (replies, modals)
-    HIGH = 1,      // Channel creation, permission changes
-    NORMAL = 2,    // Standard operations
-    LOW = 3,       // Background tasks, cleanup
+    IMMEDIATE = -1, // Bypass queue entirely - for J2C channel creation
+    CRITICAL = 0,   // User-facing immediate actions (replies, modals)
+    HIGH = 1,       // Permission changes
+    NORMAL = 2,     // Standard operations
+    LOW = 3,        // Background tasks, kicks (can wait)
 }
 
 interface QueuedTask<T> {
@@ -205,6 +206,11 @@ export function executeWithRateLimit<T>(
     task: () => Promise<T>,
     priority: Priority = Priority.NORMAL
 ): Promise<T> {
+    // IMMEDIATE priority bypasses the queue entirely for ultra-critical operations
+    if (priority === Priority.IMMEDIATE) {
+        return task();
+    }
+
     return new Promise((resolve, reject) => {
         // Circuit breaker check
         if (circuitOpen) {
@@ -235,6 +241,20 @@ export function executeWithRateLimit<T>(
             createdAt: Date.now(),
         });
         processBucket(bucket);
+    });
+}
+
+/**
+ * Fire and forget - queue a task without awaiting it
+ * Perfect for non-critical operations like kicks that shouldn't block other operations
+ */
+export function fireAndForget(
+    route: string,
+    task: () => Promise<any>,
+    priority: Priority = Priority.LOW
+): void {
+    executeWithRateLimit(route, task, priority).catch(() => {
+        // Silently ignore errors - this is fire and forget
     });
 }
 
