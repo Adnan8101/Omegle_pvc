@@ -39,10 +39,15 @@ export async function execute(
     const member = newState.member || oldState.member;
     if (!member || member.user.bot) return;
 
+    console.log(`[VSU] User ${member.user.username} | Old: ${oldState.channelId} | New: ${newState.channelId}`);
+
     if (newState.channelId && newState.channelId !== oldState.channelId) {
+        console.log(`[VSU] Processing JOIN for channel ${newState.channelId}`);
         const wasKicked = await handleAccessProtection(client, newState);
 
+        console.log(`[VSU] wasKicked: ${wasKicked}`);
         if (!wasKicked) {
+            console.log(`[VSU] Calling handleJoin...`);
             await handleJoin(client, newState);
         }
     }
@@ -150,19 +155,27 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
     const { channelId, guild, member } = state;
     if (!channelId || !member) return;
 
+    console.log(`[handleJoin] Channel: ${channelId} | Guild: ${guild.id}`);
+
     let isInterface = isInterfaceChannel(channelId);
+    console.log(`[handleJoin] isInterface (memory): ${isInterface}`);
 
     // FALLBACK: If not in memory, check DB (handles restart edge cases)
     if (!isInterface) {
         const settings = await getGuildSettings(guild.id);
+        console.log(`[handleJoin] DB Settings:`, settings ? `interfaceVcId=${settings.interfaceVcId}` : 'null');
         if (settings?.interfaceVcId === channelId) {
             // Found in DB but not in memory - register it now
+            console.log(`[handleJoin] Found in DB! Registering interface channel...`);
             registerInterfaceChannel(guild.id, channelId);
             isInterface = true;
         }
     }
 
+    console.log(`[handleJoin] Final isInterface: ${isInterface}`);
+
     if (isInterface) {
+        console.log(`[handleJoin] Calling createPrivateChannel...`);
         await createPrivateChannel(client, state);
         return;
     }
