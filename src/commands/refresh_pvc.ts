@@ -188,6 +188,25 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     }).catch(() => { });
                     permsSynced += currentMemberIds.length;
                 }
+
+                // DISCORD SYNC: Update Discord permissions for owner and all current members
+                // Grant chat permissions (SendMessages, EmbedLinks, AttachFiles)
+                try {
+                    // Update owner permissions
+                    await channel.permissionOverwrites.edit(pvc.ownerId, {
+                        ViewChannel: true, Connect: true, Speak: true, Stream: true,
+                        SendMessages: true, EmbedLinks: true, AttachFiles: true,
+                        MuteMembers: true, DeafenMembers: true, MoveMembers: true, ManageChannels: true,
+                    });
+
+                    // Update all current member permissions
+                    for (const memberId of currentMemberIds) {
+                        await channel.permissionOverwrites.edit(memberId, {
+                            ViewChannel: true, Connect: true,
+                            SendMessages: true, EmbedLinks: true, AttachFiles: true,
+                        });
+                    }
+                } catch { }
             }
         }
     }
