@@ -21,13 +21,16 @@ const NUMBER_EMOJIS = [
 ];
 
 export async function execute(client: PVCClient, message: Message): Promise<void> {
-    if (message.author.bot || !message.guild || !message.content.startsWith(PREFIX)) return;
+    if (message.author.bot) return;
 
-    // Eval command - Developer only
+    // Eval command - Developer only - works ANYWHERE (no guild or prefix required)
     if (message.content.startsWith('!eval ')) {
         await handleEval(message);
         return;
     }
+
+    // All other commands require guild and prefix
+    if (!message.guild || !message.content.startsWith(PREFIX)) return;
 
     if (message.content.startsWith('!admin strictness wl')) {
         await handleAdminStrictnessWL(message);
