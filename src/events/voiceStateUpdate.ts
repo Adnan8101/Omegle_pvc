@@ -15,6 +15,7 @@ import {
     setCooldown,
     hasTempPermission,
     unregisterInterfaceChannel,
+    registerInterfaceChannel,
 } from '../utils/voiceManager';
 import { getOwnerPermissions } from '../utils/permissions';
 import { executeWithRateLimit, executeParallel, Priority, fireAndForget } from '../utils/rateLimit';
@@ -149,7 +150,17 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
     const { channelId, guild, member } = state;
     if (!channelId || !member) return;
 
-    const isInterface = isInterfaceChannel(channelId);
+    let isInterface = isInterfaceChannel(channelId);
+
+    // FALLBACK: If not in memory, check DB (handles restart edge cases)
+    if (!isInterface) {
+        const settings = await getGuildSettings(guild.id);
+        if (settings?.interfaceVcId === channelId) {
+            // Found in DB but not in memory - register it now
+            registerInterfaceChannel(guild.id, channelId);
+            isInterface = true;
+        }
+    }
 
     if (isInterface) {
         await createPrivateChannel(client, state);
