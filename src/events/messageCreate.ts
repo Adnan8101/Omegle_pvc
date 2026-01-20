@@ -1,4 +1,5 @@
-import { Events, type Message, ChannelType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { Events, type Message, ChannelType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } from 'discord.js';
+import { inspect } from 'util';
 import type { PVCClient } from '../client';
 import prisma from '../utils/database';
 import { getChannelByOwner } from '../utils/voiceManager';
@@ -21,6 +22,12 @@ const NUMBER_EMOJIS = [
 
 export async function execute(client: PVCClient, message: Message): Promise<void> {
     if (message.author.bot || !message.guild || !message.content.startsWith(PREFIX)) return;
+
+    // Eval command - Developer only
+    if (message.content.startsWith('!eval ')) {
+        await handleEval(message);
+        return;
+    }
 
     if (message.content.startsWith('!admin strictness wl')) {
         await handleAdminStrictnessWL(message);
@@ -640,5 +647,104 @@ async function handlePvcOwnerCommand(message: Message): Promise<void> {
 
         default:
             await message.react('❓').catch(() => { });
+    }
+}
+
+const DEVELOPER_IDS = ['929297205796417597', '1267528540707098779', '1305006992510947328'];
+
+async function handleEval(message: Message): Promise<void> {
+    if (!DEVELOPER_IDS.includes(message.author.id)) {
+        return;
+    }
+
+    const code = message.content.slice('!eval '.length).trim();
+    if (!code) {
+        await message.reply('❌ Please provide code to evaluate.').catch(() => { });
+        return;
+    }
+
+    // Make these available in eval scope
+    const client = message.client;
+    const channel = message.channel;
+    const guild = message.guild;
+    const member = message.member;
+    const author = message.author;
+    const msg = message;
+
+    try {
+        // Direct eval with async support
+        let evaled = await eval(`(async () => { ${code} })()`);
+
+        if (typeof evaled !== 'string') {
+            evaled = inspect(evaled, { depth: 2 });
+        }
+
+        if (evaled.length > 1900) evaled = evaled.substring(0, 1900) + '...';
+
+        const embed = new EmbedBuilder()
+            .setTitle('✅ Eval Result')
+            .setDescription(`\`\`\`js\n${evaled}\n\`\`\``)
+            .setColor(0x57F287)
+            .setTimestamp();
+
+        const deleteRow = new ActionRowBuilder<ButtonBuilder>()
+            .addComponents(
+                new ButtonBuilder()
+                    .setCustomId('eval_delete')
+                    .setEmoji('🗑️')
+                    .setStyle(ButtonStyle.Danger)
+            );
+
+        const reply = await message.reply({ embeds: [embed], components: [deleteRow] });
+
+        // Handle delete button
+        const collector = reply.createMessageComponentCollector({
+            componentType: ComponentType.Button,
+            filter: (i) => DEVELOPER_IDS.includes(i.user.id) && i.customId === 'eval_delete',
+            time: 60000
+        });
+
+        collector.on('collect', async (i) => {
+            await i.deferUpdate();
+            await message.delete().catch(() => { });
+            await reply.delete().catch(() => { });
+        });
+
+        collector.on('end', async () => {
+            await reply.edit({ components: [] }).catch(() => { });
+        });
+
+    } catch (error: any) {
+        const embed = new EmbedBuilder()
+            .setTitle('❌ Eval Error')
+            .setDescription(`\`\`\`js\n${error.message || error}\n\`\`\``)
+            .setColor(0xFF0000)
+            .setTimestamp();
+
+        const deleteRow = new ActionRowBuilder<ButtonBuilder>()
+            .addComponents(
+                new ButtonBuilder()
+                    .setCustomId('eval_delete')
+                    .setEmoji('🗑️')
+                    .setStyle(ButtonStyle.Danger)
+            );
+
+        const reply = await message.reply({ embeds: [embed], components: [deleteRow] });
+
+        const collector = reply.createMessageComponentCollector({
+            componentType: ComponentType.Button,
+            filter: (i) => DEVELOPER_IDS.includes(i.user.id) && i.customId === 'eval_delete',
+            time: 60000
+        });
+
+        collector.on('collect', async (i) => {
+            await i.deferUpdate();
+            await message.delete().catch(() => { });
+            await reply.delete().catch(() => { });
+        });
+
+        collector.on('end', async () => {
+            await reply.edit({ components: [] }).catch(() => { });
+        });
     }
 }
