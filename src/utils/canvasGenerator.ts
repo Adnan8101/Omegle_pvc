@@ -86,11 +86,27 @@ export async function generateInterfaceImage(): Promise<Buffer> {
 
             // Draw Text
             ctx.fillStyle = '#FFFFFF';
-            // Use system font or a standard safe font stack - bold weights render better on canvas
-            ctx.font = 'bold 24px "Verdana", "Arial", sans-serif';
+            ctx.font = 'bold 20px "Verdana", "Arial", sans-serif';
             ctx.textAlign = 'left';
             ctx.textBaseline = 'middle';
-            ctx.fillText(btn.label, x + 65, y + buttonHeight / 2);
+
+            // Ensure text fits within button (max width = buttonWidth - emoji space - padding)
+            const maxTextWidth = buttonWidth - 75; // 65px for emoji + 10px right padding
+            const textX = x + 65;
+            const textY = y + buttonHeight / 2;
+
+            // Measure and scale text if needed
+            let currentFont = 20;
+            ctx.font = `bold ${currentFont}px "Verdana", "Arial", sans-serif`;
+            let textWidth = ctx.measureText(btn.label).width;
+
+            while (textWidth > maxTextWidth && currentFont > 14) {
+                currentFont -= 1;
+                ctx.font = `bold ${currentFont}px "Verdana", "Arial", sans-serif`;
+                textWidth = ctx.measureText(btn.label).width;
+            }
+
+            ctx.fillText(btn.label, textX, textY);
         }
     }
 
