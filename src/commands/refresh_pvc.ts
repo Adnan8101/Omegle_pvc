@@ -14,7 +14,8 @@ import type { Command } from '../client';
 import { generateInterfaceEmbed, generateInterfaceImage, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
 import { canRunAdminCommand } from '../utils/permissions';
 import { logAction, LogAction } from '../utils/logger';
-import { invalidateGuildSettings } from '../utils/cache';
+import { invalidateGuildSettings, clearAllCaches as invalidateAllCaches } from '../utils/cache';
+import { clearGuildState, registerInterfaceChannel, registerChannel } from '../utils/voiceManager';
 
 const MAIN_BUTTONS = [
     { id: 'pvc_lock' },
@@ -107,8 +108,48 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     });
 
     invalidateGuildSettings(guild.id);
+    invalidateAllCaches();
 
-    const interfaceTextChannel = guild.channels.cache.get(settings.interfaceTextId);
+    // FULL STATE RELOAD: Clear in-memory state and reload from DB
+    clearGuildState(guild.id);
+
+    // Reload settings from DB
+    const freshSettings = await prisma.guildSettings.findUnique({
+        where: { guildId: guild.id },
+        include: { privateChannels: true },
+    });
+
+    if (freshSettings?.interfaceVcId) {
+        const interfaceVc = guild.channels.cache.get(freshSettings.interfaceVcId);
+        if (interfaceVc) {
+            registerInterfaceChannel(guild.id, freshSettings.interfaceVcId);
+        }
+    }
+
+    // Re-register all active PVCs
+    if (freshSettings?.privateChannels) {
+        const validPvcs = [];
+        const invalidPvcIds = [];
+
+        for (const pvc of freshSettings.privateChannels) {
+            const channel = guild.channels.cache.get(pvc.channelId);
+            if (channel) {
+                registerChannel(pvc.channelId, pvc.guildId, pvc.ownerId);
+                validPvcs.push(pvc);
+            } else {
+                invalidPvcIds.push(pvc.channelId);
+            }
+        }
+
+        // Clean up stale PVCs from DB in parallel
+        if (invalidPvcIds.length > 0) {
+            prisma.privateVoiceChannel.deleteMany({
+                where: { channelId: { in: invalidPvcIds } },
+            }).catch(() => { });
+        }
+    }
+
+    const interfaceTextChannel = guild.channels.cache.get(freshSettings?.interfaceTextId || settings.interfaceTextId);
     if (!interfaceTextChannel || interfaceTextChannel.type !== ChannelType.GuildText) {
         await interaction.editReply('Interface text channel not found. Run `/pvc_setup` again.');
         return;

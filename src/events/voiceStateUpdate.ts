@@ -14,6 +14,7 @@ import {
     isOnCooldown,
     setCooldown,
     hasTempPermission,
+    unregisterInterfaceChannel,
 } from '../utils/voiceManager';
 import { getOwnerPermissions } from '../utils/permissions';
 import { executeWithRateLimit, executeParallel, Priority, fireAndForget } from '../utils/rateLimit';
@@ -239,7 +240,24 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                 }
             } catch { }
             return;
+        } else {
+            // Channel exists in memory but not in Discord - clean up stale data
+            unregisterChannel(existingChannel);
+            await prisma.privateVoiceChannel.delete({
+                where: { channelId: existingChannel },
+            }).catch(() => { });
         }
+    }
+
+    // Verify interface channel still exists in Discord
+    const interfaceExists = guild.channels.cache.has(interfaceChannel.id);
+    if (!interfaceExists) {
+        // Interface channel was deleted - unregister and disconnect user
+        unregisterInterfaceChannel(guild.id);
+        try {
+            await member.voice.disconnect();
+        } catch { }
+        return;
     }
 
     setCooldown(member.id, 'CREATE_CHANNEL');

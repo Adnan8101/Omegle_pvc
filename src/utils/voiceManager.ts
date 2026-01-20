@@ -167,3 +167,27 @@ export function hasTempPermission(channelId: string, userId: string): boolean {
 export function clearTempPermissions(channelId: string): void {
     tempPermittedUsers.delete(channelId);
 }
+
+/**
+ * Clear all state for a specific guild (for refresh)
+ */
+export function clearGuildState(guildId: string): void {
+    // Clear all channels for this guild
+    for (const [channelId, state] of channelStates) {
+        if (state.guildId === guildId) {
+            channelStates.delete(channelId);
+            joinOrder.delete(channelId);
+            tempPermittedUsers.delete(channelId);
+        }
+    }
+
+    // Clear owner mappings for this guild
+    for (const key of ownerToChannel.keys()) {
+        if (key.startsWith(guildId + ':')) {
+            ownerToChannel.delete(key);
+        }
+    }
+
+    // Clear interface
+    guildInterfaces.delete(guildId);
+}
