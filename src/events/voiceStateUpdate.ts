@@ -316,12 +316,33 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
             },
         ];
 
-        // Apply saved permissions to channel overrides
+        // Apply saved permissions to channel overrides - VALIDATE each one first
+        const invalidTargetIds: string[] = [];
         for (const p of savedPermissions) {
-            permissionOverwrites.push({
-                id: p.targetId,
-                allow: ['ViewChannel', 'Connect'],
-            });
+            // Check if user/role still exists in guild cache
+            const isValidMember = guild.members.cache.has(p.targetId);
+            const isValidRole = guild.roles.cache.has(p.targetId);
+
+            if (isValidMember || isValidRole) {
+                permissionOverwrites.push({
+                    id: p.targetId,
+                    allow: ['ViewChannel', 'Connect'],
+                });
+            } else {
+                console.log(`[createPVC] Skipping invalid target: ${p.targetId} (not in cache)`);
+                invalidTargetIds.push(p.targetId);
+            }
+        }
+
+        // Clean up invalid permissions from DB in background
+        if (invalidTargetIds.length > 0) {
+            prisma.ownerPermission.deleteMany({
+                where: {
+                    guildId: guild.id,
+                    ownerId: member.id,
+                    targetId: { in: invalidTargetIds },
+                },
+            }).catch(() => { });
         }
 
         console.log(`[createPVC] Creating channel with ${permissionOverwrites.length} permission overwrites...`);
