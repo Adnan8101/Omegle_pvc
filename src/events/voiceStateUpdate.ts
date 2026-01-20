@@ -245,19 +245,33 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
 
     try {
         const ownerPerms = getOwnerPermissions();
+
+        // Persistent History: Load from Cache
+        const savedPermissions = await getCachedOwnerPerms(guild.id, member.id);
+
+        const permissionOverwrites: any[] = [
+            {
+                id: member.id,
+                allow: ownerPerms.allow,
+                deny: ownerPerms.deny,
+            },
+        ];
+
+        // Apply saved permissions to channel overrides
+        for (const p of savedPermissions) {
+            permissionOverwrites.push({
+                id: p.targetId,
+                allow: ['ViewChannel', 'Connect'],
+            });
+        }
+
         const newChannel = await executeWithRateLimit(
             `create:${guild.id}`,
             () => guild.channels.create({
                 name: member.displayName,
                 type: ChannelType.GuildVoice,
                 parent: interfaceChannel.parent,
-                permissionOverwrites: [
-                    {
-                        id: member.id,
-                        allow: ownerPerms.allow,
-                        deny: ownerPerms.deny,
-                    },
-                ],
+                permissionOverwrites,
             }),
             Priority.HIGH
         );
@@ -271,8 +285,17 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                 channelId: newChannel.id,
                 guildId: guild.id,
                 ownerId: member.id,
+                createdAt: new Date(),
+                permissions: {
+                    create: savedPermissions.map(p => ({
+                        targetId: p.targetId,
+                        targetType: p.targetType,
+                        permission: p.permission,
+                    })),
+                },
             },
         });
+
 
         const freshMember = await guild.members.fetch(member.id);
         if (freshMember.voice.channelId) {

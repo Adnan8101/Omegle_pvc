@@ -8,11 +8,13 @@ import {
     ButtonBuilder,
     ButtonStyle,
     EmbedBuilder,
+    GuildMember,
 } from 'discord.js';
 import { getChannelByOwner, transferOwnership, unregisterChannel, getGuildChannels } from '../../utils/voiceManager';
 import { executeWithRateLimit, executeParallel, Priority } from '../../utils/rateLimit';
+import { transferChannelOwnership } from '../../utils/channelActions';
 import prisma from '../../utils/database';
-import { batchUpsertPermissions, invalidateWhitelist } from '../../utils/cache';
+import { batchUpsertPermissions, invalidateWhitelist, batchUpsertOwnerPermissions, batchDeleteOwnerPermissions, getOwnerPermissions as getCachedOwnerPerms, invalidateChannelPermissions } from '../../utils/cache';
 import { logAction, LogAction } from '../../utils/logger';
 
 export async function handleSelectMenuInteraction(
@@ -141,6 +143,14 @@ async function handleAddUserSelect(
 
     await updateVoicePermissions(channel, users, 'user', 'permit', { ViewChannel: true, Connect: true });
 
+    // Persistent History: Save to OwnerPermission using Cache Helper
+    const targetIds = Array.from(users.keys());
+    await batchUpsertOwnerPermissions(
+        interaction.guild!.id,
+        ownerId,
+        targetIds.map(id => ({ targetId: id, targetType: 'user' }))
+    );
+
     await logAction({
         action: LogAction.USER_ADDED,
         guild: interaction.guild!,
@@ -188,6 +198,13 @@ async function handleRemoveUserSelect(
             targetId: { in: targetIds },
         },
     });
+
+    // Persistent History: Remove from OwnerPermission using Cache Helper
+    await batchDeleteOwnerPermissions(
+        interaction.guild!.id,
+        ownerId,
+        targetIds
+    );
 
     invalidateWhitelist(channel.id);
 
@@ -398,32 +415,14 @@ async function handleTransferSelect(
     const oldOwnerId = interaction.user.id;
     const newOwnerId = selectedUser.id;
 
-    transferOwnership(channelId, newOwnerId);
-
-    await Promise.all([
-        executeWithRateLimit(`perms:${channelId}`, async () => {
-            await channel.permissionOverwrites.delete(oldOwnerId).catch(() => { });
-            await channel.permissionOverwrites.edit(newOwnerId, {
-                ViewChannel: true, Connect: true, Speak: true, Stream: true,
-                MuteMembers: true, DeafenMembers: true, MoveMembers: true, ManageChannels: true,
-            });
-            await channel.setName(selectedUser.displayName).catch(() => { });
-        }, Priority.HIGH),
-        prisma.privateVoiceChannel.update({
-            where: { channelId },
-            data: { ownerId: newOwnerId },
-        }),
-    ]);
-
-    await logAction({
-        action: LogAction.CHANNEL_TRANSFERRED,
-        guild: guild,
-        user: interaction.user,
-        channelName: channel.name,
-        channelId: channelId,
-        targetUser: selectedUser,
-        details: `Ownership transferred`,
-    });
+    await transferChannelOwnership(
+        guild,
+        channelId,
+        oldOwnerId,
+        newOwnerId,
+        interaction.member as GuildMember,
+        channel.name
+    );
 
     await interaction.update({ content: `👑 Ownership transferred to **${selectedUser.displayName}**.`, components: [] });
 }

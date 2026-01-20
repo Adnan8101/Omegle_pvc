@@ -26,10 +26,10 @@ const BUTTON_LAYOUT = [
         { id: 'pvc_lock', label: 'LOCK' },
         { id: 'pvc_unlock', label: 'UNLOCK' },
         { id: 'pvc_privacy', label: 'PRIVACY' },
-        { id: 'pvc_add_user', label: 'TRUST' }
+        { id: 'pvc_add_user', label: 'ADD USER' }
     ],
     [
-        { id: 'pvc_remove_user', label: 'UNTRUST' },
+        { id: 'pvc_remove_user', label: 'REMOVE USER' },
         { id: 'pvc_invite', label: 'INVITE' },
         { id: 'pvc_name', label: 'NAME' },
         { id: 'pvc_kick', label: 'KICK' }
