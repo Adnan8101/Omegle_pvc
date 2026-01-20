@@ -11,9 +11,9 @@ import {
 } from 'discord.js';
 import { getChannelByOwner, transferOwnership, unregisterChannel, getGuildChannels } from '../../utils/voiceManager';
 import { executeWithRateLimit, executeParallel, Priority } from '../../utils/rateLimit';
-import { getOwnerPermissions } from '../../utils/permissions';
 import prisma from '../../utils/database';
 import { batchUpsertPermissions, invalidateWhitelist } from '../../utils/cache';
+import { logAction, LogAction } from '../../utils/logger';
 
 export async function handleSelectMenuInteraction(
     interaction: AnySelectMenuInteraction
@@ -24,13 +24,11 @@ export async function handleSelectMenuInteraction(
     const userId = interaction.user.id;
     const ownedChannelId = getChannelByOwner(guild.id, userId);
 
-    // Admin delete select doesn't require ownership
     if (customId === 'pvc_admin_delete_select') {
         await handleAdminDeleteSelect(interaction as StringSelectMenuInteraction);
         return;
     }
 
-    // All other selects require channel ownership
     if (!ownedChannelId && customId !== 'pvc_transfer_select') {
         await interaction.reply({
             content: 'You do not own a private voice channel.',
@@ -42,20 +40,23 @@ export async function handleSelectMenuInteraction(
     const channel = ownedChannelId ? guild.channels.cache.get(ownedChannelId) : null;
 
     switch (customId) {
+        case 'pvc_add_user_select':
+            await handleAddUserSelect(interaction as UserSelectMenuInteraction, channel, userId);
+            break;
+        case 'pvc_remove_user_select':
+            await handleRemoveUserSelect(interaction as UserSelectMenuInteraction, channel, userId);
+            break;
         case 'pvc_invite_select':
-            await handleInviteSelect(interaction as UserSelectMenuInteraction, channel);
+            await handleInviteSelect(interaction as UserSelectMenuInteraction, channel, userId);
             break;
-        case 'pvc_ban_user_select':
-            await handleBanUserSelect(interaction as UserSelectMenuInteraction, channel);
+        case 'pvc_kick_select':
+            await handleKickSelect(interaction as UserSelectMenuInteraction, channel, userId);
             break;
-        case 'pvc_ban_role_select':
-            await handleBanRoleSelect(interaction as RoleSelectMenuInteraction, channel);
+        case 'pvc_block_select':
+            await handleBlockSelect(interaction as UserSelectMenuInteraction, channel, userId);
             break;
-        case 'pvc_permit_user_select':
-            await handlePermitUserSelect(interaction as UserSelectMenuInteraction, channel);
-            break;
-        case 'pvc_permit_role_select':
-            await handlePermitRoleSelect(interaction as RoleSelectMenuInteraction, channel);
+        case 'pvc_unblock_select':
+            await handleUnblockSelect(interaction as UserSelectMenuInteraction, channel);
             break;
         case 'pvc_region_select':
             await handleRegionSelect(interaction as StringSelectMenuInteraction, channel);
@@ -68,7 +69,6 @@ export async function handleSelectMenuInteraction(
     }
 }
 
-// Optimized batch permission update
 async function updateVoicePermissions(
     channel: any,
     targets: Map<string, any>,
@@ -78,7 +78,6 @@ async function updateVoicePermissions(
 ): Promise<void> {
     const targetIds = Array.from(targets.keys());
 
-    // Batch Discord API calls
     const discordTasks = targetIds.map(id => ({
         route: `perms:${channel.id}:${id}`,
         task: () => channel.permissionOverwrites.edit(id, permissionUpdates),
@@ -86,7 +85,6 @@ async function updateVoicePermissions(
     }));
     await executeParallel(discordTasks);
 
-    // Handle disconnects for bans
     if (permission === 'ban') {
         const disconnectTasks: Array<{ route: string; task: () => Promise<any>; priority: Priority }> = [];
 
@@ -118,16 +116,100 @@ async function updateVoicePermissions(
         }
     }
 
-    // Batch DB update
     await batchUpsertPermissions(
         channel.id,
         targetIds.map(id => ({ targetId: id, targetType: type, permission }))
     );
 }
 
+async function handleAddUserSelect(
+    interaction: UserSelectMenuInteraction,
+    channel: any,
+    ownerId: string
+): Promise<void> {
+    if (!channel || channel.type !== ChannelType.GuildVoice) {
+        await interaction.reply({ content: 'Channel not found.', ephemeral: true });
+        return;
+    }
+
+    const { users } = interaction;
+
+    if (users.has(ownerId)) {
+        await interaction.reply({ content: 'You cannot add yourself to your own channel.', ephemeral: true });
+        return;
+    }
+
+    await updateVoicePermissions(channel, users, 'user', 'permit', { ViewChannel: true, Connect: true });
+
+    await logAction({
+        action: LogAction.USER_ADDED,
+        guild: interaction.guild!,
+        user: interaction.user,
+        channelName: channel.name,
+        channelId: channel.id,
+        details: `Added ${users.size} user(s)`,
+    });
+
+    await interaction.update({
+        content: `✅ Trusted ${users.size} user(s) in your voice channel.`,
+        components: [],
+    });
+}
+
+async function handleRemoveUserSelect(
+    interaction: UserSelectMenuInteraction,
+    channel: any,
+    ownerId: string
+): Promise<void> {
+    if (!channel || channel.type !== ChannelType.GuildVoice) {
+        await interaction.reply({ content: 'Channel not found.', ephemeral: true });
+        return;
+    }
+
+    const { users } = interaction;
+
+    if (users.has(ownerId)) {
+        await interaction.reply({ content: 'You cannot remove yourself from your own channel.', ephemeral: true });
+        return;
+    }
+
+    const targetIds = Array.from(users.keys());
+
+    const discordTasks = targetIds.map(id => ({
+        route: `perms:${channel.id}:${id}`,
+        task: () => channel.permissionOverwrites.delete(id).catch(() => { }),
+        priority: Priority.NORMAL,
+    }));
+    await executeParallel(discordTasks);
+
+    await prisma.voicePermission.deleteMany({
+        where: {
+            channelId: channel.id,
+            targetId: { in: targetIds },
+        },
+    });
+
+    invalidateWhitelist(channel.id);
+
+    await logAction({
+        action: LogAction.USER_REMOVED,
+        guild: interaction.guild!,
+        user: interaction.user,
+        channelName: channel.name,
+        channelId: channel.id,
+        details: `Removed ${users.size} user(s)`,
+    });
+
+    await interaction.update({
+        content: `✅ Untrusted ${users.size} user(s) from your voice channel.`,
+        components: [],
+    });
+}
+
 async function handleInviteSelect(
     interaction: UserSelectMenuInteraction,
-    channel: any
+    channel: any,
+    ownerId: string
 ): Promise<void> {
     if (!channel || channel.type !== ChannelType.GuildVoice) {
         await interaction.reply({ content: 'Channel not found.', ephemeral: true });
@@ -136,53 +218,124 @@ async function handleInviteSelect(
 
     const { users, user: inviter } = interaction;
 
+    if (users.has(ownerId)) {
+        await interaction.reply({ content: 'You cannot invite yourself to your own channel.', ephemeral: true });
+        return;
+    }
+
     await updateVoicePermissions(channel, users, 'user', 'permit', { ViewChannel: true, Connect: true });
 
-    // Send DMs in background (don't await)
     for (const [, user] of users) {
         user.send(`<@${inviter.id}> is inviting you to join <#${channel.id}>`).catch(() => { });
     }
 
     await interaction.update({
-        content: `Invited ${users.size} user(s) to your voice channel.`,
+        content: `📨 Invited ${users.size} user(s) to your voice channel.`,
         components: [],
     });
 }
 
-async function handleBanUserSelect(interaction: UserSelectMenuInteraction, channel: any): Promise<void> {
+async function handleKickSelect(
+    interaction: UserSelectMenuInteraction,
+    channel: any,
+    ownerId: string
+): Promise<void> {
     if (!channel || channel.type !== ChannelType.GuildVoice) {
         await interaction.reply({ content: 'Channel not found.', ephemeral: true });
         return;
     }
-    await updateVoicePermissions(channel, interaction.users, 'user', 'ban', { ViewChannel: false, Connect: false });
-    await interaction.update({ content: `Banned ${interaction.users.size} user(s) from your voice channel.`, components: [] });
+
+    const { users } = interaction;
+
+    if (users.has(ownerId)) {
+        await interaction.reply({ content: 'You cannot kick yourself from your own channel.', ephemeral: true });
+        return;
+    }
+
+    let kickedCount = 0;
+    for (const [userId] of users) {
+        const member = channel.members.get(userId);
+        if (member) {
+            await executeWithRateLimit(`disconnect:${userId}`, () =>
+                member.voice.disconnect()
+            );
+            kickedCount++;
+        }
+    }
+
+    await interaction.update({
+        content: `👢 Kicked ${kickedCount} user(s) from your voice channel.`,
+        components: [],
+    });
 }
 
-async function handleBanRoleSelect(interaction: RoleSelectMenuInteraction, channel: any): Promise<void> {
+async function handleBlockSelect(
+    interaction: UserSelectMenuInteraction,
+    channel: any,
+    ownerId: string
+): Promise<void> {
     if (!channel || channel.type !== ChannelType.GuildVoice) {
         await interaction.reply({ content: 'Channel not found.', ephemeral: true });
         return;
     }
-    await updateVoicePermissions(channel, interaction.roles, 'role', 'ban', { ViewChannel: false, Connect: false });
-    await interaction.update({ content: `Banned ${interaction.roles.size} role(s) from your voice channel.`, components: [] });
+
+    const { users } = interaction;
+
+    if (users.has(ownerId)) {
+        await interaction.reply({ content: 'You cannot block yourself from your own channel.', ephemeral: true });
+        return;
+    }
+
+    await updateVoicePermissions(channel, users, 'user', 'ban', { ViewChannel: false, Connect: false });
+
+    await logAction({
+        action: LogAction.USER_BANNED,
+        guild: interaction.guild!,
+        user: interaction.user,
+        channelName: channel.name,
+        channelId: channel.id,
+        details: `Blocked ${users.size} user(s)`,
+    });
+
+    await interaction.update({
+        content: `🚫 Blocked ${users.size} user(s) from your voice channel.`,
+        components: [],
+    });
 }
 
-async function handlePermitUserSelect(interaction: UserSelectMenuInteraction, channel: any): Promise<void> {
+async function handleUnblockSelect(
+    interaction: UserSelectMenuInteraction,
+    channel: any
+): Promise<void> {
     if (!channel || channel.type !== ChannelType.GuildVoice) {
         await interaction.reply({ content: 'Channel not found.', ephemeral: true });
         return;
     }
-    await updateVoicePermissions(channel, interaction.users, 'user', 'permit', { ViewChannel: true, Connect: true });
-    await interaction.update({ content: `Permitted ${interaction.users.size} user(s) in your voice channel.`, components: [] });
-}
 
-async function handlePermitRoleSelect(interaction: RoleSelectMenuInteraction, channel: any): Promise<void> {
-    if (!channel || channel.type !== ChannelType.GuildVoice) {
-        await interaction.reply({ content: 'Channel not found.', ephemeral: true });
-        return;
-    }
-    await updateVoicePermissions(channel, interaction.roles, 'role', 'permit', { ViewChannel: true, Connect: true });
-    await interaction.update({ content: `Permitted ${interaction.roles.size} role(s) in your voice channel.`, components: [] });
+    const { users } = interaction;
+    const targetIds = Array.from(users.keys());
+
+    const discordTasks = targetIds.map(id => ({
+        route: `perms:${channel.id}:${id}`,
+        task: () => channel.permissionOverwrites.delete(id).catch(() => { }),
+        priority: Priority.NORMAL,
+    }));
+    await executeParallel(discordTasks);
+
+    await prisma.voicePermission.deleteMany({
+        where: {
+            channelId: channel.id,
+            targetId: { in: targetIds },
+            permission: 'ban',
+        },
+    });
+
+    invalidateWhitelist(channel.id);
+
+    await interaction.update({
+        content: `✅ Unblocked ${users.size} user(s) from your voice channel.`,
+        components: [],
+    });
 }
 
 async function handleRegionSelect(
@@ -200,8 +353,17 @@ async function handleRegionSelect(
         Priority.NORMAL
     );
 
+    await logAction({
+        action: LogAction.CHANNEL_REGION_SET,
+        guild: interaction.guild!,
+        user: interaction.user,
+        channelName: channel.name,
+        channelId: channel.id,
+        details: `Region set to ${region === 'auto' ? 'Automatic' : region}`,
+    });
+
     await interaction.update({
-        content: `Voice region set to ${region === 'auto' ? 'Automatic' : region}.`,
+        content: `🌍 Voice region set to **${region === 'auto' ? 'Automatic' : region}**.`,
         components: [],
     });
 }
@@ -228,6 +390,11 @@ async function handleTransferSelect(
         return;
     }
 
+    if (selectedUser.id === interaction.user.id) {
+        await interaction.reply({ content: 'You cannot transfer ownership to yourself.', ephemeral: true });
+        return;
+    }
+
     const oldOwnerId = interaction.user.id;
     const newOwnerId = selectedUser.id;
 
@@ -240,7 +407,7 @@ async function handleTransferSelect(
                 ViewChannel: true, Connect: true, Speak: true, Stream: true,
                 MuteMembers: true, DeafenMembers: true, MoveMembers: true, ManageChannels: true,
             });
-            await channel.setName(selectedUser.displayName).catch(() => {});
+            await channel.setName(selectedUser.displayName).catch(() => { });
         }, Priority.HIGH),
         prisma.privateVoiceChannel.update({
             where: { channelId },
@@ -248,7 +415,17 @@ async function handleTransferSelect(
         }),
     ]);
 
-    await interaction.update({ content: `Ownership transferred to ${selectedUser.displayName}.`, components: [] });
+    await logAction({
+        action: LogAction.CHANNEL_TRANSFERRED,
+        guild: guild,
+        user: interaction.user,
+        channelName: channel.name,
+        channelId: channelId,
+        targetUser: selectedUser,
+        details: `Ownership transferred`,
+    });
+
+    await interaction.update({ content: `👑 Ownership transferred to **${selectedUser.displayName}**.`, components: [] });
 }
 
 async function handleAdminDeleteSelect(interaction: StringSelectMenuInteraction): Promise<void> {

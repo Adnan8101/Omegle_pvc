@@ -4,29 +4,34 @@ import {
     ActionRowBuilder,
     ButtonBuilder,
     ButtonStyle,
-    EmbedBuilder,
     PermissionFlagsBits,
-    AttachmentBuilder,
     type ChatInputCommandInteraction,
 } from 'discord.js';
 import prisma from '../utils/database';
 import { registerInterfaceChannel } from '../utils/voiceManager';
 import type { Command } from '../client';
-import { generateInterfaceImage, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
+import { generateInterfaceEmbed, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
 import { invalidateGuildSettings } from '../utils/cache';
 import { canRunAdminCommand } from '../utils/permissions';
 import { logAction, LogAction } from '../utils/logger';
 
-// Main interface buttons (3x3 layout)
 const MAIN_BUTTONS = [
     { id: 'pvc_lock' },
     { id: 'pvc_unlock' },
-    { id: 'pvc_hide' },
-    { id: 'pvc_unhide' },
+    { id: 'pvc_privacy' },
     { id: 'pvc_add_user' },
+    { id: 'pvc_remove_user' },
+    { id: 'pvc_invite' },
+    { id: 'pvc_name' },
+    { id: 'pvc_kick' },
+    { id: 'pvc_region' },
+    { id: 'pvc_block' },
+    { id: 'pvc_unblock' },
     { id: 'pvc_claim' },
-    { id: 'pvc_settings' },
+    { id: 'pvc_transfer' },
     { id: 'pvc_delete' },
+    { id: 'pvc_chat' },
+    { id: 'pvc_info' },
 ] as const;
 
 const data = new SlashCommandBuilder()
@@ -62,7 +67,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         return;
     }
 
-    // Check admin permissions
     if (!await canRunAdminCommand(interaction)) {
         await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', ephemeral: true });
         return;
@@ -92,24 +96,22 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     try {
         const guild = interaction.guild;
 
-        // 1. Create the interface TEXT channel for the control panel
         const interfaceTextChannel = await guild.channels.create({
             name: 'interface',
             type: ChannelType.GuildText,
             parent: category.id,
         });
 
-        // 2. Create the "Join to Create" voice channel
         const joinToCreateVc = await guild.channels.create({
             name: 'Join to Create',
             type: ChannelType.GuildVoice,
             parent: category.id,
         });
 
-        // 3. Create button rows (3x3 layout)
         const row1 = new ActionRowBuilder<ButtonBuilder>();
         const row2 = new ActionRowBuilder<ButtonBuilder>();
         const row3 = new ActionRowBuilder<ButtonBuilder>();
+        const row4 = new ActionRowBuilder<ButtonBuilder>();
 
         MAIN_BUTTONS.forEach((btn, index) => {
             const emojiData = BUTTON_EMOJI_MAP[btn.id];
@@ -121,44 +123,31 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 button.setEmoji({ id: emojiData.id, name: emojiData.name });
             }
 
-            if (index < 3) {
+            if (index < 4) {
                 row1.addComponents(button);
-            } else if (index < 6) {
+            } else if (index < 8) {
                 row2.addComponents(button);
-            } else {
+            } else if (index < 12) {
                 row3.addComponents(button);
+            } else {
+                row4.addComponents(button);
             }
         });
 
-        // 4. Generate dynamic interface image with canvas
-        const imageBuffer = await generateInterfaceImage(guild);
-        const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
+        const embed = generateInterfaceEmbed(guild);
 
-        const embed = new EmbedBuilder()
-            .setImage('attachment://interface.png');
-
-        // 5. Send the control panel message in the interface text channel
-        const components = [row1];
-        if (row2.components.length > 0) {
-            components.push(row2);
-        }
-        if (row3.components.length > 0) {
-            components.push(row3);
-        }
+        const components = [row1, row2, row3, row4];
 
         await interfaceTextChannel.send({
             embeds: [embed],
-            files: [attachment],
             components,
         });
 
-        // 6. Create webhook for logging
         const logsWebhook = await (logsChannel as any).createWebhook({
             name: 'PVC Logger',
             reason: 'For logging PVC actions',
         });
 
-        // 7. Save to database
         await prisma.guildSettings.upsert({
             where: { guildId: guild.id },
             update: {
@@ -180,10 +169,8 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
 
         invalidateGuildSettings(guild.id);
 
-        // 8. Register in memory
         registerInterfaceChannel(guild.id, joinToCreateVc.id);
 
-        // 9. Log the setup
         await logAction({
             action: LogAction.PVC_SETUP,
             guild: guild,

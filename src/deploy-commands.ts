@@ -25,22 +25,15 @@ const rest = new REST().setToken(Config.token);
 
 async function deployCommands() {
     try {
-        console.log('🚀 Deploying slash commands...');
-        
-        // Register commands globally or to a specific guild
         const route = Config.guildId
             ? Routes.applicationGuildCommands(Config.clientId, Config.guildId)
             : Routes.applicationCommands(Config.clientId);
 
         await rest.put(route, { body: commands });
-        
-        console.log(`✅ Successfully registered ${commands.length} slash commands!`);
-        
-        // Disconnect Prisma to allow process to exit
+
         await prisma.$disconnect();
         process.exit(0);
     } catch (error) {
-        console.error('❌ Failed to register slash commands:', error);
         await prisma.$disconnect();
         process.exit(1);
     }

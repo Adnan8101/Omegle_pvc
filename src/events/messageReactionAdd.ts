@@ -4,10 +4,8 @@ import { safeSetChannelName } from '../utils/discordApi';
 import { logAction, LogAction } from '../utils/logger';
 
 export async function handleMessageReactionAdd(reaction: MessageReaction | PartialMessageReaction, user: User | PartialUser): Promise<void> {
-    // Ignore bot reactions
     if (user.bot) return;
 
-    // Fetch partial data if needed
     if (reaction.partial) {
         try {
             await reaction.fetch();
@@ -24,20 +22,17 @@ export async function handleMessageReactionAdd(reaction: MessageReaction | Parti
         }
     }
 
-    // Check if this is a checkmark reaction
     if (reaction.emoji.name !== '✅') return;
 
     const message = reaction.message;
     if (!message.guild) return;
 
-    // Check if this message is a pending rename request
     const pendingRequest = await prisma.pendingRenameRequest.findUnique({
         where: { messageId: message.id },
     });
 
     if (!pendingRequest) return;
 
-    // Verify reactor has staff role
     const settings = await prisma.guildSettings.findUnique({
         where: { guildId: message.guild.id },
     });
@@ -46,11 +41,9 @@ export async function handleMessageReactionAdd(reaction: MessageReaction | Parti
 
     const member = await message.guild.members.fetch(user.id as string);
     if (!member.roles.cache.has(settings.staffRoleId)) {
-        // Not a staff member, ignore reaction
         return;
     }
 
-    // Staff approved! Process rename
     await prisma.pendingRenameRequest.delete({ where: { id: pendingRequest.id } });
 
     const result = await safeSetChannelName(message.guild, pendingRequest.channelId, pendingRequest.newName);

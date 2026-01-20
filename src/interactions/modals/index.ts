@@ -8,7 +8,6 @@ export async function handleModalSubmit(interaction: ModalSubmitInteraction): Pr
     const { customId, guild } = interaction;
     if (!guild) return;
 
-    // Handle rejection reason modal
     if (customId.startsWith('pvc_reject_reason_')) {
         await interaction.reply({ content: 'Rejection via button is no longer supported. React to the message instead.', flags: MessageFlags.Ephemeral });
         return;
@@ -22,7 +21,6 @@ export async function handleModalSubmit(interaction: ModalSubmitInteraction): Pr
         return;
     }
 
-    // Validate channel exists using safe API
     const channel = await validateVoiceChannel(guild, ownedChannelId);
     if (!channel) {
         await interaction.reply({ content: 'Your voice channel could not be found.', flags: MessageFlags.Ephemeral });
@@ -89,8 +87,6 @@ async function handleRenameModal(interaction: ModalSubmitInteraction, channelId:
     const guild = interaction.guild!;
     const settings = await prisma.guildSettings.findUnique({ where: { guildId: guild.id } });
 
-    // If BOTH staff role AND command channel are set, require approval
-    // Otherwise, rename directly
     const requiresApproval = settings && settings.staffRoleId && settings.commandChannelId;
 
     if (!requiresApproval) {
@@ -99,7 +95,7 @@ async function handleRenameModal(interaction: ModalSubmitInteraction, channelId:
             await interaction.editReply({ content: `Failed to rename: ${result.error}` });
             return;
         }
-        
+
         await logAction({
             action: LogAction.CHANNEL_RENAMED,
             guild: guild,
@@ -108,12 +104,11 @@ async function handleRenameModal(interaction: ModalSubmitInteraction, channelId:
             channelId: channelId,
             details: `Channel renamed to "${newName}"`,
         });
-        
+
         await interaction.editReply({ content: `Channel renamed to "${newName}".` });
         return;
     }
 
-    // Get command channel (we know it's set because requiresApproval was true)
     const commandChannel = guild.channels.cache.get(settings!.commandChannelId!) as TextChannel;
     if (!commandChannel || commandChannel.type !== ChannelType.GuildText) {
         const result = await safeSetChannelName(guild, channelId, newName);
@@ -121,7 +116,7 @@ async function handleRenameModal(interaction: ModalSubmitInteraction, channelId:
             await interaction.editReply({ content: `Failed to rename: ${result.error}` });
             return;
         }
-        
+
         await logAction({
             action: LogAction.CHANNEL_RENAMED,
             guild: guild,
@@ -130,14 +125,13 @@ async function handleRenameModal(interaction: ModalSubmitInteraction, channelId:
             channelId: channelId,
             details: `Channel renamed to "${newName}"`,
         });
-        
+
         await interaction.editReply({ content: `Channel renamed to "${newName}".` });
         return;
     }
 
-    // Cancel any existing pending requests from this user
     const existingRequests = await prisma.pendingRenameRequest.findMany({
-        where: { 
+        where: {
             guildId: guild.id,
             userId: interaction.user.id,
         },
@@ -151,9 +145,9 @@ async function handleRenameModal(interaction: ModalSubmitInteraction, channelId:
                 .setDescription(`<@${req.userId}>'s previous rename request to "${req.newName}" was cancelled due to a new request.`)
                 .setColor(0x888888)
                 .setTimestamp();
-            await msg.edit({ embeds: [cancelledEmbed] }).catch(() => {});
-        } catch {}
-        
+            await msg.edit({ embeds: [cancelledEmbed] }).catch(() => { });
+        } catch { }
+
         await prisma.pendingRenameRequest.delete({ where: { id: req.id } });
     }
 
@@ -172,7 +166,6 @@ async function handleRenameModal(interaction: ModalSubmitInteraction, channelId:
     const approvalMessage = await commandChannel.send({ embeds: [embed] });
     await approvalMessage.react('✅');
 
-    // Save to database
     await prisma.pendingRenameRequest.create({
         data: {
             guildId: guild.id,
@@ -193,23 +186,22 @@ async function handleRenameModal(interaction: ModalSubmitInteraction, channelId:
 
     await interaction.editReply({ content: '✅ Rename request sent! Waiting for staff approval...' });
 
-    // Cleanup timeout
     setTimeout(async () => {
         const pending = await prisma.pendingRenameRequest.findUnique({
             where: { messageId: approvalMessage.id },
         });
-        
+
         if (pending) {
             await prisma.pendingRenameRequest.delete({ where: { id: pending.id } });
-            
+
             const timeoutEmbed = new EmbedBuilder()
                 .setTitle('⏱️ Rename Request Expired')
                 .setDescription(`<@${pending.userId}>'s rename request to "${pending.newName}" expired.`)
                 .setColor(0x888888)
                 .setTimestamp();
-            
-            await approvalMessage.edit({ embeds: [timeoutEmbed] }).catch(() => {});
-            
+
+            await approvalMessage.edit({ embeds: [timeoutEmbed] }).catch(() => { });
+
             await logAction({
                 action: LogAction.RENAME_EXPIRED,
                 guild: guild,

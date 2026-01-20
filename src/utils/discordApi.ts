@@ -1,14 +1,8 @@
-/**
- * Safe Discord API Wrappers
- * Validates resources before API calls and returns graceful errors
- */
-
 import { ChannelType, type VoiceChannel, type Guild, type GuildMember, DiscordAPIError } from 'discord.js';
 import { executeWithRateLimit } from './rateLimit';
 import { unregisterChannel } from './voiceManager';
 import prisma from './database';
 
-// Result type for safe operations
 export interface SafeResult<T> {
     success: boolean;
     data?: T;
@@ -16,7 +10,6 @@ export interface SafeResult<T> {
     code?: number;
 }
 
-// Known Discord error codes
 const DISCORD_ERRORS = {
     UNKNOWN_CHANNEL: 10003,
     UNKNOWN_GUILD: 10004,
@@ -26,14 +19,10 @@ const DISCORD_ERRORS = {
     RATE_LIMITED: 429,
 };
 
-/**
- * Check if a channel exists and is a voice channel
- */
 export async function validateVoiceChannel(guild: Guild, channelId: string): Promise<VoiceChannel | null> {
     try {
         const channel = guild.channels.cache.get(channelId);
         if (!channel) {
-            // Try to fetch from API
             const fetched = await guild.channels.fetch(channelId).catch(() => null);
             if (!fetched || fetched.type !== ChannelType.GuildVoice) {
                 await cleanupStaleChannel(channelId);
@@ -49,19 +38,13 @@ export async function validateVoiceChannel(guild: Guild, channelId: string): Pro
     }
 }
 
-/**
- * Remove stale channel from database and memory
- */
 async function cleanupStaleChannel(channelId: string): Promise<void> {
     unregisterChannel(channelId);
     await prisma.privateVoiceChannel.delete({
         where: { channelId },
-    }).catch(() => { }); // Ignore if already deleted
+    }).catch(() => { });
 }
 
-/**
- * Safely edit a voice channel's name
- */
 export async function safeSetChannelName(
     guild: Guild,
     channelId: string,
@@ -82,9 +65,6 @@ export async function safeSetChannelName(
     }
 }
 
-/**
- * Safely edit a voice channel's permissions
- */
 export async function safeEditPermissions(
     guild: Guild,
     channelId: string,
@@ -106,16 +86,12 @@ export async function safeEditPermissions(
     }
 }
 
-/**
- * Safely delete a voice channel
- */
 export async function safeDeleteChannel(
     guild: Guild,
     channelId: string
 ): Promise<SafeResult<void>> {
     const channel = await validateVoiceChannel(guild, channelId);
     if (!channel) {
-        // Channel already gone, just clean up DB
         await cleanupStaleChannel(channelId);
         return { success: true };
     }
@@ -131,9 +107,6 @@ export async function safeDeleteChannel(
     }
 }
 
-/**
- * Safely set user limit on channel
- */
 export async function safeSetUserLimit(
     guild: Guild,
     channelId: string,
@@ -154,9 +127,6 @@ export async function safeSetUserLimit(
     }
 }
 
-/**
- * Safely set bitrate on channel
- */
 export async function safeSetBitrate(
     guild: Guild,
     channelId: string,
@@ -177,9 +147,6 @@ export async function safeSetBitrate(
     }
 }
 
-/**
- * Safely set RTC region on channel
- */
 export async function safeSetRegion(
     guild: Guild,
     channelId: string,
@@ -200,9 +167,6 @@ export async function safeSetRegion(
     }
 }
 
-/**
- * Safely disconnect a member
- */
 export async function safeDisconnectMember(
     member: GuildMember
 ): Promise<SafeResult<void>> {
@@ -221,13 +185,9 @@ export async function safeDisconnectMember(
     }
 }
 
-/**
- * Handle Discord API errors gracefully
- */
 function handleDiscordError(error: unknown, channelId?: string): SafeResult<any> {
     const discordError = error as DiscordAPIError;
 
-    // Unknown channel - clean up stale data
     if (discordError.code === DISCORD_ERRORS.UNKNOWN_CHANNEL && channelId) {
         cleanupStaleChannel(channelId);
     }

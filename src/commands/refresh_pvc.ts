@@ -4,15 +4,13 @@ import {
     ActionRowBuilder,
     ButtonBuilder,
     ButtonStyle,
-    EmbedBuilder,
     PermissionFlagsBits,
-    AttachmentBuilder,
     type ChatInputCommandInteraction,
     type Message,
 } from 'discord.js';
 import prisma from '../utils/database';
 import type { Command } from '../client';
-import { generateInterfaceImage, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
+import { generateInterfaceEmbed, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
 import { canRunAdminCommand } from '../utils/permissions';
 import { logAction, LogAction } from '../utils/logger';
 import { invalidateGuildSettings } from '../utils/cache';
@@ -20,12 +18,20 @@ import { invalidateGuildSettings } from '../utils/cache';
 const MAIN_BUTTONS = [
     { id: 'pvc_lock' },
     { id: 'pvc_unlock' },
-    { id: 'pvc_hide' },
-    { id: 'pvc_unhide' },
+    { id: 'pvc_privacy' },
     { id: 'pvc_add_user' },
+    { id: 'pvc_remove_user' },
+    { id: 'pvc_invite' },
+    { id: 'pvc_name' },
+    { id: 'pvc_kick' },
+    { id: 'pvc_region' },
+    { id: 'pvc_block' },
+    { id: 'pvc_unblock' },
     { id: 'pvc_claim' },
-    { id: 'pvc_settings' },
+    { id: 'pvc_transfer' },
     { id: 'pvc_delete' },
+    { id: 'pvc_chat' },
+    { id: 'pvc_info' },
 ] as const;
 
 const data = new SlashCommandBuilder()
@@ -54,7 +60,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         return;
     }
 
-    // Check admin permissions
     if (!await canRunAdminCommand(interaction)) {
         await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', ephemeral: true });
         return;
@@ -75,7 +80,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         return;
     }
 
-    // Update logs webhook if channel provided
     let logsWebhookUrl = settings.logsWebhookUrl;
     if (logsChannel && logsChannel.type === ChannelType.GuildText) {
         try {
@@ -90,13 +94,12 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
 
-    // Update database with new settings
     await prisma.guildSettings.update({
         where: { guildId: guild.id },
         data: {
-            ...(logsWebhookUrl && logsWebhookUrl !== settings.logsWebhookUrl && { 
+            ...(logsWebhookUrl && logsWebhookUrl !== settings.logsWebhookUrl && {
                 logsWebhookUrl,
-                logsChannelId: logsChannel?.id 
+                logsChannelId: logsChannel?.id
             }),
             ...(commandChannel && { commandChannelId: commandChannel.id }),
         },
@@ -115,7 +118,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     try {
         const messages = await interfaceTextChannel.messages.fetch({ limit: 10 });
         const botMessage = messages.find(m => m.author.id === interaction.client.user?.id && m.embeds.length > 0);
-        
+
         if (botMessage) {
             oldMessage = botMessage;
         }
@@ -123,6 +126,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         const row1 = new ActionRowBuilder<ButtonBuilder>();
         const row2 = new ActionRowBuilder<ButtonBuilder>();
         const row3 = new ActionRowBuilder<ButtonBuilder>();
+        const row4 = new ActionRowBuilder<ButtonBuilder>();
 
         MAIN_BUTTONS.forEach((btn, index) => {
             const emojiData = BUTTON_EMOJI_MAP[btn.id];
@@ -134,39 +138,29 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 button.setEmoji({ id: emojiData.id, name: emojiData.name });
             }
 
-            if (index < 3) {
+            if (index < 4) {
                 row1.addComponents(button);
-            } else if (index < 6) {
+            } else if (index < 8) {
                 row2.addComponents(button);
-            } else {
+            } else if (index < 12) {
                 row3.addComponents(button);
+            } else {
+                row4.addComponents(button);
             }
         });
 
-        const imageBuffer = await generateInterfaceImage(guild);
-        const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
+        const embed = generateInterfaceEmbed(guild);
 
-        const embed = new EmbedBuilder()
-            .setImage('attachment://interface.png');
-
-        const components = [row1];
-        if (row2.components.length > 0) {
-            components.push(row2);
-        }
-        if (row3.components.length > 0) {
-            components.push(row3);
-        }
+        const components = [row1, row2, row3, row4];
 
         if (oldMessage) {
             await oldMessage.edit({
                 embeds: [embed],
-                files: [attachment],
                 components,
             });
         } else {
             await interfaceTextChannel.send({
                 embeds: [embed],
-                files: [attachment],
                 components,
             });
         }
@@ -186,8 +180,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
 
         await interaction.editReply(response);
 
-    } catch (err) {
-        console.error('[RefreshPVC] Failed to refresh interface:', err);
+    } catch {
         await interaction.editReply('Failed to refresh PVC interface. No changes were made.');
     }
 }

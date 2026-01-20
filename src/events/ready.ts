@@ -7,19 +7,14 @@ export const name = Events.ClientReady;
 export const once = true;
 
 export async function execute(client: PVCClient): Promise<void> {
-    console.log(`[Ready] Bot logged in as ${client.user?.tag}`);
-    
     try {
         const guildSettings = await prisma.guildSettings.findMany({
             include: { privateChannels: true },
         });
 
-        console.log(`[Ready] Found ${guildSettings.length} guild settings to restore`);
-
         for (const settings of guildSettings) {
             const guild = client.guilds.cache.get(settings.guildId);
             if (!guild) {
-                console.log(`[Ready] Guild ${settings.guildId} not in cache, skipping`);
                 continue;
             }
 
@@ -27,9 +22,6 @@ export async function execute(client: PVCClient): Promise<void> {
                 const interfaceChannel = guild.channels.cache.get(settings.interfaceVcId);
                 if (interfaceChannel) {
                     registerInterfaceChannel(settings.guildId, settings.interfaceVcId);
-                    console.log(`[Ready] Registered interface channel ${settings.interfaceVcId} for guild ${guild.name}`);
-                } else {
-                    console.log(`[Ready] Interface channel ${settings.interfaceVcId} not found in guild ${guild.name}`);
                 }
             }
 
@@ -40,13 +32,9 @@ export async function execute(client: PVCClient): Promise<void> {
                 } else {
                     await prisma.privateVoiceChannel.delete({
                         where: { channelId: pvc.channelId },
-                    }).catch(() => {});
+                    }).catch(() => { });
                 }
             }
         }
-
-        console.log(`[Ready] State restoration complete`);
-    } catch (err) {
-        console.error(`[Ready] Failed to restore state:`, err);
-    }
+    } catch { }
 }

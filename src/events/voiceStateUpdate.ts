@@ -38,11 +38,8 @@ export async function execute(
     if (!member || member.user.bot) return;
 
     if (newState.channelId && newState.channelId !== oldState.channelId) {
-        // CRITICAL: Check access protection FIRST before any other handling
-        // This covers: direct joins, drags, bot moves - ALL scenarios
         const wasKicked = await handleAccessProtection(client, newState);
-        
-        // Only continue if user wasn't kicked
+
         if (!wasKicked) {
             await handleJoin(client, newState);
         }
@@ -53,11 +50,6 @@ export async function execute(
     }
 }
 
-/**
- * CRITICAL ACCESS PROTECTION - Runs BEFORE any other handling
- * Handles ALL join scenarios: direct joins, drags, bot moves
- * Returns true if user was kicked (unauthorized), false if allowed
- */
 async function handleAccessProtection(
     client: PVCClient,
     newState: VoiceState
@@ -66,24 +58,20 @@ async function handleAccessProtection(
     if (!newChannelId || !member) return false;
 
     const channelState = getChannelState(newChannelId);
-    if (!channelState) return false; // Not a PVC - allow
+    if (!channelState) return false;
 
     const channel = guild.channels.cache.get(newChannelId);
     if (!channel || channel.type !== ChannelType.GuildVoice) return false;
 
-    // Check if user is the owner - always allow
     if (member.id === channelState.ownerId) return false;
 
-    // Check channel protection status
     const everyonePerms = channel.permissionOverwrites.cache.get(guild.id);
     const isLocked = everyonePerms?.deny.has('Connect') ?? false;
     const isHidden = everyonePerms?.deny.has('ViewChannel') ?? false;
     const isFull = channel.userLimit > 0 && channel.members.size > channel.userLimit;
 
-    // If channel is not protected at all, allow
     if (!isLocked && !isHidden && !isFull) return false;
 
-    // Fetch all permission data in parallel
     const memberRoleIds = member.roles.cache.map(r => r.id);
     const [channelPerms, settings, whitelist] = await Promise.all([
         getChannelPermissions(newChannelId),
@@ -91,40 +79,29 @@ async function handleAccessProtection(
         getWhitelist(guild.id),
     ]);
 
-    // Check if user is explicitly permitted
     const isUserPermitted = channelPerms.some(
         p => p.targetId === member.id && p.permission === 'permit'
     );
     if (isUserPermitted) return false;
 
-    // Check if user has temporary permission (was in channel when it was locked)
     if (hasTempPermission(newChannelId, member.id)) return false;
 
-    // Check if user has a permitted role
     const isRolePermitted = channelPerms.some(
         p => memberRoleIds.includes(p.targetId) && p.targetType === 'role' && p.permission === 'permit'
     );
     if (isRolePermitted) return false;
 
-    // Admin Strictness Logic:
-    // - If strictness is OFF: Admins can freely join any locked/hidden PVC (default Discord behavior)
-    // - If strictness is ON: Even admins are blocked UNLESS they're whitelisted
-    
     const hasAdminPerm = member.permissions.has('Administrator') || member.permissions.has('ManageChannels');
-    
+
     if (!settings?.adminStrictness) {
-        // Strictness OFF - admins can bypass, regular users still blocked
         if (hasAdminPerm) return false;
     } else {
-        // Strictness ON - check whitelist for admins
         const isWhitelisted = whitelist.some(
             w => w.targetId === member.id || memberRoleIds.includes(w.targetId)
         );
         if (isWhitelisted) return false;
-        // Even admins are blocked if strictness is ON and not whitelisted
     }
 
-    // Check if this was a bot move - inspect audit logs to find who commanded the move
     try {
         const auditLogs = await guild.fetchAuditLogs({
             type: AuditLogEvent.MemberMove,
@@ -132,56 +109,41 @@ async function handleAccessProtection(
         });
 
         const recentMove = auditLogs.entries.find(entry => {
-            // Check if this move was within the last 5 seconds and targets our user
             const timeDiff = Date.now() - entry.createdTimestamp;
             return timeDiff < 5000 && entry.target?.id === member.id;
         });
 
         if (recentMove) {
             const executor = recentMove.executor;
-            
+
             if (executor) {
-                // Check if executor (the one who used the move command) is authorized
                 const executorRoleIds = guild.members.cache.get(executor.id)?.roles.cache.map(r => r.id) || [];
-                
-                // Is executor the owner?
+
                 if (executor.id === channelState.ownerId) {
-                    console.log(`[AccessProtection] Bot move authorized by owner ${executor.tag}`);
                     return false;
                 }
-                
-                // Is executor permitted?
+
                 const isExecutorPermitted = channelPerms.some(
                     p => p.targetId === executor.id && p.permission === 'permit'
                 );
                 if (isExecutorPermitted) {
-                    console.log(`[AccessProtection] Bot move authorized by permitted user ${executor.tag}`);
                     return false;
                 }
-                
-                // Is executor's role permitted?
+
                 const isExecutorRolePermitted = channelPerms.some(
                     p => executorRoleIds.includes(p.targetId) && p.targetType === 'role' && p.permission === 'permit'
                 );
                 if (isExecutorRolePermitted) {
-                    console.log(`[AccessProtection] Bot move authorized by permitted role holder ${executor.tag}`);
                     return false;
                 }
-                
-                console.log(`[AccessProtection] Unauthorized bot move by ${executor.tag} - kicking user`);
             }
         }
-    } catch (err) {
-        // Audit log fetch failed - continue with kick
-        console.log(`[AccessProtection] Could not fetch audit logs:`, err);
+    } catch {
     }
 
-    // USER IS NOT AUTHORIZED - KICK THEM
     const reason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
-    console.log(`[AccessProtection] Kicking ${member.user.tag} from ${channel.name} (unauthorized access to ${reason} channel)`);
 
     try {
-        // Disconnect immediately
         await member.voice.disconnect();
 
         const owner = guild.members.cache.get(channelState.ownerId);
@@ -194,9 +156,8 @@ async function handleAccessProtection(
                 `Ask **${ownerName}** to give you access to join.`
             )
             .setTimestamp();
-        member.send({ embeds: [embed] }).catch(() => {});
+        member.send({ embeds: [embed] }).catch(() => { });
 
-        // Log the unauthorized access attempt
         await logAction({
             action: LogAction.USER_REMOVED,
             guild: guild,
@@ -206,10 +167,9 @@ async function handleAccessProtection(
             details: `Unauthorized access attempt blocked (channel is ${reason})`,
         });
 
-        return true; // User was kicked
-    } catch (err) {
-        console.error(`[AccessProtection] Failed to kick ${member.id}:`, err);
-        return false; // Failed to kick but tried
+        return true;
+    } catch {
+        return false;
     }
 }
 
@@ -218,7 +178,6 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
     if (!channelId || !member) return;
 
     const isInterface = isInterfaceChannel(channelId);
-    console.log(`[VoiceState] ${member.user.tag} joined ${channelId}, isInterface: ${isInterface}`);
 
     if (isInterface) {
         await createPrivateChannel(client, state);
@@ -228,11 +187,9 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
     const channelState = getChannelState(channelId);
     if (channelState) {
         const channel = guild.channels.cache.get(channelId);
-        
-        // Add user to join order for ownership transfer tracking
+
         addUserToJoinOrder(channelId, member.id);
-        
-        // Log user joined PVC
+
         if (channel) {
             await logAction({
                 action: LogAction.USER_ADDED,
@@ -243,8 +200,6 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
                 details: `${member.user.username} joined the voice channel`,
             });
         }
-        
-        // Note: Access protection already ran BEFORE handleJoin, so no need to call enforceAdminStrictness
     }
 }
 
@@ -255,12 +210,10 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
     const channelState = getChannelState(channelId);
     if (!channelState) return;
 
-    // Remove user from join order
     if (member) {
         removeUserFromJoinOrder(channelId, member.id);
     }
 
-    // Log user left PVC
     if (member) {
         const channel = guild.channels.cache.get(channelId);
         if (channel) {
@@ -275,14 +228,9 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
         }
     }
 
-    // Check if channel is now empty
     const channel = guild.channels.cache.get(channelId);
     if (channel && channel.type === ChannelType.GuildVoice) {
         if (channel.members.size === 0) {
-            // Channel is now empty - delete immediately
-            console.log(`[PVC] Channel ${channel.name} is empty, deleting immediately`);
-            
-            // Log channel deletion
             await logAction({
                 action: LogAction.CHANNEL_DELETED,
                 guild: guild,
@@ -290,10 +238,9 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
                 channelId: channelId,
                 details: `Channel deleted (empty)`,
             });
-            
+
             await deletePrivateChannel(channelId, guild.id);
         } else if (member && member.id === channelState.ownerId) {
-            // Owner left but channel is not empty - transfer ownership
             await transferChannelOwnership(client, channelId, guild, channel);
         }
     }
@@ -303,12 +250,10 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
     const { guild, member, channel: interfaceChannel } = state;
     if (!member || !interfaceChannel) return;
 
-    // Anti-spam: Check cooldown
     if (isOnCooldown(member.id, 'CREATE_CHANNEL')) {
-        console.log(`[PVC] User ${member.user.tag} on cooldown, skipping channel creation`);
         try {
             await member.voice.disconnect();
-        } catch {}
+        } catch { }
         return;
     }
 
@@ -321,14 +266,11 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                 if (freshMember.voice.channelId) {
                     await freshMember.voice.setChannel(channel);
                 }
-            } catch (err) {
-                console.error(`[PVC] Failed to move ${member.id} to existing channel:`, err);
-            }
+            } catch { }
             return;
         }
     }
 
-    // Set cooldown for channel creation
     setCooldown(member.id, 'CREATE_CHANNEL');
 
     try {
@@ -351,8 +293,7 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
         );
 
         registerChannel(newChannel.id, guild.id, member.id);
-        
-        // Initialize join order with owner as first member
+
         addUserToJoinOrder(newChannel.id, member.id);
 
         await prisma.privateVoiceChannel.create({
@@ -366,22 +307,17 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
         const freshMember = await guild.members.fetch(member.id);
         if (freshMember.voice.channelId) {
             await freshMember.voice.setChannel(newChannel);
-            console.log(`[PVC] Moved ${member.user.tag} to new channel ${newChannel.name}`);
-            
-            // Send welcome message to voice channel chat
+
             try {
                 const welcomeEmbed = new EmbedBuilder()
                     .setColor(0x5865F2)
                     .setTitle('🎉 Welcome to Your PVC')
                     .setDescription(`<@${member.id}>, your private voice channel has been created!`)
                     .setTimestamp();
-                
+
                 await newChannel.send({ embeds: [welcomeEmbed] });
-            } catch (err) {
-                console.log(`[PVC] Failed to send welcome message:`, err);
-            }
-            
-            // Log new channel creation
+            } catch { }
+
             await logAction({
                 action: LogAction.CHANNEL_CREATED,
                 guild: guild,
@@ -391,10 +327,9 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                 details: `Private voice channel created`,
             });
         } else {
-            console.log(`[PVC] User ${member.user.tag} left voice before move, cleaning up`);
             await newChannel.delete();
             unregisterChannel(newChannel.id);
-            await prisma.privateVoiceChannel.delete({ where: { channelId: newChannel.id } }).catch(() => {});
+            await prisma.privateVoiceChannel.delete({ where: { channelId: newChannel.id } }).catch(() => { });
             return;
         }
 
@@ -412,7 +347,6 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                     validPermissions.push(perm);
                 } else {
                     invalidTargetIds.push(perm.targetId);
-                    console.log(`[PVC] Skipping invalid ${perm.targetType} ${perm.targetId} - no longer exists`);
                 }
             }
 
@@ -423,7 +357,7 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                         ownerId: member.id,
                         targetId: { in: invalidTargetIds },
                     },
-                }).catch(() => {});
+                }).catch(() => { });
             }
 
             if (validPermissions.length > 0) {
@@ -448,9 +382,7 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                 );
             }
         }
-    } catch (err) {
-        console.error(`[PVC] Failed to create private channel for ${member.id}:`, err);
-    }
+    } catch { }
 }
 
 async function transferChannelOwnership(
@@ -462,25 +394,21 @@ async function transferChannelOwnership(
     try {
         const nextUserId = getNextUserInOrder(channelId);
         if (!nextUserId) {
-            console.log(`[Ownership] No one in queue to transfer ownership for ${channelId}`);
             return;
         }
 
         const newOwner = guild.members.cache.get(nextUserId);
         if (!newOwner) {
-            console.log(`[Ownership] Next user ${nextUserId} not found in guild`);
             return;
         }
 
-        // Transfer ownership in memory and database
         transferOwnership(channelId, nextUserId);
-        
+
         await prisma.privateVoiceChannel.update({
             where: { channelId },
             data: { ownerId: nextUserId },
         });
 
-        // Update channel permissions for new owner
         const ownerPerms = getOwnerPermissions();
         await channel.permissionOverwrites.edit(nextUserId, {
             ViewChannel: true,
@@ -493,21 +421,14 @@ async function transferChannelOwnership(
             ManageChannels: true,
         });
 
-        // Rename voice channel to new owner's name (with rate limit handling)
         try {
             await executeWithRateLimit(
                 `rename:${channelId}`,
                 () => channel.setName(newOwner.displayName),
                 Priority.LOW
             );
-            console.log(`[Ownership] Renamed channel to ${newOwner.displayName}`);
-        } catch (err) {
-            console.log(`[Ownership] Skipped rename due to rate limit`);
-        }
+        } catch { }
 
-        console.log(`[Ownership] Transferred ownership of ${channel.name} to ${newOwner.user.tag}`);
-
-        // Log the transfer
         await logAction({
             action: LogAction.CHANNEL_TRANSFERRED,
             guild: guild,
@@ -517,7 +438,6 @@ async function transferChannelOwnership(
             details: `Ownership transferred to ${newOwner.user.username}`,
         });
 
-        // Send notification to voice channel chat
         try {
             const embed = new EmbedBuilder()
                 .setColor(0x9B59B6)
@@ -528,12 +448,8 @@ async function transferChannelOwnership(
                 .setTimestamp();
 
             await channel.send({ embeds: [embed] });
-        } catch (err) {
-            console.log(`[Ownership] Failed to send transfer message:`, err);
-        }
-    } catch (err) {
-        console.error(`[Ownership] Failed to transfer ownership:`, err);
-    }
+        } catch { }
+    } catch { }
 }
 
 async function deletePrivateChannel(channelId: string, guildId: string): Promise<void> {
@@ -541,36 +457,27 @@ async function deletePrivateChannel(channelId: string, guildId: string): Promise
         const { client } = await import('../client');
         const guild = client.guilds.cache.get(guildId);
         if (!guild) {
-            console.log(`[Delete] Guild ${guildId} not found, cleaning up state only`);
             unregisterChannel(channelId);
-            await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => {});
+            await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
             return;
         }
 
         const channel = guild.channels.cache.get(channelId);
-        
-        // Delete from Discord first, then cleanup state
+
         if (channel?.isVoiceBased()) {
             try {
-                await executeWithRateLimit(`delete:${channelId}`, async () => { 
-                    await channel.delete(); 
+                await executeWithRateLimit(`delete:${channelId}`, async () => {
+                    await channel.delete();
                 }, Priority.NORMAL);
-                console.log(`[Delete] Successfully deleted channel ${channelId}`);
-            } catch (deleteErr) {
-                console.error(`[Delete] Failed to delete Discord channel ${channelId}:`, deleteErr);
-                // Continue with state cleanup even if Discord deletion fails
-            }
+            } catch { }
         }
 
-        // Now cleanup state
         unregisterChannel(channelId);
-        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => {});
-        
-    } catch (err) {
-        console.error(`[Delete] Error in deletePrivateChannel for ${channelId}:`, err);
-        // Still try to cleanup state
+        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+
+    } catch {
         unregisterChannel(channelId);
-        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => {});
+        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
     }
 }
 
@@ -619,7 +526,6 @@ async function enforceAdminStrictness(
     if (isWhitelisted) return;
 
     const reason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
-    console.log(`[AdminStrictness] Disconnecting ${member.user.tag} from ${channel.name} (${reason})`);
 
     try {
         await member.voice.disconnect();
@@ -634,10 +540,6 @@ async function enforceAdminStrictness(
                 `Ask **${ownerName}** to give you access to join.`
             )
             .setTimestamp();
-        member.send({ embeds: [embed] }).catch(() => {});
-    } catch (err) {
-        console.error(`[AdminStrictness] Failed to disconnect ${member.id}:`, err);
-    }
+        member.send({ embeds: [embed] }).catch(() => { });
+    } catch { }
 }
-
-

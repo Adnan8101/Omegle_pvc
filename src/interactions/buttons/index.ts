@@ -15,10 +15,9 @@ import {
 } from 'discord.js';
 import { getChannelByOwner, getChannelState, transferOwnership, unregisterChannel, getGuildChannels, addTempPermittedUsers } from '../../utils/voiceManager';
 import { executeWithRateLimit, Priority } from '../../utils/rateLimit';
-import { safeEditPermissions, safeSetChannelName, validateVoiceChannel } from '../../utils/discordApi';
+import { safeEditPermissions, validateVoiceChannel } from '../../utils/discordApi';
 import prisma from '../../utils/database';
 import { BUTTON_EMOJI_MAP } from '../../utils/canvasGenerator';
-import { getGuildSettings } from '../../utils/cache';
 import { logAction, LogAction } from '../../utils/logger';
 
 export async function handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
@@ -27,35 +26,24 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
 
     const userId = typeof member === 'string' ? member : member.user.id;
 
-    // Remove old approval button handlers
     if (customId === 'pvc_rename_approve' || customId === 'pvc_rename_reject') {
         await interaction.reply({ content: 'Button approvals are no longer supported. React with ✅ instead.', ephemeral: true });
         return;
     }
 
-    // Get user's current voice channel
     const guildMember = await guild.members.fetch(userId);
     const voiceChannelId = guildMember.voice.channelId;
 
-    // For claim, check if user is in any PVC
     if (customId === 'pvc_claim') {
         await handleClaim(interaction, voiceChannelId);
         return;
     }
 
-    // Settings menu doesn't require channel ownership
-    if (customId === 'pvc_settings') {
-        await handleSettings(interaction);
-        return;
-    }
-
-    // Delete button - special handling for owner vs admin
     if (customId === 'pvc_delete') {
         await handleDelete(interaction);
         return;
     }
 
-    // Handle delete confirmation buttons
     if (customId.startsWith('pvc_delete_confirm:') || customId === 'pvc_delete_cancel') {
         await handleDeleteConfirm(interaction);
         return;
@@ -66,7 +54,6 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
         return;
     }
 
-    // For other buttons, check ownership
     const ownedChannelId = getChannelByOwner(guild.id, userId);
     if (!ownedChannelId) {
         await interaction.reply({
@@ -89,118 +76,47 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
         case 'pvc_unlock':
             await handleUnlock(interaction, channel);
             break;
-        case 'pvc_hide':
-            await handleHide(interaction, channel);
-            break;
-        case 'pvc_unhide':
-            await handleUnhide(interaction, channel);
+        case 'pvc_privacy':
+            await handlePrivacy(interaction, channel);
             break;
         case 'pvc_add_user':
+            await handleAddUser(interaction);
+            break;
+        case 'pvc_remove_user':
+            await handleRemoveUser(interaction);
+            break;
         case 'pvc_invite':
             await handleInvite(interaction);
             break;
-        case 'pvc_limit':
-            await handleLimit(interaction);
-            break;
-        case 'pvc_ban':
-            await handleBan(interaction);
-            break;
-        case 'pvc_permit':
-            await handlePermit(interaction);
-            break;
-        case 'pvc_rename':
+        case 'pvc_name':
             await handleRename(interaction);
             break;
-        case 'pvc_bitrate':
-            await handleBitrate(interaction);
+        case 'pvc_kick':
+            await handleKick(interaction, channel);
             break;
         case 'pvc_region':
             await handleRegion(interaction);
             break;
+        case 'pvc_block':
+            await handleBlock(interaction);
+            break;
+        case 'pvc_unblock':
+            await handleUnblock(interaction);
+            break;
         case 'pvc_transfer':
             await handleTransfer(interaction);
+            break;
+        case 'pvc_chat':
+            await handleChat(interaction, channel);
+            break;
+        case 'pvc_info':
+            await handleInfo(interaction, channel);
             break;
         default:
             await interaction.reply({ content: 'Unknown button.', ephemeral: true });
     }
 }
 
-// Settings menu - shows all other options
-async function handleSettings(interaction: ButtonInteraction): Promise<void> {
-    const userId = interaction.user.id;
-    const guild = interaction.guild!;
-
-    // Check if user owns a channel
-    const ownedChannelId = getChannelByOwner(guild.id, userId);
-    if (!ownedChannelId) {
-        await interaction.reply({
-            content: 'You do not own a private voice channel.',
-            ephemeral: true,
-        });
-        return;
-    }
-
-    // Create clean, modern embed
-    const embed = new EmbedBuilder()
-        .setColor(0x2b2d31) // Discord dark theme
-        .setDescription(
-            `### <:settings:1462347302948569178> Voice Channel Settings\n` +
-            `\n` +
-            `<:Users:1462347409840537747> **User Management**\n` +
-            `> Limit · Ban · Permit · Invite\n` +
-            `\n` +
-            `<:rename:1462347738069864552> **Channel Config**\n` +
-            `> Rename · Bitrate · Region\n` +
-            `\n` +
-            `<:Crown_2:1462348069592109198> **Ownership**\n` +
-            `> Claim · Transfer`
-        );
-
-    // Create button rows
-    const row1 = new ActionRowBuilder<ButtonBuilder>()
-        .addComponents(
-            createEmojiButton('pvc_limit', 'Limit'),
-            createEmojiButton('pvc_ban', 'Ban'),
-            createEmojiButton('pvc_permit', 'Permit'),
-            createEmojiButton('pvc_invite', 'Invite')
-        );
-
-    const row2 = new ActionRowBuilder<ButtonBuilder>()
-        .addComponents(
-            createEmojiButton('pvc_rename', 'Rename'),
-            createEmojiButton('pvc_bitrate', 'Bitrate'),
-            createEmojiButton('pvc_region', 'Region')
-        );
-
-    const row3 = new ActionRowBuilder<ButtonBuilder>()
-        .addComponents(
-            createEmojiButton('pvc_claim', 'Claim'),
-            createEmojiButton('pvc_transfer', 'Transfer')
-        );
-
-    await interaction.reply({
-        embeds: [embed],
-        components: [row1, row2, row3],
-        ephemeral: true,
-    });
-}
-
-// Helper to create emoji button
-function createEmojiButton(customId: string, label: string): ButtonBuilder {
-    const emojiData = BUTTON_EMOJI_MAP[customId];
-    const button = new ButtonBuilder()
-        .setCustomId(customId)
-        .setLabel(label)
-        .setStyle(ButtonStyle.Secondary);
-
-    if (emojiData) {
-        button.setEmoji({ id: emojiData.id, name: emojiData.name });
-    }
-
-    return button;
-}
-
-// Helper to update channel permissions using safe API
 async function updateChannelPermission(
     interaction: ButtonInteraction,
     channel: any,
@@ -215,59 +131,13 @@ async function updateChannelPermission(
     await interaction.reply({ content: successMessage, ephemeral: true });
 }
 
-// Helper to create and send a selection menu response
-async function sendSelectionMenu(
-    interaction: ButtonInteraction,
-    customId: string,
-    placeholder: string,
-    type: 'user' | 'role' | 'string',
-    options?: { label: string; value: string }[],
-    messageContent?: string,
-    maxValues: number = 10
-): Promise<void> {
-    let component;
-
-    if (type === 'user') {
-        component = new UserSelectMenuBuilder()
-            .setCustomId(customId)
-            .setPlaceholder(placeholder)
-            .setMinValues(type === 'user' && customId === 'pvc_transfer_select' ? 1 : 0) // Transfer needs exactly 1
-            .setMaxValues(customId === 'pvc_transfer_select' ? 1 : maxValues);
-    } else if (type === 'role') {
-        component = new RoleSelectMenuBuilder()
-            .setCustomId(customId)
-            .setPlaceholder(placeholder)
-            .setMinValues(0)
-            .setMaxValues(maxValues);
-    } else {
-        component = new StringSelectMenuBuilder()
-            .setCustomId(customId)
-            .setPlaceholder(placeholder)
-            .addOptions(
-                options?.map(opt =>
-                    new StringSelectMenuOptionBuilder().setLabel(opt.label).setValue(opt.value)
-                ) || []
-            );
-    }
-
-    const row = new ActionRowBuilder<typeof component>().addComponents(component);
-
-    await interaction.reply({
-        content: messageContent || `${placeholder}:`,
-        components: [row],
-        ephemeral: true,
-    });
-}
-
-// Handlers using helpers
 async function handleLock(interaction: ButtonInteraction, channel: any): Promise<void> {
-    // Add all current members as temporary permitted users
     const memberIds = channel.members.map((m: any) => m.id);
     if (memberIds.length > 0) {
         addTempPermittedUsers(channel.id, memberIds);
     }
-    
-    await updateChannelPermission(interaction, channel, { Connect: false }, 'Your voice channel has been locked.');
+
+    await updateChannelPermission(interaction, channel, { Connect: false }, '🔒 Your voice channel has been locked.');
     await logAction({
         action: LogAction.CHANNEL_LOCKED,
         guild: interaction.guild!,
@@ -279,7 +149,7 @@ async function handleLock(interaction: ButtonInteraction, channel: any): Promise
 }
 
 async function handleUnlock(interaction: ButtonInteraction, channel: any): Promise<void> {
-    await updateChannelPermission(interaction, channel, { Connect: null }, 'Your voice channel has been unlocked.');
+    await updateChannelPermission(interaction, channel, { Connect: null }, '🔓 Your voice channel has been unlocked.');
     await logAction({
         action: LogAction.CHANNEL_UNLOCKED,
         guild: interaction.guild!,
@@ -290,76 +160,77 @@ async function handleUnlock(interaction: ButtonInteraction, channel: any): Promi
     });
 }
 
-async function handleHide(interaction: ButtonInteraction, channel: any): Promise<void> {
-    await updateChannelPermission(interaction, channel, { ViewChannel: false }, 'Your voice channel is now hidden.');
-    await logAction({
-        action: LogAction.CHANNEL_HIDDEN,
-        guild: interaction.guild!,
-        user: interaction.user,
-        channelName: channel.name,
-        channelId: channel.id,
-        details: 'Channel hidden from members',
-    });
+async function handlePrivacy(interaction: ButtonInteraction, channel: any): Promise<void> {
+    const everyonePerms = channel.permissionOverwrites.cache.get(interaction.guild!.id);
+    const isHidden = everyonePerms?.deny.has('ViewChannel') ?? false;
+
+    if (isHidden) {
+        await updateChannelPermission(interaction, channel, { ViewChannel: null }, '👁️ Your voice channel is now **visible**.');
+        await logAction({
+            action: LogAction.CHANNEL_UNHIDDEN,
+            guild: interaction.guild!,
+            user: interaction.user,
+            channelName: channel.name,
+            channelId: channel.id,
+            details: 'Channel made visible to members',
+        });
+    } else {
+        await updateChannelPermission(interaction, channel, { ViewChannel: false }, '🙈 Your voice channel is now **hidden**.');
+        await logAction({
+            action: LogAction.CHANNEL_HIDDEN,
+            guild: interaction.guild!,
+            user: interaction.user,
+            channelName: channel.name,
+            channelId: channel.id,
+            details: 'Channel hidden from members',
+        });
+    }
 }
 
-async function handleUnhide(interaction: ButtonInteraction, channel: any): Promise<void> {
-    await updateChannelPermission(interaction, channel, { ViewChannel: null }, 'Your voice channel is now visible.');
-    await logAction({
-        action: LogAction.CHANNEL_UNHIDDEN,
-        guild: interaction.guild!,
-        user: interaction.user,
-        channelName: channel.name,
-        channelId: channel.id,
-        details: 'Channel made visible to members',
-    });
-}
-
-async function handleInvite(interaction: ButtonInteraction): Promise<void> {
-    await sendSelectionMenu(interaction, 'pvc_invite_select', 'Select users to invite', 'user', undefined, '**Select users to add to your voice channel:**');
-}
-
-async function handleBan(interaction: ButtonInteraction): Promise<void> {
+async function handleAddUser(interaction: ButtonInteraction): Promise<void> {
     const userSelect = new UserSelectMenuBuilder()
-        .setCustomId('pvc_ban_user_select')
-        .setPlaceholder('Select users to ban')
-        .setMinValues(0)
+        .setCustomId('pvc_add_user_select')
+        .setPlaceholder('Select users to add (Trust)')
+        .setMinValues(1)
         .setMaxValues(10);
 
-    const roleSelect = new RoleSelectMenuBuilder()
-        .setCustomId('pvc_ban_role_select')
-        .setPlaceholder('Select roles to ban')
-        .setMinValues(0)
-        .setMaxValues(10);
-
-    const userRow = new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(userSelect);
-    const roleRow = new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(roleSelect);
+    const row = new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(userSelect);
 
     await interaction.reply({
-        content: '**Select users and roles to ban from your channel:**',
-        components: [userRow, roleRow],
+        content: '**Select users to add to your voice channel:**',
+        components: [row],
         ephemeral: true,
     });
 }
 
-async function handlePermit(interaction: ButtonInteraction): Promise<void> {
+async function handleRemoveUser(interaction: ButtonInteraction): Promise<void> {
     const userSelect = new UserSelectMenuBuilder()
-        .setCustomId('pvc_permit_user_select')
-        .setPlaceholder('Select users to permit')
-        .setMinValues(0)
+        .setCustomId('pvc_remove_user_select')
+        .setPlaceholder('Select users to remove (Untrust)')
+        .setMinValues(1)
         .setMaxValues(10);
 
-    const roleSelect = new RoleSelectMenuBuilder()
-        .setCustomId('pvc_permit_role_select')
-        .setPlaceholder('Select roles to permit')
-        .setMinValues(0)
-        .setMaxValues(10);
-
-    const userRow = new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(userSelect);
-    const roleRow = new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(roleSelect);
+    const row = new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(userSelect);
 
     await interaction.reply({
-        content: '**Select users and roles to permit in your channel:**',
-        components: [userRow, roleRow],
+        content: '**Select users to remove from your voice channel:**',
+        components: [row],
+        ephemeral: true,
+    });
+}
+
+async function handleInvite(interaction: ButtonInteraction): Promise<void> {
+    const userSelect = new UserSelectMenuBuilder()
+        .setCustomId('pvc_invite_select')
+        .setPlaceholder('Select users to invite')
+        .setMinValues(1)
+        .setMaxValues(10);
+
+    const row = new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(userSelect);
+
+    await interaction.reply({
+        content: '**Select users to invite to your voice channel:**\n*They will receive a DM with an invite link.*',
+        components: [row],
         ephemeral: true,
     });
 }
@@ -383,23 +254,27 @@ async function handleRename(interaction: ButtonInteraction): Promise<void> {
     await interaction.showModal(modal);
 }
 
-async function handleBitrate(interaction: ButtonInteraction): Promise<void> {
-    const modal = new ModalBuilder()
-        .setCustomId('pvc_bitrate_modal')
-        .setTitle('Set Bitrate');
+async function handleKick(interaction: ButtonInteraction, channel: any): Promise<void> {
+    const membersInChannel = channel.members.filter((m: any) => m.id !== interaction.user.id);
 
-    const input = new TextInputBuilder()
-        .setCustomId('bitrate_input')
-        .setLabel('Bitrate in kbps (8-384)')
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('64')
-        .setRequired(true)
-        .setMaxLength(3);
+    if (membersInChannel.size === 0) {
+        await interaction.reply({ content: 'There are no other users in your channel to kick.', ephemeral: true });
+        return;
+    }
 
-    const row = new ActionRowBuilder<TextInputBuilder>().addComponents(input);
-    modal.addComponents(row);
+    const userSelect = new UserSelectMenuBuilder()
+        .setCustomId('pvc_kick_select')
+        .setPlaceholder('Select users to kick')
+        .setMinValues(1)
+        .setMaxValues(Math.min(membersInChannel.size, 10));
 
-    await interaction.showModal(modal);
+    const row = new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(userSelect);
+
+    await interaction.reply({
+        content: '**Select users to kick from your voice channel:**',
+        components: [row],
+        ephemeral: true,
+    });
 }
 
 async function handleRegion(interaction: ButtonInteraction): Promise<void> {
@@ -420,11 +295,85 @@ async function handleRegion(interaction: ButtonInteraction): Promise<void> {
         { label: 'US West', value: 'us-west' },
     ];
 
-    await sendSelectionMenu(interaction, 'pvc_region_select', 'Select a voice region', 'string', regions, '**Select a voice region:**');
+    const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId('pvc_region_select')
+        .setPlaceholder('Select a voice region')
+        .addOptions(
+            regions.map(r => new StringSelectMenuOptionBuilder().setLabel(r.label).setValue(r.value))
+        );
+
+    const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
+
+    await interaction.reply({
+        content: '**Select a voice region:**',
+        components: [row],
+        ephemeral: true,
+    });
+}
+
+async function handleBlock(interaction: ButtonInteraction): Promise<void> {
+    const userSelect = new UserSelectMenuBuilder()
+        .setCustomId('pvc_block_select')
+        .setPlaceholder('Select users to block')
+        .setMinValues(1)
+        .setMaxValues(10);
+
+    const row = new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(userSelect);
+
+    await interaction.reply({
+        content: '**Select users to block from your voice channel:**\n*Blocked users cannot join by any means.*',
+        components: [row],
+        ephemeral: true,
+    });
+}
+
+async function handleUnblock(interaction: ButtonInteraction): Promise<void> {
+    const guild = interaction.guild!;
+    const ownedChannelId = getChannelByOwner(guild.id, interaction.user.id);
+
+    if (!ownedChannelId) {
+        await interaction.reply({ content: 'You do not own a private voice channel.', ephemeral: true });
+        return;
+    }
+
+    const blockedUsers = await prisma.voicePermission.findMany({
+        where: { channelId: ownedChannelId, permission: 'ban' },
+    });
+
+    if (blockedUsers.length === 0) {
+        await interaction.reply({ content: 'No users are currently blocked from your channel.', ephemeral: true });
+        return;
+    }
+
+    const userSelect = new UserSelectMenuBuilder()
+        .setCustomId('pvc_unblock_select')
+        .setPlaceholder('Select users to unblock')
+        .setMinValues(1)
+        .setMaxValues(Math.min(blockedUsers.length, 10));
+
+    const row = new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(userSelect);
+
+    await interaction.reply({
+        content: '**Select users to unblock:**',
+        components: [row],
+        ephemeral: true,
+    });
 }
 
 async function handleTransfer(interaction: ButtonInteraction): Promise<void> {
-    await sendSelectionMenu(interaction, 'pvc_transfer_select', 'Select the new owner', 'user', undefined, '**Select a user to transfer ownership to:**');
+    const userSelect = new UserSelectMenuBuilder()
+        .setCustomId('pvc_transfer_select')
+        .setPlaceholder('Select the new owner')
+        .setMinValues(1)
+        .setMaxValues(1);
+
+    const row = new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(userSelect);
+
+    await interaction.reply({
+        content: '**Select a user to transfer ownership to:**',
+        components: [row],
+        ephemeral: true,
+    });
 }
 
 async function handleClaim(
@@ -456,7 +405,6 @@ async function handleClaim(
         return;
     }
 
-    const { transferOwnership } = await import('../../utils/voiceManager');
     transferOwnership(voiceChannelId, userId);
 
     const newOwner = await guild.members.fetch(userId);
@@ -467,7 +415,7 @@ async function handleClaim(
             ViewChannel: true, Connect: true, Speak: true, Stream: true,
             MuteMembers: true, DeafenMembers: true, MoveMembers: true, ManageChannels: true,
         });
-        await channel.setName(newOwner.displayName).catch(() => {});
+        await channel.setName(newOwner.displayName).catch(() => { });
     });
 
     await prisma.privateVoiceChannel.update({
@@ -475,7 +423,7 @@ async function handleClaim(
         data: { ownerId: userId },
     });
 
-    await interaction.reply({ content: 'You have claimed ownership of this voice channel.', ephemeral: true });
+    await interaction.reply({ content: '👑 You have claimed ownership of this voice channel.', ephemeral: true });
 }
 
 async function handleDelete(interaction: ButtonInteraction): Promise<void> {
@@ -576,7 +524,7 @@ async function handleDeleteConfirm(interaction: ButtonInteraction): Promise<void
         const channelName = channel.name;
         unregisterChannel(channelId);
         await channel.delete();
-        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => {});
+        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
 
         await logAction({
             action: LogAction.CHANNEL_DELETED,
@@ -588,12 +536,11 @@ async function handleDeleteConfirm(interaction: ButtonInteraction): Promise<void
         });
 
         await interaction.update({
-            content: 'Voice channel deleted successfully.',
+            content: '🗑️ Voice channel deleted successfully.',
             embeds: [],
             components: [],
         });
-    } catch (err) {
-        console.error('[Delete] Failed to delete channel:', err);
+    } catch {
         await interaction.update({
             content: 'Failed to delete the channel.',
             embeds: [],
@@ -625,15 +572,14 @@ async function handleAdminDelete(interaction: ButtonInteraction): Promise<void> 
     try {
         unregisterChannel(channelId);
         await channel.delete();
-        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => {});
+        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
 
         await interaction.update({
             content: `Channel **${channel.name}** deleted successfully.`,
             embeds: [],
             components: [],
         });
-    } catch (err) {
-        console.error('[AdminDelete] Failed to delete channel:', err);
+    } catch {
         await interaction.update({
             content: 'Failed to delete the channel.',
             embeds: [],
@@ -642,21 +588,54 @@ async function handleAdminDelete(interaction: ButtonInteraction): Promise<void> 
     }
 }
 
-async function handleLimit(interaction: ButtonInteraction): Promise<void> {
-    const modal = new ModalBuilder()
-        .setCustomId('pvc_limit_modal')
-        .setTitle('Set User Limit');
+async function handleChat(interaction: ButtonInteraction, channel: any): Promise<void> {
+    const vcTextChatUrl = `https://discord.com/channels/${interaction.guild!.id}/${channel.id}`;
 
-    const input = new TextInputBuilder()
-        .setCustomId('limit_input')
-        .setLabel('Maximum users (0 = unlimited)')
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('Enter a number')
-        .setRequired(true)
-        .setMaxLength(3);
-
-    const row = new ActionRowBuilder<TextInputBuilder>().addComponents(input);
-    modal.addComponents(row);
-
-    await interaction.showModal(modal);
+    await interaction.reply({
+        content: `💬 **Voice Channel Chat**\n\nClick the link below to open your voice channel's text chat:\n${vcTextChatUrl}`,
+        ephemeral: true,
+    });
 }
+
+async function handleInfo(interaction: ButtonInteraction, channel: any): Promise<void> {
+    const guild = interaction.guild!;
+    const channelState = getChannelState(channel.id);
+
+    if (!channelState) {
+        await interaction.reply({ content: 'Could not retrieve channel information.', ephemeral: true });
+        return;
+    }
+
+    const owner = await guild.members.fetch(channelState.ownerId).catch(() => null);
+    const memberCount = channel.members.size;
+    const memberList = channel.members.map((m: any) => `<@${m.id}>`).join(', ') || 'None';
+
+    const everyonePerms = channel.permissionOverwrites.cache.get(guild.id);
+    const isLocked = everyonePerms?.deny.has('Connect') ?? false;
+    const isHidden = everyonePerms?.deny.has('ViewChannel') ?? false;
+
+    const bitrate = Math.round(channel.bitrate / 1000);
+    const userLimit = channel.userLimit || 'Unlimited';
+    const region = channel.rtcRegion || 'Automatic';
+
+    const embed = new EmbedBuilder()
+        .setAuthor({ name: 'Channel Information', iconURL: guild.iconURL() || undefined })
+        .setTitle(channel.name)
+        .setColor(0x2b2d31)
+        .addFields(
+            { name: 'Owner', value: owner ? `<@${owner.id}>` : 'Unknown', inline: true },
+            { name: 'Occupancy', value: `${memberCount}/${userLimit}`, inline: true },
+            { name: 'Region', value: region.charAt(0).toUpperCase() + region.slice(1), inline: true },
+            { name: 'Bitrate', value: `${bitrate} kbps`, inline: true },
+            { name: 'Status', value: `${isLocked ? 'Locked' : 'Unlocked'} / ${isHidden ? 'Hidden' : 'Visible'}`, inline: true },
+            { name: 'Voice Members', value: memberList.slice(0, 1024), inline: false }
+        )
+        .setFooter({ text: `ID: ${channel.id}` })
+        .setTimestamp();
+
+    await interaction.reply({
+        embeds: [embed],
+        ephemeral: true,
+    });
+}
+

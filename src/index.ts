@@ -17,7 +17,6 @@ import * as guildCreateEvent from './events/guildCreate';
 import * as messageReactionAddEvent from './events/messageReactionAdd';
 import { startCleanupInterval, stopCleanupInterval } from './utils/stateManager';
 
-// Register commands
 client.commands.set(pvcSetup.data.name, pvcSetup);
 client.commands.set(adminStrictness.data.name, adminStrictness);
 client.commands.set(pvcStatus.data.name, pvcStatus);
@@ -28,10 +27,8 @@ client.commands.set(invite.data.name, invite);
 client.commands.set(refreshPvc.data.name, refreshPvc);
 client.commands.set(deployCommands.data.name, deployCommands);
 
-// Register events
 client.once(readyEvent.name, () => {
     readyEvent.execute(client);
-    // Start cleanup interval after bot is ready
     startCleanupInterval();
 });
 client.on(voiceStateUpdateEvent.name, (...args) =>
@@ -50,29 +47,18 @@ client.on('messageReactionAdd', (reaction, user) =>
     messageReactionAddEvent.handleMessageReactionAdd(reaction, user)
 );
 
-// Global error handlers - PREVENT CRASHES (silent for production stability)
-client.on('error', () => {
-    // Silently handle Discord client errors
-});
+client.on('error', () => { });
 
-client.on('warn', () => {
-    // Silently handle Discord client warnings
-});
+client.on('warn', () => { });
 
-process.on('unhandledRejection', () => {
-    // Silently handle unhandled rejections - prevents crash
-});
+process.on('unhandledRejection', () => { });
 
-process.on('uncaughtException', () => {
-    // Silently handle uncaught exceptions - prevents crash
-});
+process.on('uncaughtException', () => { });
 
-// Login
 client.login(Config.token).catch(() => {
     process.exit(1);
 });
 
-// Graceful shutdown
 process.on('SIGINT', () => {
     stopCleanupInterval();
     client.destroy();

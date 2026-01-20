@@ -7,48 +7,36 @@ interface VoiceChannelState {
     interfaceChannel: boolean;
 }
 
-// In-memory cache for fast O(1) lookups
 const channelStates = new Map<string, VoiceChannelState>();
-const ownerToChannel = new Map<string, string>(); // ownerId -> channelId
-const guildInterfaces = new Map<string, string>(); // guildId -> interfaceChannelId
-const joinOrder = new Map<string, string[]>(); // channelId -> array of userIds in join order
-const tempPermittedUsers = new Map<string, Set<string>>(); // channelId -> Set of userIds with temp access
+const ownerToChannel = new Map<string, string>();
+const guildInterfaces = new Map<string, string>();
+const joinOrder = new Map<string, string[]>();
+const tempPermittedUsers = new Map<string, Set<string>>();
 
-// Anti-spam: Track user actions for rate limiting
-const userCooldowns = new Map<string, number>(); // `userId:action` -> timestamp
+const userCooldowns = new Map<string, number>();
 const COOLDOWNS = {
-    CREATE_CHANNEL: 5000,    // 5 seconds between channel creations
-    JOIN_PROTECTED: 2000,    // 2 seconds between join attempts to protected channels
+    CREATE_CHANNEL: 5000,
+    JOIN_PROTECTED: 2000,
 };
 
-/**
- * Check if user is on cooldown for an action
- * Returns true if on cooldown, false if allowed
- */
 export function isOnCooldown(userId: string, action: keyof typeof COOLDOWNS): boolean {
     const key = `${userId}:${action}`;
     const lastAction = userCooldowns.get(key);
     if (!lastAction) return false;
-    
+
     const cooldownTime = COOLDOWNS[action];
     return Date.now() - lastAction < cooldownTime;
 }
 
-/**
- * Set cooldown for user action
- */
 export function setCooldown(userId: string, action: keyof typeof COOLDOWNS): void {
     const key = `${userId}:${action}`;
     userCooldowns.set(key, Date.now());
 }
 
-/**
- * Cleanup expired cooldowns (call periodically)
- */
 export function cleanupCooldowns(): void {
     const now = Date.now();
     const maxCooldown = Math.max(...Object.values(COOLDOWNS));
-    
+
     for (const [key, timestamp] of userCooldowns) {
         if (now - timestamp > maxCooldown) {
             userCooldowns.delete(key);
@@ -56,12 +44,8 @@ export function cleanupCooldowns(): void {
     }
 }
 
-// Cleanup cooldowns every minute
 setInterval(cleanupCooldowns, 60000);
 
-/**
- * Register a private voice channel
- */
 export function registerChannel(channelId: string, guildId: string, ownerId: string): void {
     const state: VoiceChannelState = {
         channelId,
@@ -73,9 +57,6 @@ export function registerChannel(channelId: string, guildId: string, ownerId: str
     ownerToChannel.set(`${guildId}:${ownerId}`, channelId);
 }
 
-/**
- * Unregister a private voice channel
- */
 export function unregisterChannel(channelId: string): void {
     const state = channelStates.get(channelId);
     if (state) {
@@ -86,57 +67,36 @@ export function unregisterChannel(channelId: string): void {
     tempPermittedUsers.delete(channelId);
 }
 
-/**
- * Get channel state by ID
- */
 export function getChannelState(channelId: string): VoiceChannelState | undefined {
     return channelStates.get(channelId);
 }
 
-/**
- * Get channel owned by a user in a guild
- */
 export function getChannelByOwner(guildId: string, ownerId: string): string | undefined {
     return ownerToChannel.get(`${guildId}:${ownerId}`);
 }
 
-/**
- * Check if a user owns a channel
- */
 export function isChannelOwner(channelId: string, userId: string): boolean {
     const state = channelStates.get(channelId);
     return state?.ownerId === userId;
 }
 
-/**
- * Transfer channel ownership
- */
 export function transferOwnership(channelId: string, newOwnerId: string): boolean {
     const state = channelStates.get(channelId);
     if (!state) return false;
 
-    // Remove old owner mapping
     ownerToChannel.delete(`${state.guildId}:${state.ownerId}`);
 
-    // Update state
     state.ownerId = newOwnerId;
 
-    // Add new owner mapping
     ownerToChannel.set(`${state.guildId}:${newOwnerId}`, channelId);
 
     return true;
 }
 
-/**
- * Register an interface channel for a guild
- */
 export function registerInterfaceChannel(guildId: string, channelId: string): void {
     guildInterfaces.set(guildId, channelId);
 }
 
-/**
- * Check if a channel is an interface channel
- */
 export function isInterfaceChannel(channelId: string): boolean {
     for (const interfaceId of guildInterfaces.values()) {
         if (interfaceId === channelId) return true;
@@ -144,39 +104,24 @@ export function isInterfaceChannel(channelId: string): boolean {
     return false;
 }
 
-/**
- * Get interface channel for a guild
- */
 export function getInterfaceChannel(guildId: string): string | undefined {
     return guildInterfaces.get(guildId);
 }
 
-/**
- * Get all channels in a guild
- */
 export function getGuildChannels(guildId: string): VoiceChannelState[] {
     return Array.from(channelStates.values()).filter(s => s.guildId === guildId);
 }
 
-/**
- * Clear all state (useful for testing)
- */
 export function clearAllState(): void {
     channelStates.clear();
     ownerToChannel.clear();
     guildInterfaces.clear();
 }
 
-/**
- * Unregister an interface channel for a guild
- */
 export function unregisterInterfaceChannel(guildId: string): void {
     guildInterfaces.delete(guildId);
 }
 
-/**
- * Add user to join order
- */
 export function addUserToJoinOrder(channelId: string, userId: string): void {
     const order = joinOrder.get(channelId) || [];
     if (!order.includes(userId)) {
@@ -185,9 +130,6 @@ export function addUserToJoinOrder(channelId: string, userId: string): void {
     }
 }
 
-/**
- * Remove user from join order
- */
 export function removeUserFromJoinOrder(channelId: string, userId: string): void {
     const order = joinOrder.get(channelId);
     if (order) {
@@ -200,24 +142,15 @@ export function removeUserFromJoinOrder(channelId: string, userId: string): void
     }
 }
 
-/**
- * Get next user in join order (for ownership transfer)
- */
 export function getNextUserInOrder(channelId: string): string | undefined {
     const order = joinOrder.get(channelId);
     return order && order.length > 0 ? order[0] : undefined;
 }
 
-/**
- * Get join order for a channel
- */
 export function getJoinOrder(channelId: string): string[] {
     return joinOrder.get(channelId) || [];
 }
 
-/**
- * Add temporary permitted users (when channel is locked)
- */
 export function addTempPermittedUsers(channelId: string, userIds: string[]): void {
     const existing = tempPermittedUsers.get(channelId) || new Set();
     for (const userId of userIds) {
@@ -226,17 +159,11 @@ export function addTempPermittedUsers(channelId: string, userIds: string[]): voi
     tempPermittedUsers.set(channelId, existing);
 }
 
-/**
- * Check if user has temporary access to channel
- */
 export function hasTempPermission(channelId: string, userId: string): boolean {
     const users = tempPermittedUsers.get(channelId);
     return users?.has(userId) || false;
 }
 
-/**
- * Clear temporary permissions for a channel
- */
 export function clearTempPermissions(channelId: string): void {
     tempPermittedUsers.delete(channelId);
 }

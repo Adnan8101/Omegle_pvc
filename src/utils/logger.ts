@@ -2,7 +2,6 @@ import { EmbedBuilder, GuildMember, type Guild, type User } from 'discord.js';
 import prisma from './database';
 
 export enum LogAction {
-    // Channel Actions
     CHANNEL_CREATED = 'Channel Created',
     CHANNEL_DELETED = 'Channel Deleted',
     CHANNEL_LOCKED = 'Channel Locked',
@@ -15,25 +14,21 @@ export enum LogAction {
     CHANNEL_REGION_SET = 'Region Changed',
     CHANNEL_CLAIMED = 'Channel Claimed',
     CHANNEL_TRANSFERRED = 'Channel Transferred',
-    
-    // User Actions
+
     USER_ADDED = 'User Added',
     USER_REMOVED = 'User Removed',
     USER_BANNED = 'User Banned',
     USER_PERMITTED = 'User Permitted',
-    
-    // Approval Actions
+
     RENAME_REQUESTED = 'Rename Requested',
     RENAME_APPROVED = 'Rename Approved',
     RENAME_REJECTED = 'Rename Rejected',
     RENAME_EXPIRED = 'Rename Expired',
-    
-    // Setup Actions
+
     PVC_SETUP = 'PVC System Setup',
     PVC_DELETED = 'PVC System Deleted',
     PVC_REFRESHED = 'PVC Interface Refreshed',
-    
-    // Settings
+
     SETTINGS_UPDATED = 'Settings Updated',
 }
 
@@ -81,18 +76,17 @@ export async function logAction(data: LogData): Promise<void> {
         });
 
         if (!settings?.logsWebhookUrl) {
-            return; // No webhook configured, skip logging
+            return;
         }
 
-        // Build clean description
         let description = '';
-        
+
         if (data.user) {
             const username = data.user instanceof GuildMember ? data.user.user.username : data.user.username;
             const userId = data.user instanceof GuildMember ? data.user.user.id : data.user.id;
             description += `**User:** <@${userId}>`;
         }
-        
+
         if (data.channelName) {
             description += `${description ? '\n' : ''}**Channel:** ${data.channelName}`;
         }
@@ -112,11 +106,9 @@ export async function logAction(data: LogData): Promise<void> {
             .setColor(ACTION_COLORS[data.action])
             .setTimestamp();
 
-        // Get bot user for avatar
         const botUser = data.guild.client.user;
         const avatarURL = botUser?.displayAvatarURL() || undefined;
 
-        // Send to webhook
         await fetch(settings.logsWebhookUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -126,7 +118,5 @@ export async function logAction(data: LogData): Promise<void> {
                 avatar_url: avatarURL,
             }),
         });
-    } catch (error) {
-        console.error('Failed to log action:', error);
-    }
+    } catch { }
 }

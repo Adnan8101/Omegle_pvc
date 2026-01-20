@@ -8,7 +8,6 @@ export const Config = {
     databaseUrl: process.env.DATABASE_URL!,
 } as const;
 
-// Validate required config
 const requiredKeys = ['token', 'clientId', 'databaseUrl'] as const;
 for (const key of requiredKeys) {
     if (!Config[key]) {
