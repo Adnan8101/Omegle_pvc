@@ -24,7 +24,39 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
     const { customId, guild, member } = interaction;
     if (!guild || !member) return;
 
-    // Skip buttons handled by message collectors (from !l command)
+    // Handle list_permanent button from !l command
+    if (customId.startsWith('list_permanent_')) {
+        const targetUserId = customId.replace('list_permanent_', '');
+
+        // Only the original user can click
+        if (interaction.user.id !== targetUserId) {
+            await interaction.reply({ content: 'This button is not for you.', ephemeral: true });
+            return;
+        }
+
+        const permanentAccess = await prisma.ownerPermission.findMany({
+            where: { guildId: guild.id, ownerId: targetUserId },
+            orderBy: { createdAt: 'desc' },
+        });
+
+        const embed = new EmbedBuilder()
+            .setColor(0x5865F2)
+            .setTitle('Permanent Access List');
+
+        if (permanentAccess.length === 0) {
+            embed.setDescription('No users with permanent access.');
+        } else {
+            const userList = permanentAccess.map((p, i) => `${i + 1}. <@${p.targetId}>`).join('\n');
+            embed.setDescription(userList);
+        }
+
+        embed.setFooter({ text: '/permanent_access add/remove' }).setTimestamp();
+
+        await interaction.update({ embeds: [embed], components: [] });
+        return;
+    }
+
+    // Skip other list_ buttons (legacy/pagination)
     if (customId.startsWith('list_')) return;
 
     const userId = typeof member === 'string' ? member : member.user.id;
