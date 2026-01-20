@@ -1,4 +1,4 @@
-import { ChannelType, Events, type VoiceState, EmbedBuilder, AuditLogEvent, PermissionFlagsBits } from 'discord.js';
+import { ChannelType, Events, type VoiceState, EmbedBuilder, AuditLogEvent } from 'discord.js';
 import type { PVCClient } from '../client';
 import prisma from '../utils/database';
 import {
@@ -71,16 +71,6 @@ async function handleAccessProtection(
     const isFull = channel.userLimit > 0 && channel.members.size > channel.userLimit;
 
     if (!isLocked && !isHidden && !isFull) return false;
-
-    // Two-Factor Verification: Check if user has explicit Discord permission (e.g. manually added)
-    // This allows users to join if they have explicit overrides even if not in DB
-    const permissions = channel.permissionsFor(member);
-    const hasConnect = permissions.has(PermissionFlagsBits.Connect);
-    const hasView = permissions.has(PermissionFlagsBits.ViewChannel);
-
-    if ((isLocked || isHidden) && hasConnect && hasView) {
-        return false;
-    }
 
     const memberRoleIds = member.roles.cache.map(r => r.id);
     const [channelPerms, settings, whitelist] = await Promise.all([
