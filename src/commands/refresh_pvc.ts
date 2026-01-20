@@ -85,14 +85,21 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     let logsWebhookUrl = settings.logsWebhookUrl;
     if (logsChannel && logsChannel.type === ChannelType.GuildText) {
         try {
-            const webhook = await (logsChannel as any).createWebhook({
-                name: 'PVC Logger',
-                reason: 'PVC Logs Refresh',
-            });
+            // Try to find existing webhook first
+            const webhooks = await (logsChannel as any).fetchWebhooks();
+            let webhook = webhooks.find((w: any) => w.owner?.id === interaction.client.user?.id);
+
+            if (!webhook) {
+                // Create new webhook only if none exists
+                webhook = await (logsChannel as any).createWebhook({
+                    name: 'PVC Logger',
+                    reason: 'PVC Logs Refresh',
+                });
+            }
             logsWebhookUrl = webhook.url;
-        } catch {
-            await interaction.editReply('Failed to create logs webhook. Check bot permissions.');
-            return;
+        } catch (error: any) {
+            // Non-fatal - continue without webhook
+            console.error('Webhook error:', error?.message || error);
         }
     }
 
