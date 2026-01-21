@@ -24,7 +24,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     try {
         const { REST, Routes } = await import('discord.js');
         const { Config } = await import('../config');
-        
+
         // Import all commands
         const { command: pvcSetup } = await import('./pvc_setup');
         const { command: adminStrictness } = await import('./admin_strictness');
@@ -35,6 +35,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         const { command: invite } = await import('./invite');
         const { command: refreshPvc } = await import('./refresh_pvc');
         const { command: deployCommandsCmd } = await import('./deploy_commands');
+        const { command: permanentAccess } = await import('./permanent_access');
 
         const commands = [
             pvcSetup.data.toJSON(),
@@ -46,6 +47,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             invite.data.toJSON(),
             refreshPvc.data.toJSON(),
             deployCommandsCmd.data.toJSON(),
+            permanentAccess.data.toJSON(),
         ];
 
         const rest = new REST().setToken(Config.token);
@@ -64,7 +66,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         await interaction.editReply({ embeds: [embed] });
     } catch (error) {
         console.error('Failed to deploy commands:', error);
-        
+
         const embed = new EmbedBuilder()
             .setColor(0xFF0000)
             .setTitle('❌ Deployment Failed')
