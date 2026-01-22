@@ -38,7 +38,7 @@ export async function transferChannelOwnership(
             await channel.permissionOverwrites.edit(newOwnerId, {
                 ViewChannel: true, Connect: true, Speak: true, Stream: true,
                 SendMessages: true, EmbedLinks: true, AttachFiles: true,
-                MuteMembers: true, DeafenMembers: true, MoveMembers: true, ManageChannels: true,
+                MuteMembers: true, DeafenMembers: true, ManageChannels: true,
             });
 
             // Revoke Owner Perms from old owner

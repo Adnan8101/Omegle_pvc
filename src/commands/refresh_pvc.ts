@@ -310,7 +310,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                             await channel.permissionOverwrites.edit(nextOwner.id, {
                                 ViewChannel: true, Connect: true, Speak: true, Stream: true,
                                 SendMessages: true, EmbedLinks: true, AttachFiles: true,
-                                MuteMembers: true, DeafenMembers: true, MoveMembers: true, ManageChannels: true,
+                                MuteMembers: true, DeafenMembers: true, ManageChannels: true,
                             }).catch(() => {});
                             
                             // Rename channel to new owner
@@ -393,7 +393,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                             await channel.permissionOverwrites.edit(nextOwner.id, {
                                 ViewChannel: true, Connect: true, Speak: true, Stream: true,
                                 SendMessages: true, EmbedLinks: true, AttachFiles: true,
-                                MuteMembers: true, DeafenMembers: true, MoveMembers: true, ManageChannels: true,
+                                MuteMembers: true, DeafenMembers: true, ManageChannels: true,
                             }).catch(() => {});
                             
                             // Rename channel to new owner with team type
@@ -495,7 +495,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 await channel.permissionOverwrites.edit(pvc.ownerId, {
                     ViewChannel: true, Connect: true, Speak: true, Stream: true,
                     SendMessages: true, EmbedLinks: true, AttachFiles: true,
-                    MuteMembers: true, DeafenMembers: true, MoveMembers: true, ManageChannels: true,
+                    MuteMembers: true, DeafenMembers: true, ManageChannels: true,
                 });
 
                 // Update all current member permissions
@@ -546,7 +546,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 await channel.permissionOverwrites.edit(tc.ownerId, {
                     ViewChannel: true, Connect: true, Speak: true, Stream: true,
                     SendMessages: true, EmbedLinks: true, AttachFiles: true,
-                    MuteMembers: true, DeafenMembers: true, MoveMembers: true, ManageChannels: true,
+                    MuteMembers: true, DeafenMembers: true, ManageChannels: true,
                 });
 
                 // Update all current member permissions

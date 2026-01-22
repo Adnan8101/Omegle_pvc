@@ -684,7 +684,7 @@ async function handleClaim(
         await channel.permissionOverwrites.edit(userId, {
             ViewChannel: true, Connect: true, Speak: true, Stream: true,
             SendMessages: true, EmbedLinks: true, AttachFiles: true,
-            MuteMembers: true, DeafenMembers: true, MoveMembers: true, ManageChannels: true,
+            MuteMembers: true, DeafenMembers: true, ManageChannels: true,
         });
         await channel.setName(newOwner.displayName).catch(() => { });
     });

@@ -760,7 +760,6 @@ async function transferChannelOwnership(
             AttachFiles: true,
             MuteMembers: true,
             DeafenMembers: true,
-            MoveMembers: true,
             ManageChannels: true,
         });
 
@@ -1118,7 +1117,6 @@ async function transferTeamChannelOwnership(
             AttachFiles: true,
             MuteMembers: true,
             DeafenMembers: true,
-            MoveMembers: true,
             ManageChannels: true,
         });
 

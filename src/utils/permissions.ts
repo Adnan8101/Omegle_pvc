@@ -168,7 +168,6 @@ export function getOwnerPermissions(): { allow: bigint; deny: bigint } {
             PermissionsBitField.Flags.AttachFiles |
             PermissionsBitField.Flags.MuteMembers |
             PermissionsBitField.Flags.DeafenMembers |
-            PermissionsBitField.Flags.MoveMembers |
             PermissionsBitField.Flags.ManageChannels,
         deny: 0n,
     };
