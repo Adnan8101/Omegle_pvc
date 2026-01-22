@@ -7,7 +7,7 @@ import {
 import prisma from '../utils/database';
 import type { Command } from '../client';
 import { invalidateGuildSettings } from '../utils/cache';
-import { canToggleStrictness } from '../utils/permissions';
+import { canRunAdminCommand } from '../utils/permissions';
 
 const data = new SlashCommandBuilder()
     .setName('team_admin_strictness')
@@ -31,9 +31,9 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         return;
     }
 
-    // Check if user can toggle strictness (server owner or authorized users)
-    if (!await canToggleStrictness(interaction)) {
-        await interaction.reply({ content: '❌ Only the server owner or authorized users can toggle admin strictness.', flags: [MessageFlags.Ephemeral] });
+    // Check if user can run admin commands (bot developer or higher role than bot)
+    if (!await canRunAdminCommand(interaction)) {
+        await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', flags: [MessageFlags.Ephemeral] });
         return;
     }
 
