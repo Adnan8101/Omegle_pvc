@@ -669,7 +669,22 @@ async function transferChannelOwnership(
     channel: any
 ): Promise<void> {
     try {
-        const nextUserId = getNextUserInOrder(channelId);
+        // First try to get next user from join order
+        let nextUserId = getNextUserInOrder(channelId);
+        
+        // If no one in join order, pick any member currently in the channel
+        if (!nextUserId && channel.members.size > 0) {
+            const currentState = getChannelState(channelId);
+            const teamState = getTeamChannelState(channelId);
+            const oldOwnerId = currentState?.ownerId || teamState?.ownerId;
+            
+            // Get first member that's not the old owner
+            const availableMember = channel.members.find((m: any) => m.id !== oldOwnerId && !m.user.bot);
+            if (availableMember) {
+                nextUserId = availableMember.id;
+            }
+        }
+        
         if (!nextUserId) {
             return;
         }
@@ -709,10 +724,17 @@ async function transferChannelOwnership(
             ViewChannel: true,
             Connect: true,
             Speak: true,
+            Stream: true,
+            SendMessages: true,
+            EmbedLinks: true,
+            AttachFiles: true,
+            MuteMembers: true,
+            DeafenMembers: true,
             MoveMembers: true,
             ManageChannels: true,
         });
 
+        // Rename channel to new owner's name
         try {
             await executeWithRateLimit(
                 `rename:${channelId}`,
@@ -1024,7 +1046,21 @@ async function transferTeamChannelOwnership(
     channel: any
 ): Promise<void> {
     try {
-        const nextUserId = getNextUserInOrder(channelId);
+        const teamState = getTeamChannelState(channelId);
+        const oldOwnerId = teamState?.ownerId;
+        
+        // First try to get next user from join order
+        let nextUserId = getNextUserInOrder(channelId);
+        
+        // If no one in join order, pick any member currently in the channel
+        if (!nextUserId && channel.members.size > 0) {
+            // Get first member that's not the old owner
+            const availableMember = channel.members.find((m: any) => m.id !== oldOwnerId && !m.user.bot);
+            if (availableMember) {
+                nextUserId = availableMember.id;
+            }
+        }
+        
         if (!nextUserId) {
             return;
         }
@@ -1047,16 +1083,22 @@ async function transferTeamChannelOwnership(
             Connect: true,
             Speak: true,
             Stream: true,
+            SendMessages: true,
+            EmbedLinks: true,
+            AttachFiles: true,
             MuteMembers: true,
             DeafenMembers: true,
             MoveMembers: true,
             ManageChannels: true,
         });
 
+        // Rename to new owner's team name, preserving team type
+        const teamType = teamState?.teamType || 'Team';
+        const teamTypeName = teamType.charAt(0).toUpperCase() + teamType.slice(1).toLowerCase();
         try {
             await executeWithRateLimit(
                 `rename:${channelId}`,
-                () => channel.setName(`${newOwner.displayName}'s Team`),
+                () => channel.setName(`${newOwner.displayName}'s ${teamTypeName}`),
                 Priority.LOW
             );
         } catch { }
@@ -1069,7 +1111,7 @@ async function transferTeamChannelOwnership(
             channelId: channelId,
             details: `Team channel ownership transferred to ${newOwner.user.username}`,
             isTeamChannel: true,
-            teamType: (await import('../utils/voiceManager')).getTeamChannelState(channelId)?.teamType,
+            teamType: teamState?.teamType,
         });
 
         try {

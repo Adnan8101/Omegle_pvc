@@ -13,6 +13,7 @@ import { command as permanentAccess } from './commands/permanent_access';
 import { command as teamSetup } from './commands/team_setup';
 import { command as teamStatus } from './commands/team_status';
 import { command as teamSetupDelete } from './commands/team_setup_delete';
+import { command as teamVcCommandChannel } from './commands/team_vc_command_channel';
 import { command as pvcOsTransfer } from './commands/pvc_os_transfer';
 import { command as pvcPause } from './commands/pvc_pause';
 import { command as pvcResume } from './commands/pvc_resume';
@@ -33,6 +34,7 @@ const commands = [
     teamSetup.data.toJSON(),
     teamStatus.data.toJSON(),
     teamSetupDelete.data.toJSON(),
+    teamVcCommandChannel.data.toJSON(),
     pvcOsTransfer.data.toJSON(),
     pvcPause.data.toJSON(),
     pvcResume.data.toJSON(),

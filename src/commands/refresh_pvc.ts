@@ -9,14 +9,15 @@ import {
     type ChatInputCommandInteraction,
     type Message,
     AttachmentBuilder,
+    EmbedBuilder,
 } from 'discord.js';
 import prisma from '../utils/database';
 import type { Command } from '../client';
-import { generateInterfaceEmbed, generateInterfaceImage, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
-import { canRunAdminCommand } from '../utils/permissions';
+import { generateInterfaceEmbed, generateInterfaceImage, generateVcInterfaceEmbed, createInterfaceComponents, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
+import { canRunAdminCommand, getOwnerPermissions } from '../utils/permissions';
 import { logAction, LogAction } from '../utils/logger';
 import { invalidateGuildSettings, clearAllCaches as invalidateAllCaches, invalidateChannelPermissions } from '../utils/cache';
-import { clearGuildState, registerInterfaceChannel, registerChannel, registerTeamChannel } from '../utils/voiceManager';
+import { clearGuildState, registerInterfaceChannel, registerChannel, registerTeamChannel, transferOwnership, transferTeamOwnership, addUserToJoinOrder } from '../utils/voiceManager';
 
 const MAIN_BUTTONS = [
     { id: 'pvc_lock' },
@@ -43,15 +44,29 @@ const data = new SlashCommandBuilder()
     .setDMPermission(false)
     .addChannelOption(option =>
         option
-            .setName('logs_channel')
-            .setDescription('Update logs channel (optional)')
+            .setName('pvc_logs_channel')
+            .setDescription('Update PVC logs channel (optional)')
+            .setRequired(false)
+            .addChannelTypes(ChannelType.GuildText)
+    )
+    .addChannelOption(option =>
+        option
+            .setName('team_logs_channel')
+            .setDescription('Update Team VC logs channel (optional)')
             .setRequired(false)
             .addChannelTypes(ChannelType.GuildText)
     )
     .addChannelOption(option =>
         option
             .setName('command_channel')
-            .setDescription('Update command channel (optional)')
+            .setDescription('Update PVC command channel (optional)')
+            .setRequired(false)
+            .addChannelTypes(ChannelType.GuildText)
+    )
+    .addChannelOption(option =>
+        option
+            .setName('team_command_channel')
+            .setDescription('Update Team command channel (optional)')
             .setRequired(false)
             .addChannelTypes(ChannelType.GuildText)
     );
@@ -70,49 +85,89 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
     const guild = interaction.guild;
-    const logsChannel = interaction.options.getChannel('logs_channel');
+    const pvcLogsChannel = interaction.options.getChannel('pvc_logs_channel');
+    const teamLogsChannel = interaction.options.getChannel('team_logs_channel');
     const commandChannel = interaction.options.getChannel('command_channel');
+    const teamCommandChannel = interaction.options.getChannel('team_command_channel');
 
     const settings = await prisma.guildSettings.findUnique({
         where: { guildId: guild.id },
     });
 
-    if (!settings?.interfaceTextId) {
-        await interaction.editReply('PVC system is not set up. Use `/pvc_setup` first.');
+    const teamSettings = await prisma.teamVoiceSettings.findUnique({
+        where: { guildId: guild.id },
+    });
+
+    if (!settings?.interfaceTextId && !teamSettings?.categoryId) {
+        await interaction.editReply('Neither PVC nor Team system is set up. Use `/pvc_setup` or `/team_setup` first.');
         return;
     }
 
-    let logsWebhookUrl = settings.logsWebhookUrl;
-    if (logsChannel && logsChannel.type === ChannelType.GuildText) {
+    // Update PVC logs webhook
+    let pvcLogsWebhookUrl = settings?.logsWebhookUrl;
+    if (pvcLogsChannel && pvcLogsChannel.type === ChannelType.GuildText) {
         try {
-            // Try to find existing webhook first
-            const webhooks = await (logsChannel as any).fetchWebhooks();
+            const webhooks = await (pvcLogsChannel as any).fetchWebhooks();
             let webhook = webhooks.find((w: any) => w.owner?.id === interaction.client.user?.id);
 
             if (!webhook) {
-                // Create new webhook only if none exists
-                webhook = await (logsChannel as any).createWebhook({
+                webhook = await (pvcLogsChannel as any).createWebhook({
                     name: 'PVC Logger',
                     reason: 'PVC Logs Refresh',
                 });
             }
-            logsWebhookUrl = webhook.url;
+            pvcLogsWebhookUrl = webhook.url;
         } catch (error: any) {
-            // Non-fatal - continue without webhook
-            console.error('Webhook error:', error?.message || error);
+            console.error('PVC Webhook error:', error?.message || error);
         }
     }
 
-    await prisma.guildSettings.update({
-        where: { guildId: guild.id },
-        data: {
-            ...(logsWebhookUrl && logsWebhookUrl !== settings.logsWebhookUrl && {
-                logsWebhookUrl,
-                logsChannelId: logsChannel?.id
-            }),
-            ...(commandChannel && { commandChannelId: commandChannel.id }),
-        },
-    });
+    // Update Team logs webhook
+    let teamLogsWebhookUrl = teamSettings?.logsWebhookUrl;
+    if (teamLogsChannel && teamLogsChannel.type === ChannelType.GuildText) {
+        try {
+            const webhooks = await (teamLogsChannel as any).fetchWebhooks();
+            let webhook = webhooks.find((w: any) => w.owner?.id === interaction.client.user?.id);
+
+            if (!webhook) {
+                webhook = await (teamLogsChannel as any).createWebhook({
+                    name: 'Team VC Logger',
+                    reason: 'Team Logs Refresh',
+                });
+            }
+            teamLogsWebhookUrl = webhook.url;
+        } catch (error: any) {
+            console.error('Team Webhook error:', error?.message || error);
+        }
+    }
+
+    // Update PVC settings
+    if (settings) {
+        await prisma.guildSettings.update({
+            where: { guildId: guild.id },
+            data: {
+                ...(pvcLogsWebhookUrl && pvcLogsWebhookUrl !== settings.logsWebhookUrl && {
+                    logsWebhookUrl: pvcLogsWebhookUrl,
+                    logsChannelId: pvcLogsChannel?.id
+                }),
+                ...(commandChannel && { commandChannelId: commandChannel.id }),
+            },
+        });
+    }
+
+    // Update Team settings
+    if (teamSettings) {
+        await prisma.teamVoiceSettings.update({
+            where: { guildId: guild.id },
+            data: {
+                ...(teamLogsWebhookUrl && teamLogsWebhookUrl !== teamSettings.logsWebhookUrl && {
+                    logsWebhookUrl: teamLogsWebhookUrl,
+                    logsChannelId: teamLogsChannel?.id
+                }),
+                ...(teamCommandChannel && { commandChannelId: teamCommandChannel.id }),
+            },
+        });
+    }
 
     invalidateGuildSettings(guild.id);
     invalidateAllCaches();
@@ -182,117 +237,352 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
 
-    // PERMISSION SYNC: Update permissions to match current VC members
-    let permsSynced = 0;
-    let teamPermsSynced = 0;
+    // OWNERSHIP VERIFICATION: Check all VCs and transfer ownership if owner not present
+    let ownershipTransfers = 0;
+    let channelsDeleted = 0;
+    
+    // Check PVC ownership
     if (freshSettings?.privateChannels) {
         for (const pvc of freshSettings.privateChannels) {
             const channel = guild.channels.cache.get(pvc.channelId);
             if (channel && channel.type === ChannelType.GuildVoice) {
-                // Get current members in the VC (excluding the owner)
-                const currentMemberIds = channel.members
-                    .filter(m => m.id !== pvc.ownerId)
-                    .map(m => m.id);
-
-                // Delete all old permissions for this channel
-                await prisma.voicePermission.deleteMany({
-                    where: { channelId: pvc.channelId, permission: 'permit' },
-                });
-
-                // Invalidate cache so !l shows fresh data
-                invalidateChannelPermissions(pvc.channelId);
-
-                // Create permissions for current members only
-                if (currentMemberIds.length > 0) {
-                    await prisma.voicePermission.createMany({
-                        data: currentMemberIds.map(userId => ({
-                            channelId: pvc.channelId,
-                            targetId: userId,
-                            targetType: 'user',
-                            permission: 'permit',
-                        })),
-                        skipDuplicates: true,
-                    }).catch(() => { });
-                    permsSynced += currentMemberIds.length;
-                }
-
-                // DISCORD SYNC: Update Discord permissions for owner and all current members
-                // Grant chat permissions (SendMessages, EmbedLinks, AttachFiles)
-                try {
-                    // Update owner permissions
-                    await channel.permissionOverwrites.edit(pvc.ownerId, {
-                        ViewChannel: true, Connect: true, Speak: true, Stream: true,
-                        SendMessages: true, EmbedLinks: true, AttachFiles: true,
-                        MuteMembers: true, DeafenMembers: true, MoveMembers: true, ManageChannels: true,
-                    });
-
-                    // Update all current member permissions
-                    for (const memberId of currentMemberIds) {
-                        await channel.permissionOverwrites.edit(memberId, {
-                            ViewChannel: true, Connect: true,
-                            SendMessages: true, EmbedLinks: true, AttachFiles: true,
-                        });
+                const ownerInChannel = channel.members.has(pvc.ownerId);
+                
+                if (!ownerInChannel) {
+                    // Owner not in channel - need to transfer or delete
+                    if (channel.members.size === 0) {
+                        // Channel is empty - delete it
+                        try {
+                            await channel.delete('Refresh: Empty channel cleanup');
+                            await prisma.privateVoiceChannel.delete({ where: { channelId: pvc.channelId } }).catch(() => {});
+                            channelsDeleted++;
+                        } catch { }
+                    } else {
+                        // Channel has members - transfer to next person (first non-bot member)
+                        const nextOwner = channel.members.find(m => !m.user.bot);
+                        if (nextOwner) {
+                            // Transfer ownership
+                            transferOwnership(pvc.channelId, nextOwner.id);
+                            
+                            // Update database
+                            await prisma.privateVoiceChannel.update({
+                                where: { channelId: pvc.channelId },
+                                data: { ownerId: nextOwner.id },
+                            });
+                            
+                            // Update Discord permissions - give new owner full perms
+                            const ownerPerms = getOwnerPermissions();
+                            await channel.permissionOverwrites.edit(nextOwner.id, {
+                                ViewChannel: true, Connect: true, Speak: true, Stream: true,
+                                SendMessages: true, EmbedLinks: true, AttachFiles: true,
+                                MuteMembers: true, DeafenMembers: true, MoveMembers: true, ManageChannels: true,
+                            }).catch(() => {});
+                            
+                            // Rename channel to new owner
+                            await channel.setName(nextOwner.displayName).catch(() => {});
+                            
+                            // Re-register with new owner
+                            registerChannel(pvc.channelId, pvc.guildId, nextOwner.id);
+                            
+                            // Rebuild join order for this channel
+                            const membersInOrder = Array.from(channel.members.values())
+                                .filter(m => !m.user.bot && m.id !== nextOwner.id);
+                            for (const member of membersInOrder) {
+                                addUserToJoinOrder(pvc.channelId, member.id);
+                            }
+                            
+                            // Send notification
+                            try {
+                                const embed = new EmbedBuilder()
+                                    .setColor(0x9B59B6)
+                                    .setTitle('🔄 Ownership Transferred (Refresh)')
+                                    .setDescription(`<@${nextOwner.id}> is now the owner of this voice channel!\n\n*Previous owner was not present.*`)
+                                    .setTimestamp();
+                                await channel.send({ embeds: [embed] });
+                            } catch { }
+                            
+                            await logAction({
+                                action: LogAction.CHANNEL_TRANSFERRED,
+                                guild: guild,
+                                user: nextOwner.user,
+                                channelName: channel.name,
+                                channelId: pvc.channelId,
+                                details: `Ownership transferred during refresh (previous owner not present)`,
+                            });
+                            
+                            ownershipTransfers++;
+                        }
                     }
-                } catch { }
+                } else {
+                    // Owner is in channel - rebuild join order based on current members
+                    const membersInOrder = Array.from(channel.members.values())
+                        .filter(m => !m.user.bot && m.id !== pvc.ownerId);
+                    for (const member of membersInOrder) {
+                        addUserToJoinOrder(pvc.channelId, member.id);
+                    }
+                }
             }
         }
     }
-
-    // TEAM CHANNEL PERMISSION SYNC
+    
+    // Check Team channel ownership
     if (freshTeamSettings?.teamChannels) {
         for (const tc of freshTeamSettings.teamChannels) {
             const channel = guild.channels.cache.get(tc.channelId);
             if (channel && channel.type === ChannelType.GuildVoice) {
-                // Get current members in the VC (excluding the owner)
-                const currentMemberIds = channel.members
-                    .filter(m => m.id !== tc.ownerId)
-                    .map(m => m.id);
-
-                // Delete all old permissions for this team channel
-                await prisma.teamVoicePermission.deleteMany({
-                    where: { channelId: tc.channelId, permission: 'permit' },
-                });
-
-                // Invalidate cache
-                invalidateChannelPermissions(tc.channelId);
-
-                // Create permissions for current members only
-                if (currentMemberIds.length > 0) {
-                    await prisma.teamVoicePermission.createMany({
-                        data: currentMemberIds.map(userId => ({
-                            channelId: tc.channelId,
-                            targetId: userId,
-                            targetType: 'user',
-                            permission: 'permit',
-                        })),
-                        skipDuplicates: true,
-                    }).catch(() => { });
-                    teamPermsSynced += currentMemberIds.length;
-                }
-
-                // DISCORD SYNC: Update Discord permissions
-                try {
-                    // Update owner permissions
-                    await channel.permissionOverwrites.edit(tc.ownerId, {
-                        ViewChannel: true, Connect: true, Speak: true, Stream: true,
-                        SendMessages: true, EmbedLinks: true, AttachFiles: true,
-                        MuteMembers: true, DeafenMembers: true, MoveMembers: true, ManageChannels: true,
-                    });
-
-                    // Update all current member permissions
-                    for (const memberId of currentMemberIds) {
-                        await channel.permissionOverwrites.edit(memberId, {
-                            ViewChannel: true, Connect: true,
-                            SendMessages: true, EmbedLinks: true, AttachFiles: true,
-                        });
+                const ownerInChannel = channel.members.has(tc.ownerId);
+                
+                if (!ownerInChannel) {
+                    // Owner not in channel - need to transfer or delete
+                    if (channel.members.size === 0) {
+                        // Channel is empty - delete it
+                        try {
+                            await channel.delete('Refresh: Empty team channel cleanup');
+                            await prisma.teamVoiceChannel.delete({ where: { channelId: tc.channelId } }).catch(() => {});
+                            channelsDeleted++;
+                        } catch { }
+                    } else {
+                        // Channel has members - transfer to next person (first non-bot member)
+                        const nextOwner = channel.members.find(m => !m.user.bot);
+                        if (nextOwner) {
+                            // Transfer ownership
+                            transferTeamOwnership(tc.channelId, nextOwner.id);
+                            
+                            // Update database
+                            await prisma.teamVoiceChannel.update({
+                                where: { channelId: tc.channelId },
+                                data: { ownerId: nextOwner.id },
+                            });
+                            
+                            // Update Discord permissions - give new owner full perms
+                            await channel.permissionOverwrites.edit(nextOwner.id, {
+                                ViewChannel: true, Connect: true, Speak: true, Stream: true,
+                                SendMessages: true, EmbedLinks: true, AttachFiles: true,
+                                MuteMembers: true, DeafenMembers: true, MoveMembers: true, ManageChannels: true,
+                            }).catch(() => {});
+                            
+                            // Rename channel to new owner with team type
+                            const teamTypeName = tc.teamType.charAt(0) + tc.teamType.slice(1).toLowerCase();
+                            await channel.setName(`${nextOwner.displayName}'s ${teamTypeName}`).catch(() => {});
+                            
+                            // Re-register with new owner
+                            registerTeamChannel(tc.channelId, tc.guildId, nextOwner.id, tc.teamType.toLowerCase() as 'duo' | 'trio' | 'squad');
+                            
+                            // Rebuild join order for this channel
+                            const membersInOrder = Array.from(channel.members.values())
+                                .filter(m => !m.user.bot && m.id !== nextOwner.id);
+                            for (const member of membersInOrder) {
+                                addUserToJoinOrder(tc.channelId, member.id);
+                            }
+                            
+                            // Send notification
+                            try {
+                                const embed = new EmbedBuilder()
+                                    .setColor(0x9B59B6)
+                                    .setTitle('🔄 Ownership Transferred (Refresh)')
+                                    .setDescription(`<@${nextOwner.id}> is now the owner of this team channel!\n\n*Previous owner was not present.*`)
+                                    .setTimestamp();
+                                await channel.send({ embeds: [embed] });
+                            } catch { }
+                            
+                            await logAction({
+                                action: LogAction.CHANNEL_TRANSFERRED,
+                                guild: guild,
+                                user: nextOwner.user,
+                                channelName: channel.name,
+                                channelId: tc.channelId,
+                                details: `Team ownership transferred during refresh (previous owner not present)`,
+                                isTeamChannel: true,
+                                teamType: tc.teamType.toLowerCase(),
+                            });
+                            
+                            ownershipTransfers++;
+                        }
                     }
-                } catch { }
+                } else {
+                    // Owner is in channel - rebuild join order based on current members
+                    const membersInOrder = Array.from(channel.members.values())
+                        .filter(m => !m.user.bot && m.id !== tc.ownerId);
+                    for (const member of membersInOrder) {
+                        addUserToJoinOrder(tc.channelId, member.id);
+                    }
+                }
             }
         }
     }
 
-    const interfaceTextChannel = guild.channels.cache.get(freshSettings?.interfaceTextId || settings.interfaceTextId);
+    // PERMISSION SYNC: Update permissions to match current VC members
+    // Re-fetch from DB to get updated owners after transfers
+    const updatedPvcs = await prisma.privateVoiceChannel.findMany({
+        where: { guildId: guild.id },
+    });
+    const updatedTeamChannels = await prisma.teamVoiceChannel.findMany({
+        where: { guildId: guild.id },
+    });
+    
+    let permsSynced = 0;
+    let teamPermsSynced = 0;
+    
+    for (const pvc of updatedPvcs) {
+        const channel = guild.channels.cache.get(pvc.channelId);
+        if (channel && channel.type === ChannelType.GuildVoice) {
+            // Get current members in the VC (excluding the owner)
+            const currentMemberIds = channel.members
+                .filter(m => m.id !== pvc.ownerId && !m.user.bot)
+                .map(m => m.id);
+
+            // Delete all old permissions for this channel
+            await prisma.voicePermission.deleteMany({
+                where: { channelId: pvc.channelId, permission: 'permit' },
+            });
+
+            // Invalidate cache so !l shows fresh data
+            invalidateChannelPermissions(pvc.channelId);
+
+            // Create permissions for current members only
+            if (currentMemberIds.length > 0) {
+                await prisma.voicePermission.createMany({
+                    data: currentMemberIds.map(userId => ({
+                        channelId: pvc.channelId,
+                        targetId: userId,
+                        targetType: 'user',
+                        permission: 'permit',
+                    })),
+                    skipDuplicates: true,
+                }).catch(() => { });
+                permsSynced += currentMemberIds.length;
+            }
+
+            // DISCORD SYNC: Update Discord permissions for owner and all current members
+            // Grant chat permissions (SendMessages, EmbedLinks, AttachFiles)
+            try {
+                // Update owner permissions
+                await channel.permissionOverwrites.edit(pvc.ownerId, {
+                    ViewChannel: true, Connect: true, Speak: true, Stream: true,
+                    SendMessages: true, EmbedLinks: true, AttachFiles: true,
+                    MuteMembers: true, DeafenMembers: true, MoveMembers: true, ManageChannels: true,
+                });
+
+                // Update all current member permissions
+                for (const memberId of currentMemberIds) {
+                    await channel.permissionOverwrites.edit(memberId, {
+                        ViewChannel: true, Connect: true,
+                        SendMessages: true, EmbedLinks: true, AttachFiles: true,
+                    });
+                }
+            } catch { }
+        }
+    }
+
+    // TEAM CHANNEL PERMISSION SYNC
+    for (const tc of updatedTeamChannels) {
+        const channel = guild.channels.cache.get(tc.channelId);
+        if (channel && channel.type === ChannelType.GuildVoice) {
+            // Get current members in the VC (excluding the owner)
+            const currentMemberIds = channel.members
+                .filter(m => m.id !== tc.ownerId && !m.user.bot)
+                .map(m => m.id);
+
+            // Delete all old permissions for this team channel
+            await prisma.teamVoicePermission.deleteMany({
+                where: { channelId: tc.channelId, permission: 'permit' },
+            });
+
+            // Invalidate cache
+            invalidateChannelPermissions(tc.channelId);
+
+            // Create permissions for current members only
+            if (currentMemberIds.length > 0) {
+                await prisma.teamVoicePermission.createMany({
+                    data: currentMemberIds.map(userId => ({
+                        channelId: tc.channelId,
+                        targetId: userId,
+                        targetType: 'user',
+                        permission: 'permit',
+                    })),
+                    skipDuplicates: true,
+                }).catch(() => { });
+                teamPermsSynced += currentMemberIds.length;
+            }
+
+            // DISCORD SYNC: Update Discord permissions
+            try {
+                // Update owner permissions
+                await channel.permissionOverwrites.edit(tc.ownerId, {
+                    ViewChannel: true, Connect: true, Speak: true, Stream: true,
+                    SendMessages: true, EmbedLinks: true, AttachFiles: true,
+                    MuteMembers: true, DeafenMembers: true, MoveMembers: true, ManageChannels: true,
+                });
+
+                // Update all current member permissions
+                for (const memberId of currentMemberIds) {
+                    await channel.permissionOverwrites.edit(memberId, {
+                        ViewChannel: true, Connect: true,
+                        SendMessages: true, EmbedLinks: true, AttachFiles: true,
+                    });
+                }
+            } catch { }
+        }
+    }
+
+    // Update all existing interface messages in active PVCs and Team channels (use updated owner IDs)
+    let interfacesUpdated = 0;
+    for (const pvc of updatedPvcs) {
+        const channel = guild.channels.cache.get(pvc.channelId);
+        if (channel && channel.type === ChannelType.GuildVoice) {
+            try {
+                const messages = await channel.messages.fetch({ limit: 10 });
+                const interfaceMsg = messages.find(m => m.author.id === interaction.client.user?.id && m.embeds.length > 0 && m.pinned);
+                if (interfaceMsg) {
+                    const imageBuffer = await generateInterfaceImage();
+                    const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
+                    const embed = generateVcInterfaceEmbed(guild, pvc.ownerId, 'interface.png');
+                    const components = createInterfaceComponents();
+                    await interfaceMsg.edit({ embeds: [embed], files: [attachment], components });
+                    interfacesUpdated++;
+                }
+            } catch { }
+        }
+    }
+    for (const tc of updatedTeamChannels) {
+        const channel = guild.channels.cache.get(tc.channelId);
+        if (channel && channel.type === ChannelType.GuildVoice) {
+            try {
+                const messages = await channel.messages.fetch({ limit: 10 });
+                const interfaceMsg = messages.find(m => m.author.id === interaction.client.user?.id && m.embeds.length > 0 && m.pinned);
+                if (interfaceMsg) {
+                    const imageBuffer = await generateInterfaceImage();
+                    const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
+                    const embed = generateVcInterfaceEmbed(guild, tc.ownerId, 'interface.png');
+                    embed.setTitle(`🎮 ${tc.teamType.charAt(0) + tc.teamType.slice(1).toLowerCase()} Controls`);
+                    const components = createInterfaceComponents();
+                    await interfaceMsg.edit({ embeds: [embed], files: [attachment], components });
+                    interfacesUpdated++;
+                }
+            } catch { }
+        }
+    }
+
+    const interfaceTextChannel = guild.channels.cache.get(freshSettings?.interfaceTextId || settings?.interfaceTextId || '');
     if (!interfaceTextChannel || interfaceTextChannel.type !== ChannelType.GuildText) {
+        // No main interface - still show success if we updated other things
+        if (interfacesUpdated > 0 || permsSynced > 0 || teamPermsSynced > 0 || ownershipTransfers > 0 || channelsDeleted > 0) {
+            let response = '✅ **PVC & Team System Refreshed**\n\n';
+            response += '**State Reloaded:**\n';
+            response += '• In-memory state resynced from DB\n';
+            if (ownershipTransfers > 0) response += `• Ownership transfers: ${ownershipTransfers}\n`;
+            if (channelsDeleted > 0) response += `• Empty channels deleted: ${channelsDeleted}\n`;
+            response += `• PVC permissions synced (${permsSynced} users)\n`;
+            response += `• Team permissions synced (${teamPermsSynced} users)\n`;
+            response += `• VC interfaces updated (${interfacesUpdated} channels)\n`;
+            if (pvcLogsChannel) response += `• PVC Logs: ${pvcLogsChannel}\n`;
+            if (teamLogsChannel) response += `• Team Logs: ${teamLogsChannel}\n`;
+            if (commandChannel) response += `• PVC Commands: ${commandChannel}\n`;
+            if (teamCommandChannel) response += `• Team Commands: ${teamCommandChannel}\n`;
+            response += '\n> Main interface text channel not found. Run `/pvc_setup` to recreate.';
+            await interaction.editReply(response);
+            return;
+        }
         await interaction.editReply('Interface text channel not found. Run `/pvc_setup` again.');
         return;
     }
@@ -358,18 +648,23 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             action: LogAction.PVC_REFRESHED,
             guild: guild,
             user: interaction.user,
-            details: `PVC setup refreshed${logsChannel ? `, logs: ${logsChannel}` : ''}${commandChannel ? `, commands: ${commandChannel}` : ''}`,
+            details: `System refreshed - Ownership transfers: ${ownershipTransfers}, Deleted: ${channelsDeleted}${pvcLogsChannel ? `, PVC logs: ${pvcLogsChannel}` : ''}${teamLogsChannel ? `, Team logs: ${teamLogsChannel}` : ''}${commandChannel ? `, PVC commands: ${commandChannel}` : ''}${teamCommandChannel ? `, Team commands: ${teamCommandChannel}` : ''}`,
         });
 
         let response = '✅ **PVC & Team System Refreshed**\n\n';
         response += '**State Reloaded:**\n';
-        response += '• Interface & buttons refreshed\n';
+        response += '• Main interface & buttons refreshed\n';
         response += '• In-memory state resynced from DB\n';
+        if (ownershipTransfers > 0) response += `• **Ownership transfers: ${ownershipTransfers}** (owners not in channel)\n`;
+        if (channelsDeleted > 0) response += `• **Empty channels deleted: ${channelsDeleted}**\n`;
         response += `• PVC permissions synced (${permsSynced} users)\n`;
         response += `• Team permissions synced (${teamPermsSynced} users)\n`;
-        if (logsChannel) response += `• Logs: ${logsChannel}\n`;
-        if (commandChannel) response += `• Commands: ${commandChannel}\n`;
-        response += '\n> Only current VC members retain access. All stale permissions cleared.';
+        response += `• VC interfaces updated (${interfacesUpdated} channels)\n`;
+        if (pvcLogsChannel) response += `• PVC Logs: ${pvcLogsChannel}\n`;
+        if (teamLogsChannel) response += `• Team Logs: ${teamLogsChannel}\n`;
+        if (commandChannel) response += `• PVC Commands: ${commandChannel}\n`;
+        if (teamCommandChannel) response += `• Team Commands: ${teamCommandChannel}\n`;
+        response += '\n> Ownership verified for all channels. Only current VC members retain access.';
 
         await interaction.editReply(response);
 
