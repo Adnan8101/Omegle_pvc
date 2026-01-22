@@ -17,7 +17,7 @@ import { generateInterfaceEmbed, generateInterfaceImage, generateVcInterfaceEmbe
 import { canRunAdminCommand, getOwnerPermissions } from '../utils/permissions';
 import { logAction, LogAction } from '../utils/logger';
 import { invalidateGuildSettings, clearAllCaches as invalidateAllCaches, invalidateChannelPermissions } from '../utils/cache';
-import { clearGuildState, registerInterfaceChannel, registerChannel, registerTeamChannel, transferOwnership, transferTeamOwnership, addUserToJoinOrder } from '../utils/voiceManager';
+import { clearGuildState, registerInterfaceChannel, registerChannel, registerTeamChannel, registerTeamInterfaceChannel, transferOwnership, transferTeamOwnership, addUserToJoinOrder, type TeamType } from '../utils/voiceManager';
 
 const MAIN_BUTTONS = [
     { id: 'pvc_lock' },
@@ -190,6 +190,41 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         const interfaceVc = guild.channels.cache.get(freshSettings.interfaceVcId);
         if (interfaceVc) {
             registerInterfaceChannel(guild.id, freshSettings.interfaceVcId);
+        }
+    }
+
+    // CRITICAL: Re-register team interface channels (Duo/Trio/Squad generators)
+    let teamInterfacesRegistered = 0;
+    if (freshTeamSettings) {
+        if (freshTeamSettings.duoVcId) {
+            const duoVc = guild.channels.cache.get(freshTeamSettings.duoVcId);
+            if (duoVc) {
+                registerTeamInterfaceChannel(guild.id, 'duo', freshTeamSettings.duoVcId);
+                teamInterfacesRegistered++;
+                console.log(`[Refresh] Registered duo interface: ${freshTeamSettings.duoVcId}`);
+            } else {
+                console.log(`[Refresh] Duo interface channel ${freshTeamSettings.duoVcId} not found in guild`);
+            }
+        }
+        if (freshTeamSettings.trioVcId) {
+            const trioVc = guild.channels.cache.get(freshTeamSettings.trioVcId);
+            if (trioVc) {
+                registerTeamInterfaceChannel(guild.id, 'trio', freshTeamSettings.trioVcId);
+                teamInterfacesRegistered++;
+                console.log(`[Refresh] Registered trio interface: ${freshTeamSettings.trioVcId}`);
+            } else {
+                console.log(`[Refresh] Trio interface channel ${freshTeamSettings.trioVcId} not found in guild`);
+            }
+        }
+        if (freshTeamSettings.squadVcId) {
+            const squadVc = guild.channels.cache.get(freshTeamSettings.squadVcId);
+            if (squadVc) {
+                registerTeamInterfaceChannel(guild.id, 'squad', freshTeamSettings.squadVcId);
+                teamInterfacesRegistered++;
+                console.log(`[Refresh] Registered squad interface: ${freshTeamSettings.squadVcId}`);
+            } else {
+                console.log(`[Refresh] Squad interface channel ${freshTeamSettings.squadVcId} not found in guild`);
+            }
         }
     }
 
@@ -527,12 +562,14 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
 
     // Update all existing interface messages in active PVCs and Team channels (use updated owner IDs)
     let interfacesUpdated = 0;
+    let interfacesSkipped = 0;
     for (const pvc of updatedPvcs) {
         const channel = guild.channels.cache.get(pvc.channelId);
         if (channel && channel.type === ChannelType.GuildVoice) {
             try {
-                const messages = await channel.messages.fetch({ limit: 10 });
-                const interfaceMsg = messages.find(m => m.author.id === interaction.client.user?.id && m.embeds.length > 0 && m.pinned);
+                const messages = await channel.messages.fetch({ limit: 20 });
+                // Find any bot message with embeds (pinned or not)
+                const interfaceMsg = messages.find(m => m.author.id === interaction.client.user?.id && m.embeds.length > 0);
                 if (interfaceMsg) {
                     const imageBuffer = await generateInterfaceImage();
                     const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
@@ -540,16 +577,21 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     const components = createInterfaceComponents();
                     await interfaceMsg.edit({ embeds: [embed], files: [attachment], components });
                     interfacesUpdated++;
+                } else {
+                    interfacesSkipped++;
                 }
-            } catch { }
+            } catch {
+                interfacesSkipped++;
+            }
         }
     }
     for (const tc of updatedTeamChannels) {
         const channel = guild.channels.cache.get(tc.channelId);
         if (channel && channel.type === ChannelType.GuildVoice) {
             try {
-                const messages = await channel.messages.fetch({ limit: 10 });
-                const interfaceMsg = messages.find(m => m.author.id === interaction.client.user?.id && m.embeds.length > 0 && m.pinned);
+                const messages = await channel.messages.fetch({ limit: 20 });
+                // Find any bot message with embeds (pinned or not)
+                const interfaceMsg = messages.find(m => m.author.id === interaction.client.user?.id && m.embeds.length > 0);
                 if (interfaceMsg) {
                     const imageBuffer = await generateInterfaceImage();
                     const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
@@ -558,8 +600,12 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     const components = createInterfaceComponents();
                     await interfaceMsg.edit({ embeds: [embed], files: [attachment], components });
                     interfacesUpdated++;
+                } else {
+                    interfacesSkipped++;
                 }
-            } catch { }
+            } catch {
+                interfacesSkipped++;
+            }
         }
     }
 
@@ -671,12 +717,19 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     if (channelsDeleted > 0) response += `• **Empty channels deleted: ${channelsDeleted}**\n`;
     response += `• PVC permissions synced (${permsSynced} users)\n`;
     response += `• Team permissions synced (${teamPermsSynced} users)\n`;
-    response += `• VC interfaces updated (${interfacesUpdated} channels)\n`;
+    if (interfacesUpdated > 0) {
+        response += `• **VC interfaces updated: ${interfacesUpdated}** (privacy button removed)\n`;
+    } else {
+        response += `• VC interfaces: 0 updated`;
+        if (interfacesSkipped > 0) response += ` (${interfacesSkipped} skipped - no interface found)`;
+        response += '\n';
+    }
+    if (teamInterfacesRegistered > 0) response += `• **Team interfaces (Duo/Trio/Squad): ${teamInterfacesRegistered} registered**\n`;
     if (pvcLogsChannel) response += `• PVC Logs: ${pvcLogsChannel}\n`;
     if (teamLogsChannel) response += `• Team Logs: ${teamLogsChannel}\n`;
     if (commandChannel) response += `• PVC Commands: ${commandChannel}\n`;
     if (teamCommandChannel) response += `• Team Commands: ${teamCommandChannel}\n`;
-    response += '\n> Ownership verified for all channels. Only current VC members retain access.';
+    response += '\n> Ownership verified. Team interfaces reloaded. Privacy button removed.';
 
     await interaction.editReply(response);
 }

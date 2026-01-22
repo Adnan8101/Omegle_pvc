@@ -19,6 +19,7 @@ import {
     isTeamInterfaceChannel,
     getTeamInterfaceType,
     registerTeamChannel,
+    registerTeamInterfaceChannel,
     unregisterTeamChannel,
     getTeamChannelState,
     getTeamChannelByOwner,
@@ -223,8 +224,37 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
     }
 
     // Check for team interface channels
-    const teamType = getTeamInterfaceType(channelId);
+    let teamType = getTeamInterfaceType(channelId);
     console.log(`[HandleJoin] Checking team interface for channel ${channelId}: ${teamType || 'NOT TEAM'}`);
+    
+    // FALLBACK: If not in memory, check DB (handles restart edge cases or mismatched data)
+    if (!teamType) {
+        const teamSettings = await prisma.teamVoiceSettings.findUnique({
+            where: { guildId: guild.id },
+        });
+        
+        if (teamSettings) {
+            console.log(`[HandleJoin] Checking DB team settings - duo: ${teamSettings.duoVcId}, trio: ${teamSettings.trioVcId}, squad: ${teamSettings.squadVcId}`);
+            
+            if (teamSettings.duoVcId === channelId) {
+                teamType = 'duo';
+                registerTeamInterfaceChannel(guild.id, 'duo', channelId);
+                console.log(`[HandleJoin] Found duo in DB, registered to memory`);
+            } else if (teamSettings.trioVcId === channelId) {
+                teamType = 'trio';
+                registerTeamInterfaceChannel(guild.id, 'trio', channelId);
+                console.log(`[HandleJoin] Found trio in DB, registered to memory`);
+            } else if (teamSettings.squadVcId === channelId) {
+                teamType = 'squad';
+                registerTeamInterfaceChannel(guild.id, 'squad', channelId);
+                console.log(`[HandleJoin] Found squad in DB, registered to memory`);
+            } else {
+                console.log(`[HandleJoin] Channel ${channelId} not matching any team interface in DB`);
+            }
+        } else {
+            console.log(`[HandleJoin] No team settings found in DB for guild ${guild.id}`);
+        }
+    }
     
     // IMPORTANT: Check if user is joining their OWN channel (PVC or team - not the interface)
     const ownedTeamChannel = getTeamChannelByOwner(guild.id, member.id);
