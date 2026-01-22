@@ -29,6 +29,10 @@ export enum LogAction {
     PVC_DELETED = 'PVC System Deleted',
     PVC_REFRESHED = 'PVC Interface Refreshed',
 
+    TEAM_SETUP = 'Team VC System Setup',
+    TEAM_CHANNEL_CREATED = 'Team Channel Created',
+    TEAM_CHANNEL_DELETED = 'Team Channel Deleted',
+
     SETTINGS_UPDATED = 'Settings Updated',
 }
 
@@ -66,6 +70,9 @@ const ACTION_COLORS: Record<LogAction, number> = {
     [LogAction.PVC_SETUP]: 0x00FF00,
     [LogAction.PVC_DELETED]: 0xFF0000,
     [LogAction.PVC_REFRESHED]: 0x3498DB,
+    [LogAction.TEAM_SETUP]: 0x00FF00,
+    [LogAction.TEAM_CHANNEL_CREATED]: 0x00FF00,
+    [LogAction.TEAM_CHANNEL_DELETED]: 0xFF0000,
     [LogAction.SETTINGS_UPDATED]: 0x3498DB,
 };
 

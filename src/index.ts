@@ -10,6 +10,7 @@ import { command as invite } from './commands/invite';
 import { command as refreshPvc } from './commands/refresh_pvc';
 import { command as deployCommands } from './commands/deploy_commands';
 import { command as permanentAccess } from './commands/permanent_access';
+import { command as teamSetup } from './commands/team_setup';
 import * as readyEvent from './events/ready';
 import * as voiceStateUpdateEvent from './events/voiceStateUpdate';
 import * as interactionCreateEvent from './events/interactionCreate';
@@ -28,6 +29,7 @@ client.commands.set(invite.data.name, invite);
 client.commands.set(refreshPvc.data.name, refreshPvc);
 client.commands.set(deployCommands.data.name, deployCommands);
 client.commands.set(permanentAccess.data.name, permanentAccess);
+client.commands.set(teamSetup.data.name, teamSetup);
 
 client.once(readyEvent.name, () => {
     readyEvent.execute(client);

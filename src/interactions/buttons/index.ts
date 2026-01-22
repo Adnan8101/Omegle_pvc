@@ -13,7 +13,7 @@ import {
     ButtonBuilder,
     ButtonStyle,
 } from 'discord.js';
-import { getChannelByOwner, getChannelState, transferOwnership, unregisterChannel, getGuildChannels, addTempPermittedUsers } from '../../utils/voiceManager';
+import { getChannelByOwner, getChannelState, transferOwnership, unregisterChannel, getGuildChannels, addTempPermittedUsers, getTeamChannelByOwner, getTeamChannelState } from '../../utils/voiceManager';
 import { executeWithRateLimit, Priority } from '../../utils/rateLimit';
 import { safeEditPermissions, validateVoiceChannel } from '../../utils/discordApi';
 import prisma from '../../utils/database';
@@ -159,7 +159,14 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
         return;
     }
 
-    const ownedChannelId = getChannelByOwner(guild.id, userId);
+    // Check for PVC ownership first, then team channel ownership as fallback
+    let ownedChannelId = getChannelByOwner(guild.id, userId);
+    let isTeamChannel = false;
+    if (!ownedChannelId) {
+        ownedChannelId = getTeamChannelByOwner(guild.id, userId);
+        isTeamChannel = Boolean(ownedChannelId);
+    }
+
     if (!ownedChannelId) {
         await interaction.reply({
             content: 'You do not own a private voice channel.',
@@ -171,6 +178,16 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
     const channel = await validateVoiceChannel(guild, ownedChannelId);
     if (!channel) {
         await interaction.reply({ content: 'Your voice channel could not be found.', ephemeral: true });
+        return;
+    }
+
+    // Disable limit button for team channels (fixed limits)
+    if (customId === 'pvc_limit' && isTeamChannel) {
+        const teamState = getTeamChannelState(ownedChannelId);
+        await interaction.reply({
+            content: `User limit is fixed to **${channel.userLimit}** for ${teamState?.teamType || 'team'} channels.`,
+            ephemeral: true,
+        });
         return;
     }
 

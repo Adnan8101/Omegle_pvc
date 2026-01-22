@@ -190,4 +190,122 @@ export function clearGuildState(guildId: string): void {
 
     // Clear interface
     guildInterfaces.delete(guildId);
+
+    // Clear team interfaces
+    for (const key of teamInterfaces.keys()) {
+        if (key.startsWith(guildId + ':')) {
+            teamInterfaces.delete(key);
+        }
+    }
+
+    // Clear team channels
+    for (const [channelId, state] of teamChannelStates) {
+        if (state.guildId === guildId) {
+            teamChannelStates.delete(channelId);
+        }
+    }
+
+    // Clear team owner mappings
+    for (const key of teamOwnerToChannel.keys()) {
+        if (key.startsWith(guildId + ':')) {
+            teamOwnerToChannel.delete(key);
+        }
+    }
+}
+
+// ============================================
+// Team Voice Channel System
+// ============================================
+
+export type TeamType = 'duo' | 'trio' | 'squad';
+
+export const TEAM_USER_LIMITS: Record<TeamType, number> = {
+    duo: 2,
+    trio: 3,
+    squad: 4,
+};
+
+interface TeamChannelState {
+    channelId: string;
+    guildId: string;
+    ownerId: string;
+    teamType: TeamType;
+}
+
+const teamInterfaces = new Map<string, string>(); // key: guildId:type, value: channelId
+const teamChannelStates = new Map<string, TeamChannelState>();
+const teamOwnerToChannel = new Map<string, string>(); // key: guildId:ownerId, value: channelId
+
+export function registerTeamInterfaceChannel(guildId: string, type: TeamType, channelId: string): void {
+    teamInterfaces.set(`${guildId}:${type}`, channelId);
+}
+
+export function unregisterTeamInterfaceChannel(guildId: string, type: TeamType): void {
+    teamInterfaces.delete(`${guildId}:${type}`);
+}
+
+export function isTeamInterfaceChannel(channelId: string): boolean {
+    for (const interfaceId of teamInterfaces.values()) {
+        if (interfaceId === channelId) return true;
+    }
+    return false;
+}
+
+export function getTeamInterfaceType(channelId: string): TeamType | undefined {
+    for (const [key, interfaceId] of teamInterfaces) {
+        if (interfaceId === channelId) {
+            const type = key.split(':')[1] as TeamType;
+            return type;
+        }
+    }
+    return undefined;
+}
+
+export function registerTeamChannel(channelId: string, guildId: string, ownerId: string, teamType: TeamType): void {
+    const state: TeamChannelState = {
+        channelId,
+        guildId,
+        ownerId,
+        teamType,
+    };
+    teamChannelStates.set(channelId, state);
+    teamOwnerToChannel.set(`${guildId}:${ownerId}`, channelId);
+}
+
+export function unregisterTeamChannel(channelId: string): void {
+    const state = teamChannelStates.get(channelId);
+    if (state) {
+        teamOwnerToChannel.delete(`${state.guildId}:${state.ownerId}`);
+        teamChannelStates.delete(channelId);
+    }
+    joinOrder.delete(channelId);
+    tempPermittedUsers.delete(channelId);
+}
+
+export function getTeamChannelState(channelId: string): TeamChannelState | undefined {
+    return teamChannelStates.get(channelId);
+}
+
+export function getTeamChannelByOwner(guildId: string, ownerId: string): string | undefined {
+    return teamOwnerToChannel.get(`${guildId}:${ownerId}`);
+}
+
+export function isTeamChannelOwner(channelId: string, userId: string): boolean {
+    const state = teamChannelStates.get(channelId);
+    return state?.ownerId === userId;
+}
+
+export function transferTeamOwnership(channelId: string, newOwnerId: string): boolean {
+    const state = teamChannelStates.get(channelId);
+    if (!state) return false;
+
+    teamOwnerToChannel.delete(`${state.guildId}:${state.ownerId}`);
+    state.ownerId = newOwnerId;
+    teamOwnerToChannel.set(`${state.guildId}:${newOwnerId}`, channelId);
+
+    return true;
+}
+
+export function getGuildTeamChannels(guildId: string): TeamChannelState[] {
+    return Array.from(teamChannelStates.values()).filter(s => s.guildId === guildId);
 }

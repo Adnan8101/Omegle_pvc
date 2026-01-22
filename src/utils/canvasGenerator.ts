@@ -138,3 +138,68 @@ export function generateInterfaceEmbed(guild: Guild, imageName: string = 'interf
 
     return embed;
 }
+
+export function generateVcInterfaceEmbed(guild: Guild, ownerId: string, imageName: string = 'interface.png'): EmbedBuilder {
+    const embed = new EmbedBuilder()
+        .setTitle('🎮 Channel Controls')
+        .setDescription(`<@${ownerId}>, use the buttons below to manage your voice channel.`)
+        .setColor(0x5865F2)
+        .setImage(`attachment://${imageName}`)
+        .setFooter({
+            text: 'Only the channel owner can use these controls',
+            iconURL: `https://cdn.discordapp.com/emojis/${BUTTON_EMOJI_MAP.settings.id}.png`
+        });
+
+    return embed;
+}
+
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+
+const MAIN_BUTTONS = [
+    { id: 'pvc_lock' },
+    { id: 'pvc_unlock' },
+    { id: 'pvc_privacy' },
+    { id: 'pvc_add_user' },
+    { id: 'pvc_remove_user' },
+    { id: 'pvc_limit' },
+    { id: 'pvc_name' },
+    { id: 'pvc_kick' },
+    { id: 'pvc_region' },
+    { id: 'pvc_block' },
+    { id: 'pvc_unblock' },
+    { id: 'pvc_claim' },
+    { id: 'pvc_transfer' },
+    { id: 'pvc_delete' },
+    { id: 'pvc_chat' },
+    { id: 'pvc_info' },
+] as const;
+
+export function createInterfaceComponents(): ActionRowBuilder<ButtonBuilder>[] {
+    const row1 = new ActionRowBuilder<ButtonBuilder>();
+    const row2 = new ActionRowBuilder<ButtonBuilder>();
+    const row3 = new ActionRowBuilder<ButtonBuilder>();
+    const row4 = new ActionRowBuilder<ButtonBuilder>();
+
+    MAIN_BUTTONS.forEach((btn, index) => {
+        const emojiData = BUTTON_EMOJI_MAP[btn.id];
+        const button = new ButtonBuilder()
+            .setCustomId(btn.id)
+            .setStyle(ButtonStyle.Secondary);
+
+        if (emojiData) {
+            button.setEmoji({ id: emojiData.id, name: emojiData.name });
+        }
+
+        if (index < 4) {
+            row1.addComponents(button);
+        } else if (index < 8) {
+            row2.addComponents(button);
+        } else if (index < 12) {
+            row3.addComponents(button);
+        } else {
+            row4.addComponents(button);
+        }
+    });
+
+    return [row1, row2, row3, row4];
+}

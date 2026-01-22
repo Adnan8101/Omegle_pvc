@@ -1,4 +1,4 @@
-import { ChannelType, Events, type VoiceState, EmbedBuilder, AuditLogEvent } from 'discord.js';
+import { ChannelType, Events, type VoiceState, EmbedBuilder, AuditLogEvent, AttachmentBuilder } from 'discord.js';
 import type { PVCClient } from '../client';
 import prisma from '../utils/database';
 import {
@@ -16,6 +16,15 @@ import {
     hasTempPermission,
     unregisterInterfaceChannel,
     registerInterfaceChannel,
+    isTeamInterfaceChannel,
+    getTeamInterfaceType,
+    registerTeamChannel,
+    unregisterTeamChannel,
+    getTeamChannelState,
+    getTeamChannelByOwner,
+    transferTeamOwnership,
+    TEAM_USER_LIMITS,
+    type TeamType,
 } from '../utils/voiceManager';
 import { getOwnerPermissions } from '../utils/permissions';
 import { executeWithRateLimit, executeParallel, Priority, fireAndForget } from '../utils/rateLimit';
@@ -27,6 +36,7 @@ import {
     batchUpsertPermissions,
 } from '../utils/cache';
 import { logAction, LogAction } from '../utils/logger';
+import { generateVcInterfaceEmbed, generateInterfaceImage, createInterfaceComponents } from '../utils/canvasGenerator';
 
 export const name = Events.VoiceStateUpdate;
 export const once = false;
@@ -167,6 +177,14 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
         return;
     }
 
+    // Check for team interface channels
+    const teamType = getTeamInterfaceType(channelId);
+    if (teamType) {
+        await createTeamChannel(client, state, teamType);
+        return;
+    }
+
+    // Check if joining an existing PVC
     const channelState = getChannelState(channelId);
     if (channelState) {
         const channel = guild.channels.cache.get(channelId);
@@ -183,6 +201,26 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
                 details: `${member.user.username} joined the voice channel`,
             });
         }
+        return;
+    }
+
+    // Check if joining an existing team channel
+    const teamChannelState = getTeamChannelState(channelId);
+    if (teamChannelState) {
+        const channel = guild.channels.cache.get(channelId);
+
+        addUserToJoinOrder(channelId, member.id);
+
+        if (channel) {
+            await logAction({
+                action: LogAction.USER_ADDED,
+                guild: guild,
+                user: member.user,
+                channelName: channel.name,
+                channelId: channelId,
+                details: `${member.user.username} joined the team channel`,
+            });
+        }
     }
 }
 
@@ -190,41 +228,82 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
     const { channelId, guild, member } = state;
     if (!channelId) return;
 
+    // Check for regular PVC
     const channelState = getChannelState(channelId);
-    if (!channelState) return;
-
-    if (member) {
-        removeUserFromJoinOrder(channelId, member.id);
-    }
-
-    if (member) {
-        const channel = guild.channels.cache.get(channelId);
-        if (channel) {
-            await logAction({
-                action: LogAction.USER_REMOVED,
-                guild: guild,
-                user: member.user,
-                channelName: channel.name,
-                channelId: channelId,
-                details: `${member.user.username} left the voice channel`,
-            });
+    if (channelState) {
+        if (member) {
+            removeUserFromJoinOrder(channelId, member.id);
         }
+
+        if (member) {
+            const channel = guild.channels.cache.get(channelId);
+            if (channel) {
+                await logAction({
+                    action: LogAction.USER_REMOVED,
+                    guild: guild,
+                    user: member.user,
+                    channelName: channel.name,
+                    channelId: channelId,
+                    details: `${member.user.username} left the voice channel`,
+                });
+            }
+        }
+
+        const channel = guild.channels.cache.get(channelId);
+        if (channel && channel.type === ChannelType.GuildVoice) {
+            if (channel.members.size === 0) {
+                await logAction({
+                    action: LogAction.CHANNEL_DELETED,
+                    guild: guild,
+                    channelName: channel.name,
+                    channelId: channelId,
+                    details: `Channel deleted (empty)`,
+                });
+
+                await deletePrivateChannel(channelId, guild.id);
+            } else if (member && member.id === channelState.ownerId) {
+                await transferChannelOwnership(client, channelId, guild, channel);
+            }
+        }
+        return;
     }
 
-    const channel = guild.channels.cache.get(channelId);
-    if (channel && channel.type === ChannelType.GuildVoice) {
-        if (channel.members.size === 0) {
-            await logAction({
-                action: LogAction.CHANNEL_DELETED,
-                guild: guild,
-                channelName: channel.name,
-                channelId: channelId,
-                details: `Channel deleted (empty)`,
-            });
+    // Check for team channel
+    const teamChannelState = getTeamChannelState(channelId);
+    if (teamChannelState) {
+        if (member) {
+            removeUserFromJoinOrder(channelId, member.id);
+        }
 
-            await deletePrivateChannel(channelId, guild.id);
-        } else if (member && member.id === channelState.ownerId) {
-            await transferChannelOwnership(client, channelId, guild, channel);
+        if (member) {
+            const channel = guild.channels.cache.get(channelId);
+            if (channel) {
+                await logAction({
+                    action: LogAction.USER_REMOVED,
+                    guild: guild,
+                    user: member.user,
+                    channelName: channel.name,
+                    channelId: channelId,
+                    details: `${member.user.username} left the team channel`,
+                });
+            }
+        }
+
+        const channel = guild.channels.cache.get(channelId);
+        if (channel && channel.type === ChannelType.GuildVoice) {
+            if (channel.members.size === 0) {
+                await logAction({
+                    action: LogAction.TEAM_CHANNEL_DELETED,
+                    guild: guild,
+                    channelName: channel.name,
+                    channelId: channelId,
+                    details: `Team channel deleted (empty)`,
+                });
+
+                await deleteTeamChannel(channelId, guild.id);
+            } else if (member && member.id === teamChannelState.ownerId) {
+                await transferTeamChannelOwnership(client, channelId, guild, channel);
+            }
         }
     }
 }
@@ -355,13 +434,21 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
             await freshMember.voice.setChannel(newChannel);
 
             try {
-                const welcomeEmbed = new EmbedBuilder()
-                    .setColor(0x5865F2)
-                    .setTitle('🎉 Welcome to Your PVC')
-                    .setDescription(`<@${member.id}>, your private voice channel has been created!`)
-                    .setTimestamp();
+                // Send the full interface canvas with buttons to VC text chat
+                const imageBuffer = await generateInterfaceImage();
+                const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
+                const embed = generateVcInterfaceEmbed(guild, member.id, 'interface.png');
+                const components = createInterfaceComponents();
 
-                await newChannel.send({ embeds: [welcomeEmbed] });
+                const interfaceMessage = await newChannel.send({
+                    content: `<@${member.id}>`,
+                    embeds: [embed],
+                    files: [attachment],
+                    components,
+                });
+
+                // Pin the interface message
+                await interfaceMessage.pin().catch(() => { });
             } catch { }
 
             await logAction({
@@ -525,6 +612,214 @@ async function deletePrivateChannel(channelId: string, guildId: string): Promise
         unregisterChannel(channelId);
         await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
     }
+}
+
+async function createTeamChannel(client: PVCClient, state: VoiceState, teamType: TeamType): Promise<void> {
+    const { guild, member, channel: interfaceChannel } = state;
+
+    if (!member || !interfaceChannel) return;
+
+    if (isOnCooldown(member.id, 'CREATE_CHANNEL')) {
+        try {
+            await member.voice.disconnect();
+        } catch { }
+        return;
+    }
+
+    // Check if user already owns a team channel
+    const existingChannel = getTeamChannelByOwner(guild.id, member.id);
+
+    if (existingChannel) {
+        const channel = guild.channels.cache.get(existingChannel);
+        if (channel && channel.type === ChannelType.GuildVoice) {
+            try {
+                const freshMember = await guild.members.fetch(member.id);
+                if (freshMember.voice.channelId) {
+                    await freshMember.voice.setChannel(channel);
+                }
+            } catch { }
+            return;
+        } else {
+            // Channel exists in memory but not in Discord - clean up stale data
+            unregisterTeamChannel(existingChannel);
+            await prisma.teamVoiceChannel.delete({
+                where: { channelId: existingChannel },
+            }).catch(() => { });
+        }
+    }
+
+    setCooldown(member.id, 'CREATE_CHANNEL');
+
+    try {
+        const userLimit = TEAM_USER_LIMITS[teamType];
+        const ownerPerms = getOwnerPermissions();
+
+        const newChannel = await executeWithRateLimit(
+            `create:${guild.id}`,
+            () => guild.channels.create({
+                name: `${member.displayName}'s ${teamType.charAt(0).toUpperCase() + teamType.slice(1)}`,
+                type: ChannelType.GuildVoice,
+                parent: interfaceChannel.parent,
+                userLimit: userLimit,
+                permissionOverwrites: [
+                    {
+                        id: member.id,
+                        allow: ownerPerms.allow,
+                        deny: ownerPerms.deny,
+                    },
+                ],
+            }),
+            Priority.IMMEDIATE
+        );
+
+        registerTeamChannel(newChannel.id, guild.id, member.id, teamType);
+
+        addUserToJoinOrder(newChannel.id, member.id);
+
+        await prisma.teamVoiceChannel.create({
+            data: {
+                channelId: newChannel.id,
+                guildId: guild.id,
+                ownerId: member.id,
+                teamType: teamType,
+                createdAt: new Date(),
+            },
+        });
+
+        const freshMember = await guild.members.fetch(member.id);
+        if (freshMember.voice.channelId) {
+            await freshMember.voice.setChannel(newChannel);
+
+            try {
+                // Send the full interface canvas with buttons to team VC text chat
+                const imageBuffer = await generateInterfaceImage();
+                const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
+                const embed = generateVcInterfaceEmbed(guild, member.id, 'interface.png');
+                embed.setTitle(`🎮 ${teamType.charAt(0).toUpperCase() + teamType.slice(1)} Controls`);
+                const components = createInterfaceComponents();
+
+                const interfaceMessage = await newChannel.send({
+                    content: `<@${member.id}> - **User Limit:** ${userLimit}`,
+                    embeds: [embed],
+                    files: [attachment],
+                    components,
+                });
+
+                // Pin the interface message
+                await interfaceMessage.pin().catch(() => { });
+            } catch { }
+
+            await logAction({
+                action: LogAction.TEAM_CHANNEL_CREATED,
+                guild: guild,
+                user: member.user,
+                channelName: newChannel.name,
+                channelId: newChannel.id,
+                details: `${teamType.charAt(0).toUpperCase() + teamType.slice(1)} channel created (limit: ${userLimit})`,
+            });
+        } else {
+            await newChannel.delete();
+            unregisterTeamChannel(newChannel.id);
+            await prisma.teamVoiceChannel.delete({ where: { channelId: newChannel.id } }).catch(() => { });
+            return;
+        }
+    } catch { }
+}
+
+async function deleteTeamChannel(channelId: string, guildId: string): Promise<void> {
+    try {
+        const { client } = await import('../client');
+        const guild = client.guilds.cache.get(guildId);
+        if (!guild) {
+            unregisterTeamChannel(channelId);
+            await prisma.teamVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+            return;
+        }
+
+        const channel = guild.channels.cache.get(channelId);
+
+        if (channel?.isVoiceBased()) {
+            try {
+                await executeWithRateLimit(`delete:${channelId}`, async () => {
+                    await channel.delete();
+                }, Priority.NORMAL);
+            } catch { }
+        }
+
+        unregisterTeamChannel(channelId);
+        await prisma.teamVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+
+    } catch {
+        unregisterTeamChannel(channelId);
+        await prisma.teamVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+    }
+}
+
+async function transferTeamChannelOwnership(
+    client: PVCClient,
+    channelId: string,
+    guild: any,
+    channel: any
+): Promise<void> {
+    try {
+        const nextUserId = getNextUserInOrder(channelId);
+        if (!nextUserId) {
+            return;
+        }
+
+        const newOwner = guild.members.cache.get(nextUserId);
+        if (!newOwner) {
+            return;
+        }
+
+        transferTeamOwnership(channelId, nextUserId);
+
+        await prisma.teamVoiceChannel.update({
+            where: { channelId },
+            data: { ownerId: nextUserId },
+        });
+
+        const ownerPerms = getOwnerPermissions();
+        await channel.permissionOverwrites.edit(nextUserId, {
+            ViewChannel: true,
+            Connect: true,
+            Speak: true,
+            Stream: true,
+            MuteMembers: true,
+            DeafenMembers: true,
+            MoveMembers: true,
+            ManageChannels: true,
+        });
+
+        try {
+            await executeWithRateLimit(
+                `rename:${channelId}`,
+                () => channel.setName(`${newOwner.displayName}'s Team`),
+                Priority.LOW
+            );
+        } catch { }
+
+        await logAction({
+            action: LogAction.CHANNEL_TRANSFERRED,
+            guild: guild,
+            user: newOwner.user,
+            channelName: channel.name,
+            channelId: channelId,
+            details: `Team channel ownership transferred to ${newOwner.user.username}`,
+        });
+
+        try {
+            const embed = new EmbedBuilder()
+                .setColor(0x9B59B6)
+                .setTitle('🔄 Ownership Transferred')
+                .setDescription(
+                    `<@${nextUserId}> is now the owner of this team channel!`
+                )
+                .setTimestamp();
+
+            await channel.send({ embeds: [embed] });
+        } catch { }
+    } catch { }
 }
 
 async function enforceAdminStrictness(

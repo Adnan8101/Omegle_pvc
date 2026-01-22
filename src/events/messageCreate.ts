@@ -2,7 +2,7 @@ import { Events, type Message, ChannelType, EmbedBuilder, ActionRowBuilder, Butt
 import { inspect } from 'util';
 import type { PVCClient } from '../client';
 import prisma from '../utils/database';
-import { getChannelByOwner } from '../utils/voiceManager';
+import { getChannelByOwner, getTeamChannelByOwner } from '../utils/voiceManager';
 import { getGuildSettings, batchUpsertPermissions, batchUpsertOwnerPermissions, batchDeleteOwnerPermissions, invalidateChannelPermissions, invalidateOwnerPermissions } from '../utils/cache';
 import { executeParallel, Priority } from '../utils/rateLimit';
 
@@ -79,7 +79,11 @@ export async function execute(client: PVCClient, message: Message): Promise<void
     const member = message.member;
     if (!member) return;
 
-    const ownedChannelId = getChannelByOwner(message.guild.id, member.id);
+    // Check for PVC ownership first, then team channel ownership as fallback
+    let ownedChannelId = getChannelByOwner(message.guild.id, member.id);
+    if (!ownedChannelId) {
+        ownedChannelId = getTeamChannelByOwner(message.guild.id, member.id);
+    }
 
     switch (commandName) {
         case 'adduser':

@@ -103,3 +103,51 @@ model PvcOwner {
 
   @@index([userId])
 }
+
+model TeamVoiceSettings {
+  id              String   @id @default(uuid())
+  guildId         String   @unique
+  categoryId      String?
+  duoVcId         String?
+  trioVcId        String?
+  squadVcId       String?
+  logsChannelId   String?
+  logsWebhookUrl  String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  teamChannels    TeamVoiceChannel[]
+
+  @@index([guildId])
+}
+
+model TeamVoiceChannel {
+  id          String   @id @default(uuid())
+  channelId   String   @unique
+  guildId     String
+  ownerId     String
+  teamType    String
+  createdAt   DateTime @default(now())
+
+  guild       TeamVoiceSettings @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
+  permissions TeamVoicePermission[]
+
+  @@index([guildId])
+  @@index([ownerId])
+  @@index([guildId, ownerId])
+}
+
+model TeamVoicePermission {
+  id         String   @id @default(uuid())
+  channelId  String
+  targetId   String
+  targetType String
+  permission String
+  createdAt  DateTime @default(now())
+
+  channel    TeamVoiceChannel @relation(fields: [channelId], references: [channelId], onDelete: Cascade)
+
+  @@unique([channelId, targetId])
+  @@index([channelId])
+  @@index([channelId, permission])
+}
