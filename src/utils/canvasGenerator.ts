@@ -59,9 +59,12 @@ export async function generateInterfaceImage(): Promise<Buffer> {
     const ctx = canvas.getContext('2d');
 
     // Draw buttons
-    for (let r = 0; r < 4; r++) {
-        for (let c = 0; c < 4; c++) {
-            const btn = BUTTON_LAYOUT[r][c];
+    for (let r = 0; r < BUTTON_LAYOUT.length; r++) {
+        const row = BUTTON_LAYOUT[r];
+        for (let c = 0; c < row.length; c++) {
+            const btn = row[c];
+            if (!btn) continue; // Skip if button doesn't exist
+            
             const x = startX + c * (buttonWidth + gap);
             const y = startY + r * (buttonHeight + gap);
 
