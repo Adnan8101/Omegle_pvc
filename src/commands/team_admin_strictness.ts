@@ -10,14 +10,14 @@ import { invalidateGuildSettings } from '../utils/cache';
 import { canToggleStrictness } from '../utils/permissions';
 
 const data = new SlashCommandBuilder()
-    .setName('admin_strictness')
-    .setDescription('Toggle admin strictness for private voice channels')
+    .setName('team_admin_strictness')
+    .setDescription('Toggle admin strictness for team voice channels (Duo/Trio/Squad)')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .setDMPermission(false)
     .addStringOption(option =>
         option
             .setName('mode')
-            .setDescription('Enable or disable admin strictness')
+            .setDescription('Enable or disable admin strictness for team channels')
             .setRequired(true)
             .addChoices(
                 { name: 'on', value: 'on' },
@@ -41,6 +41,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     const enabled = mode === 'on';
 
     try {
+        // Update the main guild settings - admin strictness applies to BOTH PVC and team channels
         await prisma.guildSettings.upsert({
             where: { guildId: interaction.guild.id },
             update: { adminStrictness: enabled },
@@ -54,12 +55,13 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
 
         await interaction.reply({
             content: `Admin strictness has been turned **${mode}**.${enabled
-                ? '\n\nAdministrators will now be disconnected from private channels they do not have access to.'
-                : '\n\nDefault Discord permission hierarchy will now apply.'
+                ? '\n\nAdministrators will now be disconnected from private channels they do not have access to.\n*This setting applies to both PVC and Team channels.*'
+                : '\n\nDefault Discord permission hierarchy will now apply.\n*This setting applies to both PVC and Team channels.*'
                 }`,
             flags: [MessageFlags.Ephemeral],
         });
-    } catch {
+    } catch (error) {
+        console.error('Team admin strictness error:', error);
         if (!interaction.replied && !interaction.deferred) {
             await interaction.reply({
                 content: 'Failed to update admin strictness setting.',

@@ -1,57 +1,119 @@
 import { type ModalSubmitInteraction, ChannelType, EmbedBuilder, TextChannel, MessageFlags } from 'discord.js';
-import { getChannelByOwner } from '../../utils/voiceManager';
+import { getChannelByOwner, getTeamChannelByOwner, getTeamChannelState, getChannelState } from '../../utils/voiceManager';
 import { safeSetChannelName, safeSetUserLimit, safeSetBitrate, validateVoiceChannel } from '../../utils/discordApi';
 import prisma from '../../utils/database';
 import { logAction, LogAction } from '../../utils/logger';
+import { isPvcPaused } from '../../utils/pauseManager';
 
 export async function handleModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
     const { customId, guild } = interaction;
     if (!guild) return;
 
+    // Check if PVC system is paused
+    if (isPvcPaused(guild.id) && customId.startsWith('pvc_')) {
+        const pauseEmbed = new EmbedBuilder()
+            .setColor(0xFF6B6B)
+            .setTitle('⏸️ PVC System Paused')
+            .setDescription(
+                'The Private Voice Channel system is currently paused.\n\n' +
+                'All interface controls are temporarily disabled.\n' +
+                'Please wait for an administrator to resume the system.'
+            )
+            .setTimestamp();
+
+        await interaction.reply({ embeds: [pauseEmbed], flags: [MessageFlags.Ephemeral] });
+        return;
+    }
+
     if (customId.startsWith('pvc_reject_reason_')) {
-        await interaction.reply({ content: 'Rejection via button is no longer supported. React to the message instead.', flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: 'Rejection via button is no longer supported. React to the message instead.', flags: [MessageFlags.Ephemeral] });
         return;
     }
 
     const userId = interaction.user.id;
-    const ownedChannelId = getChannelByOwner(guild.id, userId);
+    
+    // CRITICAL FIX: Get the channel where the modal was triggered from
+    const messageChannel = interaction.channel;
+    let targetChannelId: string | undefined;
+    let isTeamChannel = false;
+    
+    // The interface is in the voice channel's text chat
+    if (messageChannel && 'type' in messageChannel && messageChannel.type === ChannelType.GuildVoice) {
+        const pvcState = getChannelState(messageChannel.id);
+        const teamState = getTeamChannelState(messageChannel.id);
+        
+        if (pvcState && pvcState.ownerId === userId) {
+            targetChannelId = messageChannel.id;
+            isTeamChannel = false;
+        } else if (teamState && teamState.ownerId === userId) {
+            targetChannelId = messageChannel.id;
+            isTeamChannel = true;
+        }
+    }
+    
+    // Fallback: Check ownership if not triggered from within a VC
+    if (!targetChannelId) {
+        let ownedChannelId = getChannelByOwner(guild.id, userId);
+        if (!ownedChannelId) {
+            ownedChannelId = getTeamChannelByOwner(guild.id, userId);
+            isTeamChannel = Boolean(ownedChannelId);
+        } else {
+            isTeamChannel = false;
+        }
+        targetChannelId = ownedChannelId;
+    }
 
-    if (!ownedChannelId) {
-        await interaction.reply({ content: 'You do not own a private voice channel.', flags: MessageFlags.Ephemeral });
+    if (!targetChannelId) {
+        await interaction.reply({ content: 'You do not own a private or team voice channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
 
-    const channel = await validateVoiceChannel(guild, ownedChannelId);
+    const channel = await validateVoiceChannel(guild, targetChannelId);
     if (!channel) {
-        await interaction.reply({ content: 'Your voice channel could not be found.', flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: 'Your voice channel could not be found.', flags: [MessageFlags.Ephemeral] });
         return;
     }
 
     switch (customId) {
         case 'pvc_limit_modal':
-            await handleLimitModal(interaction, ownedChannelId);
+            await handleLimitModal(interaction, targetChannelId, isTeamChannel);
             break;
         case 'pvc_rename_modal':
-            await handleRenameModal(interaction, ownedChannelId);
+            await handleRenameModal(interaction, targetChannelId);
             break;
         case 'pvc_bitrate_modal':
-            await handleBitrateModal(interaction, ownedChannelId);
+            await handleBitrateModal(interaction, targetChannelId);
             break;
         default:
-            await interaction.reply({ content: 'Unknown modal.', flags: MessageFlags.Ephemeral });
+            await interaction.reply({ content: 'Unknown modal.', flags: [MessageFlags.Ephemeral] });
     }
 }
 
-async function handleLimitModal(interaction: ModalSubmitInteraction, channelId: string): Promise<void> {
+async function handleLimitModal(interaction: ModalSubmitInteraction, channelId: string, isTeamChannel: boolean = false): Promise<void> {
+    // Team channels have fixed limits
+    if (isTeamChannel) {
+        const channel = await validateVoiceChannel(interaction.guild!, channelId);
+        const settings = await prisma.guildSettings.findUnique({ where: { guildId: interaction.guild!.id } });
+        let message = `User limit is fixed to **${channel?.userLimit || 'default'}** for team channels.`;
+        if (settings?.interfaceVcId) {
+            message += `\n\nWant your own VC with unlimited space?\nCreate Private Voice Channel from <#${settings.interfaceVcId}>`;
+        }
+        await interaction.reply({ 
+            content: message, 
+            flags: [MessageFlags.Ephemeral] 
+        });
+        return;
+    }
+
     const input = interaction.fields.getTextInputValue('limit_input');
     const limit = parseInt(input, 10);
 
     if (isNaN(limit) || limit < 0 || limit > 99) {
-        await interaction.reply({ content: 'Please enter a valid number between 0 and 99.', flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: 'Please enter a valid number between 0 and 99.', flags: [MessageFlags.Ephemeral] });
         return;
     }
 
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
     const result = await safeSetUserLimit(interaction.guild!, channelId, limit);
     if (!result.success) {
@@ -69,8 +131,13 @@ async function handleLimitModal(interaction: ModalSubmitInteraction, channelId: 
         details: limit === 0 ? 'User limit removed' : `User limit set to ${limit}`,
     });
 
+    const settings = await prisma.guildSettings.findUnique({ where: { guildId: interaction.guild!.id } });
+    let message = limit === 0 ? 'User limit has been removed.' : `User limit set to ${limit}.`;
+    if (settings?.interfaceVcId) {
+        message += `\n\nWant your own VC with unlimited space?\nCreate Private Voice Channel from <#${settings.interfaceVcId}>`;
+    }
     await interaction.editReply({
-        content: limit === 0 ? 'User limit has been removed.' : `User limit set to ${limit}.`,
+        content: message,
     });
 }
 
@@ -78,11 +145,11 @@ async function handleRenameModal(interaction: ModalSubmitInteraction, channelId:
     const newName = interaction.fields.getTextInputValue('rename_input').trim();
 
     if (!newName || newName.length > 100) {
-        await interaction.reply({ content: 'Please enter a valid channel name (1-100 characters).', flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: 'Please enter a valid channel name (1-100 characters).', flags: [MessageFlags.Ephemeral] });
         return;
     }
 
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
     const guild = interaction.guild!;
     const settings = await prisma.guildSettings.findUnique({ where: { guildId: guild.id } });
@@ -154,16 +221,18 @@ async function handleRenameModal(interaction: ModalSubmitInteraction, channelId:
     const embed = new EmbedBuilder()
         .setTitle('✏️ Rename Request')
         .setDescription(
-            `**User:** <@${interaction.user.id}>\n` +
             `**New Name:** ${newName}\n\n` +
-            (settings?.staffRoleId ? `You can ping any member having <@&${settings.staffRoleId}> for approval.\n\n` : '') +
+            (settings?.staffRoleId ? `Ping any <@&${settings.staffRoleId}> for approval.\n\n` : '') +
             `React with ✅ to approve this rename request.`
         )
         .setColor(0xFFAA00)
         .setFooter({ text: '⏱️ Expires in 15 minutes' })
         .setTimestamp();
 
-    const approvalMessage = await commandChannel.send({ embeds: [embed] });
+    const approvalMessage = await commandChannel.send({ 
+        content: `<@${interaction.user.id}> - **Pending Approval**`,
+        embeds: [embed] 
+    });
     await approvalMessage.react('✅');
 
     await prisma.pendingRenameRequest.create({
@@ -221,11 +290,11 @@ async function handleBitrateModal(interaction: ModalSubmitInteraction, channelId
     const maxBitrate = guild.premiumTier === 0 ? 96 : guild.premiumTier === 1 ? 128 : guild.premiumTier === 2 ? 256 : 384;
 
     if (isNaN(bitrate) || bitrate < 8 || bitrate > maxBitrate) {
-        await interaction.reply({ content: `Please enter a valid bitrate between 8 and ${maxBitrate} kbps.`, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: `Please enter a valid bitrate between 8 and ${maxBitrate} kbps.`, flags: [MessageFlags.Ephemeral] });
         return;
     }
 
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
     const result = await safeSetBitrate(guild, channelId, bitrate * 1000);
     if (!result.success) {

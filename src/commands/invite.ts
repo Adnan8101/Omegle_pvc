@@ -1,6 +1,7 @@
 import {
     SlashCommandBuilder,
     PermissionFlagsBits,
+    MessageFlags,
     EmbedBuilder,
     type ChatInputCommandInteraction,
 } from 'discord.js';
@@ -61,7 +62,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         .setFooter({ text: 'After adding, use /pvc_setup to configure the system' })
         .setTimestamp();
 
-    await interaction.reply({ embeds: [embed], ephemeral: true });
+    await interaction.reply({ embeds: [embed], flags: [MessageFlags.Ephemeral] });
 }
 
 export const command: Command = {

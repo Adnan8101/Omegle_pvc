@@ -2,6 +2,7 @@ import {
     SlashCommandBuilder,
     ChannelType,
     PermissionFlagsBits,
+    MessageFlags,
     type ChatInputCommandInteraction,
 } from 'discord.js';
 import prisma from '../utils/database';
@@ -24,13 +25,13 @@ const data = new SlashCommandBuilder()
 
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guild) {
-        await interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
+        await interaction.reply({ content: 'This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
         return;
     }
 
     // Check admin permissions
     if (!await canRunAdminCommand(interaction)) {
-        await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', ephemeral: true });
+        await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', flags: [MessageFlags.Ephemeral] });
         return;
     }
 
@@ -50,13 +51,15 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
 
         await interaction.reply({
             content: `Prefix commands (!au, !ru, !l) will now only work in ${channel}`,
-            ephemeral: true,
+            flags: [MessageFlags.Ephemeral],
         });
     } catch {
-        await interaction.reply({
-            content: 'Failed to set command channel.',
-            ephemeral: true,
-        });
+        if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({
+                content: 'Failed to set command channel.',
+                flags: [MessageFlags.Ephemeral],
+            }).catch(() => {});
+        }
     }
 }
 

@@ -5,6 +5,7 @@ import {
     ButtonBuilder,
     ButtonStyle,
     PermissionFlagsBits,
+    MessageFlags,
     type ChatInputCommandInteraction,
     AttachmentBuilder,
 } from 'discord.js';
@@ -64,12 +65,12 @@ const data = new SlashCommandBuilder()
 
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guild) {
-        await interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
+        await interaction.reply({ content: 'This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
         return;
     }
 
     if (!await canRunAdminCommand(interaction)) {
-        await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', ephemeral: true });
+        await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', flags: [MessageFlags.Ephemeral] });
         return;
     }
 
@@ -78,21 +79,21 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     const commandChannel = interaction.options.getChannel('command_channel', true);
 
     if (category.type !== ChannelType.GuildCategory) {
-        await interaction.reply({ content: 'Please select a valid category channel.', ephemeral: true });
+        await interaction.reply({ content: 'Please select a valid category channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
 
     if (logsChannel.type !== ChannelType.GuildText) {
-        await interaction.reply({ content: 'Logs channel must be a text channel.', ephemeral: true });
+        await interaction.reply({ content: 'Logs channel must be a text channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
 
     if (commandChannel.type !== ChannelType.GuildText) {
-        await interaction.reply({ content: 'Command channel must be a text channel.', ephemeral: true });
+        await interaction.reply({ content: 'Command channel must be a text channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
 
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
     try {
         const guild = interaction.guild;

@@ -44,6 +44,8 @@ interface LogData {
     channelId?: string;
     details?: string;
     targetUser?: User | GuildMember;
+    teamType?: string;  // duo, trio, squad
+    isTeamChannel?: boolean;
 }
 
 const ACTION_COLORS: Record<LogAction, number> = {
@@ -78,11 +80,32 @@ const ACTION_COLORS: Record<LogAction, number> = {
 
 export async function logAction(data: LogData): Promise<void> {
     try {
-        const settings = await prisma.guildSettings.findUnique({
-            where: { guildId: data.guild.id },
-        });
+        // Determine which logs to use based on channel type
+        let webhookUrl: string | null = null;
+        
+        if (data.isTeamChannel) {
+            // Use team logs if available, fallback to PVC logs
+            const teamSettings = await prisma.teamVoiceSettings.findUnique({
+                where: { guildId: data.guild.id },
+            });
+            webhookUrl = teamSettings?.logsWebhookUrl || null;
+            
+            // Fallback to PVC logs if team logs not configured
+            if (!webhookUrl) {
+                const pvcSettings = await prisma.guildSettings.findUnique({
+                    where: { guildId: data.guild.id },
+                });
+                webhookUrl = pvcSettings?.logsWebhookUrl || null;
+            }
+        } else {
+            // Use PVC logs for regular channels
+            const settings = await prisma.guildSettings.findUnique({
+                where: { guildId: data.guild.id },
+            });
+            webhookUrl = settings?.logsWebhookUrl || null;
+        }
 
-        if (!settings?.logsWebhookUrl) {
+        if (!webhookUrl) {
             return;
         }
 
@@ -96,6 +119,11 @@ export async function logAction(data: LogData): Promise<void> {
 
         if (data.channelName) {
             description += `${description ? '\n' : ''}**Channel:** ${data.channelName}`;
+        }
+        
+        // Add team type badge if present
+        if (data.teamType) {
+            description += `\n**Type:** ${data.teamType.toUpperCase()}`;
         }
 
         if (data.targetUser) {
@@ -115,13 +143,15 @@ export async function logAction(data: LogData): Promise<void> {
 
         const botUser = data.guild.client.user;
         const avatarURL = botUser?.displayAvatarURL() || undefined;
+        
+        const loggerName = data.isTeamChannel ? 'Team VC Logs' : 'PVC Logs';
 
-        await fetch(settings.logsWebhookUrl, {
+        await fetch(webhookUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 embeds: [embed.toJSON()],
-                username: 'PVC Logs',
+                username: loggerName,
                 avatar_url: avatarURL,
             }),
         });

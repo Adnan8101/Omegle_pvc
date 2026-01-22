@@ -1,6 +1,7 @@
 import {
     SlashCommandBuilder,
     type ChatInputCommandInteraction,
+    MessageFlags,
     EmbedBuilder,
 } from 'discord.js';
 import type { Command } from '../client';
@@ -24,7 +25,7 @@ export const command: Command = {
         if (!DEVELOPER_IDS.includes(interaction.user.id)) {
             await interaction.reply({
                 content: '🚫 This command is restricted to bot developers only.',
-                ephemeral: true,
+                flags: [MessageFlags.Ephemeral],
             });
             return;
         }
@@ -39,7 +40,7 @@ export const command: Command = {
         const user = interaction.user;
 
         try {
-            await interaction.deferReply({ ephemeral: true });
+            await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
             // Direct eval with async support
             let evaled = await eval(`(async () => { ${code} })()`);

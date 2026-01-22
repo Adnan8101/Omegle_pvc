@@ -1,6 +1,7 @@
 import {
     SlashCommandBuilder,
     type ChatInputCommandInteraction,
+    MessageFlags,
     EmbedBuilder,
 } from 'discord.js';
 import type { Command } from '../client';
@@ -15,11 +16,11 @@ const data = new SlashCommandBuilder()
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     // Only bot developer can use this command
     if (interaction.user.id !== BOT_DEVELOPER_ID) {
-        await interaction.reply({ content: '❌ This command is only available to the bot developer.', ephemeral: true });
+        await interaction.reply({ content: '❌ This command is only available to the bot developer.', flags: [MessageFlags.Ephemeral] });
         return;
     }
 
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
     try {
         const { REST, Routes } = await import('discord.js');

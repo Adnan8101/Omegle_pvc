@@ -1,7 +1,4 @@
-/**
- * Centralized TTL Cache System
- * High-performance in-memory caching to minimize DB calls
- */
+
 
 interface CacheEntry<T> {
     data: T;
@@ -214,6 +211,14 @@ export async function getWhitelist(guildId: string): Promise<CachedWhitelistEntr
 export function invalidateWhitelist(guildId: string): void {
     whitelistCache.delete(guildId);
 }
+
+// Cleanup expired entries automatically every 5 minutes
+setInterval(() => {
+    guildSettingsCache.cleanup();
+    channelPermissionsCache.cleanup();
+    ownerPermissionsCache.cleanup();
+    whitelistCache.cleanup();
+}, 5 * 60 * 1000); // Every 5 minutes
 
 export async function batchUpsertPermissions(
     channelId: string,

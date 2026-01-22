@@ -5,6 +5,7 @@ import {
     ButtonBuilder,
     ButtonStyle,
     PermissionFlagsBits,
+    MessageFlags,
     type ChatInputCommandInteraction,
     type Message,
     AttachmentBuilder,
@@ -15,7 +16,7 @@ import { generateInterfaceEmbed, generateInterfaceImage, BUTTON_EMOJI_MAP } from
 import { canRunAdminCommand } from '../utils/permissions';
 import { logAction, LogAction } from '../utils/logger';
 import { invalidateGuildSettings, clearAllCaches as invalidateAllCaches, invalidateChannelPermissions } from '../utils/cache';
-import { clearGuildState, registerInterfaceChannel, registerChannel } from '../utils/voiceManager';
+import { clearGuildState, registerInterfaceChannel, registerChannel, registerTeamChannel } from '../utils/voiceManager';
 
 const MAIN_BUTTONS = [
     { id: 'pvc_lock' },
@@ -38,7 +39,7 @@ const MAIN_BUTTONS = [
 
 const data = new SlashCommandBuilder()
     .setName('refresh_pvc')
-    .setDescription('Refresh the entire PVC setup (interface, logs webhook, command channel)')
+    .setDescription('Refresh PVC & Team setup (interface, logs, permissions sync)')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .setDMPermission(false)
     .addChannelOption(option =>
@@ -58,16 +59,16 @@ const data = new SlashCommandBuilder()
 
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guild) {
-        await interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
+        await interaction.reply({ content: 'This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
         return;
     }
 
     if (!await canRunAdminCommand(interaction)) {
-        await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', ephemeral: true });
+        await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', flags: [MessageFlags.Ephemeral] });
         return;
     }
 
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
     const guild = interaction.guild;
     const logsChannel = interaction.options.getChannel('logs_channel');
@@ -126,6 +127,11 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         include: { privateChannels: true },
     });
 
+    const freshTeamSettings = await prisma.teamVoiceSettings.findUnique({
+        where: { guildId: guild.id },
+        include: { teamChannels: true },
+    });
+
     if (freshSettings?.interfaceVcId) {
         const interfaceVc = guild.channels.cache.get(freshSettings.interfaceVcId);
         if (interfaceVc) {
@@ -156,8 +162,30 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
 
+    // Re-register all active team channels
+    if (freshTeamSettings?.teamChannels) {
+        const invalidTeamIds = [];
+
+        for (const tc of freshTeamSettings.teamChannels) {
+            const channel = guild.channels.cache.get(tc.channelId);
+            if (channel) {
+                registerTeamChannel(tc.channelId, tc.guildId, tc.ownerId, tc.teamType.toLowerCase() as 'duo' | 'trio' | 'squad');
+            } else {
+                invalidTeamIds.push(tc.channelId);
+            }
+        }
+
+        // Clean up stale team channels from DB
+        if (invalidTeamIds.length > 0) {
+            prisma.teamVoiceChannel.deleteMany({
+                where: { channelId: { in: invalidTeamIds } },
+            }).catch(() => { });
+        }
+    }
+
     // PERMISSION SYNC: Update permissions to match current VC members
     let permsSynced = 0;
+    let teamPermsSynced = 0;
     if (freshSettings?.privateChannels) {
         for (const pvc of freshSettings.privateChannels) {
             const channel = guild.channels.cache.get(pvc.channelId);
@@ -194,6 +222,59 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 try {
                     // Update owner permissions
                     await channel.permissionOverwrites.edit(pvc.ownerId, {
+                        ViewChannel: true, Connect: true, Speak: true, Stream: true,
+                        SendMessages: true, EmbedLinks: true, AttachFiles: true,
+                        MuteMembers: true, DeafenMembers: true, MoveMembers: true, ManageChannels: true,
+                    });
+
+                    // Update all current member permissions
+                    for (const memberId of currentMemberIds) {
+                        await channel.permissionOverwrites.edit(memberId, {
+                            ViewChannel: true, Connect: true,
+                            SendMessages: true, EmbedLinks: true, AttachFiles: true,
+                        });
+                    }
+                } catch { }
+            }
+        }
+    }
+
+    // TEAM CHANNEL PERMISSION SYNC
+    if (freshTeamSettings?.teamChannels) {
+        for (const tc of freshTeamSettings.teamChannels) {
+            const channel = guild.channels.cache.get(tc.channelId);
+            if (channel && channel.type === ChannelType.GuildVoice) {
+                // Get current members in the VC (excluding the owner)
+                const currentMemberIds = channel.members
+                    .filter(m => m.id !== tc.ownerId)
+                    .map(m => m.id);
+
+                // Delete all old permissions for this team channel
+                await prisma.teamVoicePermission.deleteMany({
+                    where: { channelId: tc.channelId, permission: 'permit' },
+                });
+
+                // Invalidate cache
+                invalidateChannelPermissions(tc.channelId);
+
+                // Create permissions for current members only
+                if (currentMemberIds.length > 0) {
+                    await prisma.teamVoicePermission.createMany({
+                        data: currentMemberIds.map(userId => ({
+                            channelId: tc.channelId,
+                            targetId: userId,
+                            targetType: 'user',
+                            permission: 'permit',
+                        })),
+                        skipDuplicates: true,
+                    }).catch(() => { });
+                    teamPermsSynced += currentMemberIds.length;
+                }
+
+                // DISCORD SYNC: Update Discord permissions
+                try {
+                    // Update owner permissions
+                    await channel.permissionOverwrites.edit(tc.ownerId, {
                         ViewChannel: true, Connect: true, Speak: true, Stream: true,
                         SendMessages: true, EmbedLinks: true, AttachFiles: true,
                         MuteMembers: true, DeafenMembers: true, MoveMembers: true, ManageChannels: true,
@@ -281,11 +362,12 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             details: `PVC setup refreshed${logsChannel ? `, logs: ${logsChannel}` : ''}${commandChannel ? `, commands: ${commandChannel}` : ''}`,
         });
 
-        let response = '✅ **PVC System Refreshed**\n\n';
+        let response = '✅ **PVC & Team System Refreshed**\n\n';
         response += '**State Reloaded:**\n';
         response += '• Interface & buttons refreshed\n';
         response += '• In-memory state resynced from DB\n';
-        response += `• Permissions synced (${permsSynced} users)\n`;
+        response += `• PVC permissions synced (${permsSynced} users)\n`;
+        response += `• Team permissions synced (${teamPermsSynced} users)\n`;
         if (logsChannel) response += `• Logs: ${logsChannel}\n`;
         if (commandChannel) response += `• Commands: ${commandChannel}\n`;
         response += '\n> Only current VC members retain access. All stale permissions cleared.';

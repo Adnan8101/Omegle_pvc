@@ -1,6 +1,7 @@
 import {
     SlashCommandBuilder,
     type ChatInputCommandInteraction,
+    MessageFlags,
     EmbedBuilder,
     PermissionFlagsBits,
 } from 'discord.js';
@@ -35,7 +36,7 @@ export const command: Command = {
 
     async execute(interaction: ChatInputCommandInteraction) {
         if (!interaction.guild) {
-            await interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
+            await interaction.reply({ content: 'This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
             return;
         }
 
@@ -43,13 +44,25 @@ export const command: Command = {
         const guildId = interaction.guild.id;
         const ownerId = interaction.user.id;
 
+        // Check if user owns a PVC or team channel
+        const pvcData = await prisma.privateVoiceChannel.findFirst({ where: { guildId, ownerId } });
+        const teamData = !pvcData ? await prisma.teamVoiceChannel.findFirst({ where: { guildId, ownerId } }) : null;
+        
+        if (!pvcData && !teamData) {
+            await interaction.reply({
+                content: 'You need to own a voice channel to manage permanent access.',
+                flags: [MessageFlags.Ephemeral],
+            });
+            return;
+        }
+
         if (subcommand === 'add') {
             const targetUser = interaction.options.getUser('user', true);
 
             if (targetUser.id === ownerId) {
                 await interaction.reply({
                     content: 'You cannot add yourself to your permanent access list.',
-                    ephemeral: true,
+                    flags: [MessageFlags.Ephemeral],
                 });
                 return;
             }
@@ -57,7 +70,7 @@ export const command: Command = {
             if (targetUser.bot) {
                 await interaction.reply({
                     content: 'You cannot add bots to your permanent access list.',
-                    ephemeral: true,
+                    flags: [MessageFlags.Ephemeral],
                 });
                 return;
             }
@@ -72,7 +85,7 @@ export const command: Command = {
             if (existing) {
                 await interaction.reply({
                     content: `${targetUser} already has permanent access.`,
-                    ephemeral: true,
+                    flags: [MessageFlags.Ephemeral],
                 });
                 return;
             }
@@ -99,7 +112,7 @@ export const command: Command = {
                 .setFooter({ text: 'Use /permanent_access remove to revoke' })
                 .setTimestamp();
 
-            await interaction.reply({ embeds: [embed], ephemeral: true });
+            await interaction.reply({ embeds: [embed], flags: [MessageFlags.Ephemeral] });
         } else if (subcommand === 'remove') {
             const targetUser = interaction.options.getUser('user', true);
 
@@ -112,7 +125,7 @@ export const command: Command = {
             if (deleted.count === 0) {
                 await interaction.reply({
                     content: `${targetUser} doesn't have permanent access.`,
-                    ephemeral: true,
+                    flags: [MessageFlags.Ephemeral],
                 });
                 return;
             }
@@ -124,7 +137,7 @@ export const command: Command = {
                 .setFooter({ text: 'They will not get auto-access to your new VCs' })
                 .setTimestamp();
 
-            await interaction.reply({ embeds: [embed], ephemeral: true });
+            await interaction.reply({ embeds: [embed], flags: [MessageFlags.Ephemeral] });
         } else if (subcommand === 'show') {
             const permissions = await prisma.ownerPermission.findMany({
                 where: { guildId, ownerId },
@@ -139,7 +152,7 @@ export const command: Command = {
                     .setFooter({ text: 'Use /permanent_access add @user to add someone' })
                     .setTimestamp();
 
-                await interaction.reply({ embeds: [embed], ephemeral: true });
+                await interaction.reply({ embeds: [embed], flags: [MessageFlags.Ephemeral] });
                 return;
             }
 
@@ -152,7 +165,7 @@ export const command: Command = {
                 .setFooter({ text: `${permissions.length} user(s) • /permanent_access add/remove` })
                 .setTimestamp();
 
-            await interaction.reply({ embeds: [embed], ephemeral: true });
+            await interaction.reply({ embeds: [embed], flags: [MessageFlags.Ephemeral] });
         }
     },
 };

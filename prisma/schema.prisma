@@ -121,12 +121,18 @@ model TeamVoiceSettings {
   @@index([guildId])
 }
 
+enum TeamType {
+  DUO
+  TRIO
+  SQUAD
+}
+
 model TeamVoiceChannel {
   id          String   @id @default(uuid())
   channelId   String   @unique
   guildId     String
   ownerId     String
-  teamType    String
+  teamType    TeamType
   createdAt   DateTime @default(now())
 
   guild       TeamVoiceSettings @relation(fields: [guildId], references: [guildId], onDelete: Cascade)

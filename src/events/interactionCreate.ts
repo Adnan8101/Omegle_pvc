@@ -43,11 +43,11 @@ async function safeReply(interaction: Interaction, content: string): Promise<voi
         if (!interaction.isRepliable()) return;
 
         if (interaction.replied) {
-            await interaction.followUp({ content, flags: MessageFlags.Ephemeral }).catch(() => { });
+            await interaction.followUp({ content, flags: [MessageFlags.Ephemeral] }).catch(() => { });
         } else if (interaction.deferred) {
             await interaction.editReply({ content }).catch(() => { });
         } else {
-            await interaction.reply({ content, flags: MessageFlags.Ephemeral }).catch(() => { });
+            await interaction.reply({ content, flags: [MessageFlags.Ephemeral] }).catch(() => { });
         }
     } catch { }
 }

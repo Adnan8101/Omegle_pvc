@@ -2,7 +2,9 @@ import {
     SlashCommandBuilder,
     ChannelType,
     PermissionFlagsBits,
+    MessageFlags,
     type ChatInputCommandInteraction,
+    EmbedBuilder,
 } from 'discord.js';
 import prisma from '../utils/database';
 import { registerTeamInterfaceChannel } from '../utils/voiceManager';
@@ -32,12 +34,12 @@ const data = new SlashCommandBuilder()
 
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guild) {
-        await interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
+        await interaction.reply({ content: 'This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
         return;
     }
 
     if (!await canRunAdminCommand(interaction)) {
-        await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', ephemeral: true });
+        await interaction.reply({ content: 'You need a role higher than the bot to use this command, or be the bot developer.', flags: [MessageFlags.Ephemeral] });
         return;
     }
 
@@ -45,16 +47,16 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     const logsChannel = interaction.options.getChannel('logs_channel', true);
 
     if (category.type !== ChannelType.GuildCategory) {
-        await interaction.reply({ content: 'Please select a valid category channel.', ephemeral: true });
+        await interaction.reply({ content: 'Please select a valid category channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
 
     if (logsChannel.type !== ChannelType.GuildText) {
-        await interaction.reply({ content: 'Logs channel must be a text channel.', ephemeral: true });
+        await interaction.reply({ content: 'Logs channel must be a text channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
 
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
     try {
         const guild = interaction.guild;
@@ -114,15 +116,40 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             details: `Team VC System set up with category: ${category.name}, logs: ${logsChannel}`,
         });
 
-        await interaction.editReply(
-            `✅ Team VC System set up successfully!\n\n` +
-            `**Category:** ${category.name}\n` +
-            `**Create Duo:** ${duoVc}\n` +
-            `**Create Trio:** ${trioVc}\n` +
-            `**Create Squad:** ${squadVc}\n` +
-            `**Logs Channel:** ${logsChannel}\n\n` +
-            `Users can now join these channels to create team voice channels.`
-        );
+        const embed = new EmbedBuilder()
+            .setColor(0x00FF00)
+            .setTitle('✅ Team Voice Channel System Setup Complete')
+            .setDescription('Users can now join the channels below to create team voice channels.')
+            .addFields(
+                {
+                    name: 'Category',
+                    value: `${category.name}`,
+                    inline: true,
+                },
+                {
+                    name: 'Logs Channel',
+                    value: `${logsChannel}`,
+                    inline: true,
+                },
+                {
+                    name: 'Create Duo (2 members)',
+                    value: `${duoVc}`,
+                    inline: true,
+                },
+                {
+                    name: 'Create Trio (3 members)',
+                    value: `${trioVc}`,
+                    inline: true,
+                },
+                {
+                    name: 'Create Squad (4 members)',
+                    value: `${squadVc}`,
+                    inline: true,
+                },
+            )
+            .setTimestamp();
+
+        await interaction.editReply({ embeds: [embed] });
     } catch (error) {
         await interaction.editReply('Failed to set up Team VC system. Check bot permissions.');
     }

@@ -10,12 +10,13 @@ import {
     EmbedBuilder,
     GuildMember,
 } from 'discord.js';
-import { getChannelByOwner, transferOwnership, unregisterChannel, getGuildChannels } from '../../utils/voiceManager';
+import { getChannelByOwner, getTeamChannelByOwner, transferOwnership, unregisterChannel, getGuildChannels, getChannelState, getTeamChannelState } from '../../utils/voiceManager';
 import { executeWithRateLimit, executeParallel, Priority } from '../../utils/rateLimit';
 import { transferChannelOwnership } from '../../utils/channelActions';
 import prisma from '../../utils/database';
 import { batchUpsertPermissions, invalidateWhitelist, batchUpsertOwnerPermissions, batchDeleteOwnerPermissions, getOwnerPermissions as getCachedOwnerPerms, invalidateChannelPermissions } from '../../utils/cache';
 import { logAction, LogAction } from '../../utils/logger';
+import { isPvcPaused } from '../../utils/pauseManager';
 
 export async function handleSelectMenuInteraction(
     interaction: AnySelectMenuInteraction
@@ -23,48 +24,96 @@ export async function handleSelectMenuInteraction(
     const { customId, guild } = interaction;
     if (!guild) return;
 
+    // Check if PVC system is paused (excluding admin delete which requires admin perms anyway)
+    if (isPvcPaused(guild.id) && customId.startsWith('pvc_') && customId !== 'pvc_admin_delete_select') {
+        const pauseEmbed = new EmbedBuilder()
+            .setColor(0xFF6B6B)
+            .setTitle('⏸️ PVC System Paused')
+            .setDescription(
+                'The Private Voice Channel system is currently paused.\n\n' +
+                'All interface controls are temporarily disabled.\n' +
+                'Please wait for an administrator to resume the system.'
+            )
+            .setTimestamp();
+
+        await interaction.reply({ embeds: [pauseEmbed], ephemeral: true });
+        return;
+    }
+
     const userId = interaction.user.id;
-    const ownedChannelId = getChannelByOwner(guild.id, userId);
+
+    // CRITICAL FIX: Get the channel where the select menu was triggered
+    // This ensures actions apply to the correct channel when user has multiple channels
+    const messageChannel = interaction.channel;
+    let targetChannelId: string | undefined;
+    let isTeamChannel = false;
+    
+    // The interface message is sent IN the voice channel's text chat
+    if (messageChannel && 'type' in messageChannel && messageChannel.type === ChannelType.GuildVoice) {
+        // Check if this voice channel is a PVC or team channel owned by user
+        const pvcState = getChannelState(messageChannel.id);
+        const teamState = getTeamChannelState(messageChannel.id);
+        
+        if (pvcState && pvcState.ownerId === userId) {
+            targetChannelId = messageChannel.id;
+            isTeamChannel = false;
+        } else if (teamState && teamState.ownerId === userId) {
+            targetChannelId = messageChannel.id;
+            isTeamChannel = true;
+        }
+    }
+    
+    // Fallback: If select wasn't triggered from within a VC, check ownership
+    if (!targetChannelId) {
+        let ownedChannelId = getChannelByOwner(guild.id, userId);
+        if (!ownedChannelId) {
+            ownedChannelId = getTeamChannelByOwner(guild.id, userId);
+            isTeamChannel = Boolean(ownedChannelId);
+        } else {
+            isTeamChannel = false;
+        }
+        targetChannelId = ownedChannelId;
+    }
 
     if (customId === 'pvc_admin_delete_select') {
         await handleAdminDeleteSelect(interaction as StringSelectMenuInteraction);
         return;
     }
 
-    if (!ownedChannelId && customId !== 'pvc_transfer_select') {
+    if (!targetChannelId && customId !== 'pvc_transfer_select') {
         await interaction.reply({
-            content: 'You do not own a private voice channel.',
+            content: 'You do not own a private voice channel, or you must use the controls in your own channel.',
             ephemeral: true,
         });
         return;
     }
 
-    const channel = ownedChannelId ? guild.channels.cache.get(ownedChannelId) : null;
+    const channel = targetChannelId ? guild.channels.cache.get(targetChannelId) : null;
 
     switch (customId) {
         case 'pvc_add_user_select':
-            await handleAddUserSelect(interaction as UserSelectMenuInteraction, channel, userId);
+            await handleAddUserSelect(interaction as UserSelectMenuInteraction, channel, userId, isTeamChannel);
             break;
         case 'pvc_remove_user_select':
-            await handleRemoveUserSelect(interaction as UserSelectMenuInteraction, channel, userId);
+            await handleRemoveUserSelect(interaction as UserSelectMenuInteraction, channel, userId, isTeamChannel);
             break;
         case 'pvc_invite_select':
-            await handleInviteSelect(interaction as UserSelectMenuInteraction, channel, userId);
+            await handleInviteSelect(interaction as UserSelectMenuInteraction, channel, userId, isTeamChannel);
             break;
         case 'pvc_kick_select':
             await handleKickSelect(interaction as UserSelectMenuInteraction, channel, userId);
             break;
         case 'pvc_block_select':
-            await handleBlockSelect(interaction as UserSelectMenuInteraction, channel, userId);
+            await handleBlockSelect(interaction as UserSelectMenuInteraction, channel, userId, isTeamChannel);
             break;
         case 'pvc_unblock_select':
-            await handleUnblockSelect(interaction as UserSelectMenuInteraction, channel);
+            await handleUnblockSelect(interaction as UserSelectMenuInteraction, channel, isTeamChannel);
             break;
         case 'pvc_region_select':
             await handleRegionSelect(interaction as StringSelectMenuInteraction, channel);
             break;
         case 'pvc_transfer_select':
-            await handleTransferSelect(interaction as UserSelectMenuInteraction, ownedChannelId);
+            await handleTransferSelect(interaction as UserSelectMenuInteraction, targetChannelId, isTeamChannel);
             break;
         default:
             await interaction.reply({ content: 'Unknown selection.', ephemeral: true });
@@ -76,7 +125,8 @@ async function updateVoicePermissions(
     targets: Map<string, any>,
     type: 'user' | 'role',
     permission: 'permit' | 'ban',
-    permissionUpdates: any
+    permissionUpdates: any,
+    isTeamChannel: boolean = false
 ): Promise<void> {
     const targetIds = Array.from(targets.keys());
 
@@ -118,16 +168,36 @@ async function updateVoicePermissions(
         }
     }
 
-    await batchUpsertPermissions(
-        channel.id,
-        targetIds.map(id => ({ targetId: id, targetType: type, permission }))
-    );
+    // Use correct permission table based on channel type
+    if (isTeamChannel) {
+        for (const id of targetIds) {
+            await prisma.teamVoicePermission.upsert({
+                where: { channelId_targetId: { channelId: channel.id, targetId: id } },
+                create: {
+                    channelId: channel.id,
+                    targetId: id,
+                    targetType: type,
+                    permission: permission,
+                },
+                update: {
+                    permission: permission,
+                    targetType: type,
+                },
+            });
+        }
+    } else {
+        await batchUpsertPermissions(
+            channel.id,
+            targetIds.map(id => ({ targetId: id, targetType: type, permission }))
+        );
+    }
 }
 
 async function handleAddUserSelect(
     interaction: UserSelectMenuInteraction,
     channel: any,
-    ownerId: string
+    ownerId: string,
+    isTeamChannel: boolean = false
 ): Promise<void> {
     if (!channel || channel.type !== ChannelType.GuildVoice) {
         await interaction.reply({ content: 'Channel not found.', ephemeral: true });
@@ -141,15 +211,17 @@ async function handleAddUserSelect(
         return;
     }
 
-    await updateVoicePermissions(channel, users, 'user', 'permit', { ViewChannel: true, Connect: true, SendMessages: true, EmbedLinks: true, AttachFiles: true });
+    await updateVoicePermissions(channel, users, 'user', 'permit', { ViewChannel: true, Connect: true, SendMessages: true, EmbedLinks: true, AttachFiles: true }, isTeamChannel);
 
-    // Persistent History: Save to OwnerPermission using Cache Helper
+    // Persistent History: Save to OwnerPermission using Cache Helper (PVC only, not team channels)
     const targetIds = Array.from(users.keys());
-    await batchUpsertOwnerPermissions(
-        interaction.guild!.id,
-        ownerId,
-        targetIds.map(id => ({ targetId: id, targetType: 'user' }))
-    );
+    if (!isTeamChannel) {
+        await batchUpsertOwnerPermissions(
+            interaction.guild!.id,
+            ownerId,
+            targetIds.map(id => ({ targetId: id, targetType: 'user' }))
+        );
+    }
 
     await logAction({
         action: LogAction.USER_ADDED,
@@ -169,7 +241,8 @@ async function handleAddUserSelect(
 async function handleRemoveUserSelect(
     interaction: UserSelectMenuInteraction,
     channel: any,
-    ownerId: string
+    ownerId: string,
+    isTeamChannel: boolean = false
 ): Promise<void> {
     if (!channel || channel.type !== ChannelType.GuildVoice) {
         await interaction.reply({ content: 'Channel not found.', ephemeral: true });
@@ -192,19 +265,31 @@ async function handleRemoveUserSelect(
     }));
     await executeParallel(discordTasks);
 
-    await prisma.voicePermission.deleteMany({
-        where: {
-            channelId: channel.id,
-            targetId: { in: targetIds },
-        },
-    });
+    // Delete from correct permission table based on channel type
+    if (isTeamChannel) {
+        await prisma.teamVoicePermission.deleteMany({
+            where: {
+                channelId: channel.id,
+                targetId: { in: targetIds },
+            },
+        });
+    } else {
+        await prisma.voicePermission.deleteMany({
+            where: {
+                channelId: channel.id,
+                targetId: { in: targetIds },
+            },
+        });
+    }
 
-    // Persistent History: Remove from OwnerPermission using Cache Helper
-    await batchDeleteOwnerPermissions(
-        interaction.guild!.id,
-        ownerId,
-        targetIds
-    );
+    // Persistent History: Remove from OwnerPermission using Cache Helper (PVC only, not team channels)
+    if (!isTeamChannel) {
+        await batchDeleteOwnerPermissions(
+            interaction.guild!.id,
+            ownerId,
+            targetIds
+        );
+    }
 
     invalidateWhitelist(channel.id);
 
@@ -226,7 +311,8 @@ async function handleRemoveUserSelect(
 async function handleInviteSelect(
     interaction: UserSelectMenuInteraction,
     channel: any,
-    ownerId: string
+    ownerId: string,
+    isTeamChannel: boolean = false
 ): Promise<void> {
     if (!channel || channel.type !== ChannelType.GuildVoice) {
         await interaction.reply({ content: 'Channel not found.', ephemeral: true });
@@ -240,7 +326,7 @@ async function handleInviteSelect(
         return;
     }
 
-    await updateVoicePermissions(channel, users, 'user', 'permit', { ViewChannel: true, Connect: true, SendMessages: true, EmbedLinks: true, AttachFiles: true });
+    await updateVoicePermissions(channel, users, 'user', 'permit', { ViewChannel: true, Connect: true, SendMessages: true, EmbedLinks: true, AttachFiles: true }, isTeamChannel);
 
     for (const [, user] of users) {
         user.send(`<@${inviter.id}> is inviting you to join <#${channel.id}>`).catch(() => { });
@@ -289,7 +375,8 @@ async function handleKickSelect(
 async function handleBlockSelect(
     interaction: UserSelectMenuInteraction,
     channel: any,
-    ownerId: string
+    ownerId: string,
+    isTeamChannel: boolean = false
 ): Promise<void> {
     if (!channel || channel.type !== ChannelType.GuildVoice) {
         await interaction.reply({ content: 'Channel not found.', ephemeral: true });
@@ -303,7 +390,7 @@ async function handleBlockSelect(
         return;
     }
 
-    await updateVoicePermissions(channel, users, 'user', 'ban', { ViewChannel: false, Connect: false });
+    await updateVoicePermissions(channel, users, 'user', 'ban', { ViewChannel: false, Connect: false }, isTeamChannel);
 
     await logAction({
         action: LogAction.USER_BANNED,
@@ -322,7 +409,8 @@ async function handleBlockSelect(
 
 async function handleUnblockSelect(
     interaction: UserSelectMenuInteraction,
-    channel: any
+    channel: any,
+    isTeamChannel: boolean = false
 ): Promise<void> {
     if (!channel || channel.type !== ChannelType.GuildVoice) {
         await interaction.reply({ content: 'Channel not found.', ephemeral: true });
@@ -339,13 +427,24 @@ async function handleUnblockSelect(
     }));
     await executeParallel(discordTasks);
 
-    await prisma.voicePermission.deleteMany({
-        where: {
-            channelId: channel.id,
-            targetId: { in: targetIds },
-            permission: 'ban',
-        },
-    });
+    // Delete from correct permission table based on channel type
+    if (isTeamChannel) {
+        await prisma.teamVoicePermission.deleteMany({
+            where: {
+                channelId: channel.id,
+                targetId: { in: targetIds },
+                permission: 'ban',
+            },
+        });
+    } else {
+        await prisma.voicePermission.deleteMany({
+            where: {
+                channelId: channel.id,
+                targetId: { in: targetIds },
+                permission: 'ban',
+            },
+        });
+    }
 
     invalidateWhitelist(channel.id);
 
@@ -387,7 +486,8 @@ async function handleRegionSelect(
 
 async function handleTransferSelect(
     interaction: UserSelectMenuInteraction,
-    channelId: string | undefined
+    channelId: string | undefined,
+    isTeamChannel: boolean = false
 ): Promise<void> {
     if (!channelId) {
         await interaction.reply({ content: 'You do not own a private voice channel.', ephemeral: true });

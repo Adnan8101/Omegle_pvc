@@ -1,6 +1,7 @@
 import {
     SlashCommandBuilder,
     PermissionFlagsBits,
+    MessageFlags,
     EmbedBuilder,
     type ChatInputCommandInteraction,
 } from 'discord.js';
@@ -16,17 +17,17 @@ const data = new SlashCommandBuilder()
 
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guild) {
-        await interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
+        await interaction.reply({ content: 'This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
         return;
     }
 
     // Check admin permissions
     if (!await canRunAdminCommand(interaction)) {
-        await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', ephemeral: true });
+        await interaction.reply({ content: 'You need a role higher than the bot to use this command, or be the bot developer.', flags: [MessageFlags.Ephemeral] });
         return;
     }
 
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
     try {
         const guild = interaction.guild;
@@ -36,6 +37,14 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             where: { guildId: guild.id },
             include: {
                 privateChannels: true,
+            },
+        });
+
+        // Get team settings
+        const teamSettings = await prisma.teamVoiceSettings.findUnique({
+            where: { guildId: guild.id },
+            include: {
+                teamChannels: true,
             },
         });
 
@@ -77,10 +86,15 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     value: `${settings.privateChannels.length} channel(s)`,
                     inline: true,
                 },
+                {
+                    name: 'Active Team Channels',
+                    value: teamSettings ? `${teamSettings.teamChannels.length} channel(s)` : 'Team system not set up',
+                    inline: true,
+                },
             )
             .setTimestamp();
 
-        // List active channels if any
+        // List active PVC channels if any
         if (settings.privateChannels.length > 0) {
             const channelList = settings.privateChannels.slice(0, 10).map((pvc: { channelId: string; ownerId: string }) => {
                 const channel = guild.channels.cache.get(pvc.channelId);
@@ -89,7 +103,23 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }).join('\n');
 
             embed.addFields({
-                name: 'Active Channels (showing up to 10)',
+                name: 'Active PVC Channels (showing up to 10)',
+                value: channelList || 'None',
+                inline: false,
+            });
+        }
+
+        // List active team channels if any
+        if (teamSettings && teamSettings.teamChannels.length > 0) {
+            const channelList = teamSettings.teamChannels.slice(0, 10).map((tc: { channelId: string; ownerId: string; teamType: string }) => {
+                const channel = guild.channels.cache.get(tc.channelId);
+                const owner = guild.members.cache.get(tc.ownerId);
+                const typeEmoji = tc.teamType === 'DUO' ? '' : tc.teamType === 'TRIO' ? '' : '';
+                return `• ${channel ? channel.name : 'Unknown'} ${typeEmoji} - Owner: ${owner ? owner.displayName : tc.ownerId}`;
+            }).join('\n');
+
+            embed.addFields({
+                name: 'Active Team Channels (showing up to 10)',
                 value: channelList || 'None',
                 inline: false,
             });

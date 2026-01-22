@@ -2,6 +2,7 @@ import {
     SlashCommandBuilder,
     ChannelType,
     PermissionFlagsBits,
+    MessageFlags,
     type ChatInputCommandInteraction,
     GuildMember,
 } from 'discord.js';
@@ -51,7 +52,7 @@ export const command: Command = {
         if (!isDeveloper && !(hasAdminPerm && hasHigherRole)) {
             await interaction.reply({
                 content: '🚫 Access Denied. You must be a Bot Developer or an Administrator with a role higher than the bot.',
-                ephemeral: true,
+                flags: [MessageFlags.Ephemeral],
             });
             return;
         }
@@ -60,7 +61,7 @@ export const command: Command = {
         if (!channelState) {
             await interaction.reply({
                 content: '❌ This channel is not a registered Private Voice Channel.',
-                ephemeral: true,
+                flags: [MessageFlags.Ephemeral],
             });
             return;
         }
@@ -68,12 +69,12 @@ export const command: Command = {
         if (channelState.ownerId === newOwnerUser.id) {
             await interaction.reply({
                 content: '❌ That user is already the owner of this channel.',
-                ephemeral: true,
+                flags: [MessageFlags.Ephemeral],
             });
             return;
         }
 
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
         try {
             await transferChannelOwnership(
