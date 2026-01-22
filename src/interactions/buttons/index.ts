@@ -305,7 +305,6 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
         const buttonLabels: Record<string, string> = {
             pvc_lock: 'Lock',
             pvc_unlock: 'Unlock',
-            pvc_privacy: 'Privacy',
             pvc_add_user: 'Add User',
             pvc_remove_user: 'Remove User',
             pvc_limit: 'User Limit',
@@ -353,9 +352,6 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
             break;
         case 'pvc_unlock':
             await handleUnlock(interaction, channel);
-            break;
-        case 'pvc_privacy':
-            await handlePrivacy(interaction, channel);
             break;
         case 'pvc_add_user':
             await handleAddUser(interaction);
@@ -433,33 +429,6 @@ async function handleUnlock(interaction: ButtonInteraction, channel: any): Promi
         channelId: channel.id,
         details: 'Channel unlocked - users can now join',
     });
-}
-
-async function handlePrivacy(interaction: ButtonInteraction, channel: any): Promise<void> {
-    const everyonePerms = channel.permissionOverwrites.cache.get(interaction.guild!.id);
-    const isHidden = everyonePerms?.deny.has('ViewChannel') ?? false;
-
-    if (isHidden) {
-        await updateChannelPermission(interaction, channel, { ViewChannel: null }, '👁️ Your voice channel is now **visible**.');
-        await logAction({
-            action: LogAction.CHANNEL_UNHIDDEN,
-            guild: interaction.guild!,
-            user: interaction.user,
-            channelName: channel.name,
-            channelId: channel.id,
-            details: 'Channel made visible to members',
-        });
-    } else {
-        await updateChannelPermission(interaction, channel, { ViewChannel: false }, '🙈 Your voice channel is now **hidden**.');
-        await logAction({
-            action: LogAction.CHANNEL_HIDDEN,
-            guild: interaction.guild!,
-            user: interaction.user,
-            channelName: channel.name,
-            channelId: channel.id,
-            details: 'Channel hidden from members',
-        });
-    }
 }
 
 async function handleAddUser(interaction: ButtonInteraction): Promise<void> {

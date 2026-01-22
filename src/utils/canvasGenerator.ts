@@ -4,7 +4,6 @@ import { createCanvas, loadImage } from 'canvas';
 export const BUTTON_EMOJI_MAP: Record<string, { id: string; name: string }> = {
     pvc_lock: { id: '1462741158047514717', name: 'vc_locked' },
     pvc_unlock: { id: '1462741437798940703', name: 'vc' },
-    pvc_privacy: { id: '1463029462416232589', name: 'iHorizon_VC_Privacy' },
     pvc_add_user: { id: '1463028805005344901', name: 'invite' },
     pvc_remove_user: { id: '1463028427811590339', name: 'iHorizon_VC_Untrust' },
     pvc_limit: { id: '1463028040933183532', name: 'iHorizon_VC_Limit' },
@@ -25,23 +24,22 @@ const BUTTON_LAYOUT = [
     [
         { id: 'pvc_lock', label: 'LOCK' },
         { id: 'pvc_unlock', label: 'UNLOCK' },
-        { id: 'pvc_privacy', label: 'PRIVACY' },
-        { id: 'pvc_add_user', label: 'ADD USER' }
+        { id: 'pvc_add_user', label: 'ADD USER' },
+        { id: 'pvc_remove_user', label: 'REMOVE USER' }
     ],
     [
-        { id: 'pvc_remove_user', label: 'REMOVE USER' },
         { id: 'pvc_limit', label: 'LIMIT' },
         { id: 'pvc_name', label: 'NAME' },
-        { id: 'pvc_kick', label: 'KICK' }
+        { id: 'pvc_kick', label: 'KICK' },
+        { id: 'pvc_region', label: 'REGION' }
     ],
     [
-        { id: 'pvc_region', label: 'REGION' },
         { id: 'pvc_block', label: 'BLOCK' },
         { id: 'pvc_unblock', label: 'UNBLOCK' },
-        { id: 'pvc_claim', label: 'CLAIM' }
+        { id: 'pvc_claim', label: 'CLAIM' },
+        { id: 'pvc_transfer', label: 'TRANSFER' }
     ],
     [
-        { id: 'pvc_transfer', label: 'TRANSFER' },
         { id: 'pvc_delete', label: 'DELETE' },
         { id: 'pvc_chat', label: 'CHAT' },
         { id: 'pvc_info', label: 'INFO' }
@@ -158,7 +156,6 @@ import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 const MAIN_BUTTONS = [
     { id: 'pvc_lock' },
     { id: 'pvc_unlock' },
-    { id: 'pvc_privacy' },
     { id: 'pvc_add_user' },
     { id: 'pvc_remove_user' },
     { id: 'pvc_limit' },

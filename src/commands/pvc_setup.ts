@@ -20,7 +20,6 @@ import { logAction, LogAction } from '../utils/logger';
 const MAIN_BUTTONS = [
     { id: 'pvc_lock' },
     { id: 'pvc_unlock' },
-    { id: 'pvc_privacy' },
     { id: 'pvc_add_user' },
     { id: 'pvc_remove_user' },
     { id: 'pvc_limit' },

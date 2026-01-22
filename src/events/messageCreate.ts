@@ -59,6 +59,7 @@ export async function execute(client: PVCClient, message: Message): Promise<void
     }
 
     const settings = await getGuildSettings(message.guild.id);
+    const teamSettings = await prisma.teamVoiceSettings.findUnique({ where: { guildId: message.guild.id } });
 
     // Check if message is in a VC text chat that user owns
     // Voice channel text chat messages have the same channel.id as the voice channel
@@ -69,15 +70,26 @@ export async function execute(client: PVCClient, message: Message): Promise<void
     const isInOwnedVcChat = (pvcOwnership === message.channel.id) || (teamOwnership === message.channel.id);
     const vcChannelId = isInOwnedVcChat ? (pvcOwnership || teamOwnership) : undefined;
 
-    // Allow commands if: in command channel OR in owned VC text chat
-    const isInCommandChannel = settings?.commandChannelId && message.channel.id === settings.commandChannelId;
+    // Check if in PVC command channel or team command channel
+    const isInPvcCommandChannel = settings?.commandChannelId && message.channel.id === settings.commandChannelId;
+    const isInTeamCommandChannel = teamSettings?.commandChannelId && message.channel.id === teamSettings.commandChannelId;
+    const isInCommandChannel = isInPvcCommandChannel || isInTeamCommandChannel;
 
-    if (!isInCommandChannel && !isInOwnedVcChat) {
+    // Determine which system the user is trying to use based on ownership
+    const isPvcCommand = Boolean(pvcOwnership);
+    const isTeamCommand = Boolean(teamOwnership);
+
+    // For PVC commands: allow if in PVC command channel, team command channel (sync to all), or owned PVC chat
+    // For Team commands: allow if in team command channel or owned team chat
+    const allowedForPvc = isPvcCommand && (isInPvcCommandChannel || isInTeamCommandChannel || (vcChannelId === pvcOwnership));
+    const allowedForTeam = isTeamCommand && (isInTeamCommandChannel || (vcChannelId === teamOwnership));
+
+    if (!allowedForPvc && !allowedForTeam && !isInCommandChannel && !isInOwnedVcChat) {
         // If not in command channel or owned VC chat, check if trying to use commands
         if (message.content.startsWith('!au') || message.content.startsWith('!ru') || message.content.startsWith('!l')) {
-            if (!settings?.commandChannelId) {
+            if (!settings?.commandChannelId && !teamSettings?.commandChannelId) {
                 const embed = new EmbedBuilder()
-                    .setDescription('Command channel not set. Use `/pvc_command_channel` to set it.')
+                    .setDescription('Command channel not set. Use `/pvc_command_channel` or `/team_vc_command_channel` to set it.')
                     .setColor(0xFF0000);
                 await message.reply({ embeds: [embed] }).catch(() => { });
             }

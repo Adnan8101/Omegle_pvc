@@ -113,6 +113,7 @@ model TeamVoiceSettings {
   squadVcId       String?
   logsChannelId   String?
   logsWebhookUrl  String?
+  commandChannelId String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
