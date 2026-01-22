@@ -564,113 +564,121 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     }
 
     const interfaceTextChannel = guild.channels.cache.get(freshSettings?.interfaceTextId || settings?.interfaceTextId || '');
-    if (!interfaceTextChannel || interfaceTextChannel.type !== ChannelType.GuildText) {
-        // No main interface - still show success if we updated other things
-        if (interfacesUpdated > 0 || permsSynced > 0 || teamPermsSynced > 0 || ownershipTransfers > 0 || channelsDeleted > 0) {
-            let response = '✅ **PVC & Team System Refreshed**\n\n';
-            response += '**State Reloaded:**\n';
-            response += '• In-memory state resynced from DB\n';
-            if (ownershipTransfers > 0) response += `• Ownership transfers: ${ownershipTransfers}\n`;
-            if (channelsDeleted > 0) response += `• Empty channels deleted: ${channelsDeleted}\n`;
-            response += `• PVC permissions synced (${permsSynced} users)\n`;
-            response += `• Team permissions synced (${teamPermsSynced} users)\n`;
-            response += `• VC interfaces updated (${interfacesUpdated} channels)\n`;
-            if (pvcLogsChannel) response += `• PVC Logs: ${pvcLogsChannel}\n`;
-            if (teamLogsChannel) response += `• Team Logs: ${teamLogsChannel}\n`;
-            if (commandChannel) response += `• PVC Commands: ${commandChannel}\n`;
-            if (teamCommandChannel) response += `• Team Commands: ${teamCommandChannel}\n`;
-            response += '\n> Main interface text channel not found. Run `/pvc_setup` to recreate.';
-            await interaction.editReply(response);
-            return;
-        }
-        await interaction.editReply('Interface text channel not found. Run `/pvc_setup` again.');
-        return;
-    }
-
-    let oldMessage: Message | null = null;
-
-    try {
-        const messages = await interfaceTextChannel.messages.fetch({ limit: 10 });
-        const botMessage = messages.find(m => m.author.id === interaction.client.user?.id && m.embeds.length > 0);
-
-        if (botMessage) {
-            oldMessage = botMessage;
-        }
-
-        const row1 = new ActionRowBuilder<ButtonBuilder>();
-        const row2 = new ActionRowBuilder<ButtonBuilder>();
-        const row3 = new ActionRowBuilder<ButtonBuilder>();
-        const row4 = new ActionRowBuilder<ButtonBuilder>();
-
-        MAIN_BUTTONS.forEach((btn, index) => {
-            const emojiData = BUTTON_EMOJI_MAP[btn.id];
-            const button = new ButtonBuilder()
-                .setCustomId(btn.id)
-                .setStyle(ButtonStyle.Secondary);
-
-            if (emojiData) {
-                button.setEmoji({ id: emojiData.id, name: emojiData.name });
+    
+    let mainInterfaceUpdated = false;
+    
+    // Try to update main interface - skip if channel or message doesn't exist
+    if (interfaceTextChannel && interfaceTextChannel.type === ChannelType.GuildText) {
+        try {
+            let oldMessage: Message | null = null;
+            
+            try {
+                const messages = await interfaceTextChannel.messages.fetch({ limit: 10 });
+                const botMessage = messages.find(m => m.author.id === interaction.client.user?.id && m.embeds.length > 0);
+                if (botMessage) {
+                    oldMessage = botMessage;
+                }
+            } catch {
+                // Messages couldn't be fetched - skip
             }
 
-            if (index < 4) {
-                row1.addComponents(button);
-            } else if (index < 8) {
-                row2.addComponents(button);
-            } else if (index < 12) {
-                row3.addComponents(button);
+            const row1 = new ActionRowBuilder<ButtonBuilder>();
+            const row2 = new ActionRowBuilder<ButtonBuilder>();
+            const row3 = new ActionRowBuilder<ButtonBuilder>();
+            const row4 = new ActionRowBuilder<ButtonBuilder>();
+
+            MAIN_BUTTONS.forEach((btn, index) => {
+                const emojiData = BUTTON_EMOJI_MAP[btn.id];
+                const button = new ButtonBuilder()
+                    .setCustomId(btn.id)
+                    .setStyle(ButtonStyle.Secondary);
+
+                if (emojiData) {
+                    button.setEmoji({ id: emojiData.id, name: emojiData.name });
+                }
+
+                if (index < 4) {
+                    row1.addComponents(button);
+                } else if (index < 8) {
+                    row2.addComponents(button);
+                } else if (index < 12) {
+                    row3.addComponents(button);
+                } else {
+                    row4.addComponents(button);
+                }
+            });
+
+            const imageBuffer = await generateInterfaceImage();
+            const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
+            const embed = generateInterfaceEmbed(guild, 'interface.png');
+
+            const components = [row1, row2, row3, row4];
+
+            if (oldMessage) {
+                try {
+                    await oldMessage.edit({
+                        embeds: [embed],
+                        files: [attachment],
+                        components,
+                    });
+                    mainInterfaceUpdated = true;
+                } catch {
+                    // Message was deleted or can't be edited - try sending new one
+                    try {
+                        await interfaceTextChannel.send({
+                            embeds: [embed],
+                            files: [attachment],
+                            components,
+                        });
+                        mainInterfaceUpdated = true;
+                    } catch { }
+                }
             } else {
-                row4.addComponents(button);
+                try {
+                    await interfaceTextChannel.send({
+                        embeds: [embed],
+                        files: [attachment],
+                        components,
+                    });
+                    mainInterfaceUpdated = true;
+                } catch { }
             }
-        });
-
-        const imageBuffer = await generateInterfaceImage();
-        const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
-        const embed = generateInterfaceEmbed(guild, 'interface.png');
-
-        const components = [row1, row2, row3, row4];
-
-        if (oldMessage) {
-            await oldMessage.edit({
-                embeds: [embed],
-                files: [attachment],
-                components,
-            });
-        } else {
-            await interfaceTextChannel.send({
-                embeds: [embed],
-                files: [attachment],
-                components,
-            });
+        } catch {
+            // Interface update failed - continue with response
         }
-
-
-        await logAction({
-            action: LogAction.PVC_REFRESHED,
-            guild: guild,
-            user: interaction.user,
-            details: `System refreshed - Ownership transfers: ${ownershipTransfers}, Deleted: ${channelsDeleted}${pvcLogsChannel ? `, PVC logs: ${pvcLogsChannel}` : ''}${teamLogsChannel ? `, Team logs: ${teamLogsChannel}` : ''}${commandChannel ? `, PVC commands: ${commandChannel}` : ''}${teamCommandChannel ? `, Team commands: ${teamCommandChannel}` : ''}`,
-        });
-
-        let response = '✅ **PVC & Team System Refreshed**\n\n';
-        response += '**State Reloaded:**\n';
-        response += '• Main interface & buttons refreshed\n';
-        response += '• In-memory state resynced from DB\n';
-        if (ownershipTransfers > 0) response += `• **Ownership transfers: ${ownershipTransfers}** (owners not in channel)\n`;
-        if (channelsDeleted > 0) response += `• **Empty channels deleted: ${channelsDeleted}**\n`;
-        response += `• PVC permissions synced (${permsSynced} users)\n`;
-        response += `• Team permissions synced (${teamPermsSynced} users)\n`;
-        response += `• VC interfaces updated (${interfacesUpdated} channels)\n`;
-        if (pvcLogsChannel) response += `• PVC Logs: ${pvcLogsChannel}\n`;
-        if (teamLogsChannel) response += `• Team Logs: ${teamLogsChannel}\n`;
-        if (commandChannel) response += `• PVC Commands: ${commandChannel}\n`;
-        if (teamCommandChannel) response += `• Team Commands: ${teamCommandChannel}\n`;
-        response += '\n> Ownership verified for all channels. Only current VC members retain access.';
-
-        await interaction.editReply(response);
-
-    } catch {
-        await interaction.editReply('Failed to refresh PVC interface. No changes were made.');
     }
+
+    // Log action (non-blocking)
+    logAction({
+        action: LogAction.PVC_REFRESHED,
+        guild: guild,
+        user: interaction.user,
+        details: `System refreshed - Ownership transfers: ${ownershipTransfers}, Deleted: ${channelsDeleted}${pvcLogsChannel ? `, PVC logs: ${pvcLogsChannel}` : ''}${teamLogsChannel ? `, Team logs: ${teamLogsChannel}` : ''}${commandChannel ? `, PVC commands: ${commandChannel}` : ''}${teamCommandChannel ? `, Team commands: ${teamCommandChannel}` : ''}`,
+    }).catch(() => {});
+
+    // Build response
+    let response = '✅ **PVC & Team System Refreshed**\n\n';
+    response += '**State Reloaded:**\n';
+    if (mainInterfaceUpdated) {
+        response += '• Main interface & buttons refreshed\n';
+    } else if (interfaceTextChannel) {
+        response += '• Main interface: ⚠️ Could not update (message deleted?)\n';
+    } else {
+        response += '• Main interface: ⚠️ Channel not found\n';
+    }
+    response += '• In-memory state resynced from DB\n';
+    if (ownershipTransfers > 0) response += `• **Ownership transfers: ${ownershipTransfers}** (owners not in channel)\n`;
+    if (channelsDeleted > 0) response += `• **Empty channels deleted: ${channelsDeleted}**\n`;
+    response += `• PVC permissions synced (${permsSynced} users)\n`;
+    response += `• Team permissions synced (${teamPermsSynced} users)\n`;
+    response += `• VC interfaces updated (${interfacesUpdated} channels)\n`;
+    if (pvcLogsChannel) response += `• PVC Logs: ${pvcLogsChannel}\n`;
+    if (teamLogsChannel) response += `• Team Logs: ${teamLogsChannel}\n`;
+    if (commandChannel) response += `• PVC Commands: ${commandChannel}\n`;
+    if (teamCommandChannel) response += `• Team Commands: ${teamCommandChannel}\n`;
+    response += '\n> Ownership verified for all channels. Only current VC members retain access.';
+
+    await interaction.editReply(response);
 }
 
 export const command: Command = {
