@@ -563,36 +563,79 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     // Update all existing interface messages in active PVCs and Team channels (use updated owner IDs)
     let interfacesUpdated = 0;
     let interfacesSkipped = 0;
+    let interfaceErrors: string[] = [];
+    
+    console.log(`[Refresh] Updating interfaces for ${updatedPvcs.length} PVCs and ${updatedTeamChannels.length} Team channels`);
+    
     for (const pvc of updatedPvcs) {
         const channel = guild.channels.cache.get(pvc.channelId);
         if (channel && channel.type === ChannelType.GuildVoice) {
             try {
+                console.log(`[Refresh] Fetching messages from PVC: ${channel.name} (${pvc.channelId})`);
                 const messages = await channel.messages.fetch({ limit: 20 });
-                // Find any bot message with embeds (pinned or not)
-                const interfaceMsg = messages.find(m => m.author.id === interaction.client.user?.id && m.embeds.length > 0);
+                console.log(`[Refresh] Found ${messages.size} messages in ${channel.name}`);
+                
+                // Find any bot message with embeds or components (pinned or not)
+                const interfaceMsg = messages.find(m => 
+                    m.author.id === interaction.client.user?.id && 
+                    (m.embeds.length > 0 || m.components.length > 0)
+                );
+                
                 if (interfaceMsg) {
+                    console.log(`[Refresh] Found interface message: ${interfaceMsg.id}`);
                     const imageBuffer = await generateInterfaceImage();
                     const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
                     const embed = generateVcInterfaceEmbed(guild, pvc.ownerId, 'interface.png');
                     const components = createInterfaceComponents();
                     await interfaceMsg.edit({ embeds: [embed], files: [attachment], components });
                     interfacesUpdated++;
+                    console.log(`[Refresh] Updated interface for PVC: ${channel.name}`);
                 } else {
-                    interfacesSkipped++;
+                    console.log(`[Refresh] No interface found in PVC: ${channel.name}, sending new one`);
+                    // Send new interface if none exists
+                    try {
+                        const imageBuffer = await generateInterfaceImage();
+                        const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
+                        const embed = generateVcInterfaceEmbed(guild, pvc.ownerId, 'interface.png');
+                        const components = createInterfaceComponents();
+                        const newMsg = await channel.send({
+                            content: `<@${pvc.ownerId}>`,
+                            embeds: [embed],
+                            files: [attachment],
+                            components,
+                        });
+                        await newMsg.pin().catch(() => {});
+                        interfacesUpdated++;
+                        console.log(`[Refresh] Sent new interface for PVC: ${channel.name}`);
+                    } catch (sendErr) {
+                        console.log(`[Refresh] Failed to send interface to PVC: ${channel.name}`, sendErr);
+                        interfacesSkipped++;
+                    }
                 }
-            } catch {
+            } catch (err) {
+                console.log(`[Refresh] Error updating PVC interface: ${channel.name}`, err);
+                interfaceErrors.push(`PVC ${channel.name}: ${err}`);
                 interfacesSkipped++;
             }
         }
     }
+    
     for (const tc of updatedTeamChannels) {
         const channel = guild.channels.cache.get(tc.channelId);
         if (channel && channel.type === ChannelType.GuildVoice) {
             try {
+                console.log(`[Refresh] Fetching messages from Team: ${channel.name} (${tc.channelId})`);
                 const messages = await channel.messages.fetch({ limit: 20 });
-                // Find any bot message with embeds (pinned or not)
-                const interfaceMsg = messages.find(m => m.author.id === interaction.client.user?.id && m.embeds.length > 0);
+                console.log(`[Refresh] Found ${messages.size} messages in ${channel.name}`);
+                
+                // Find any bot message with embeds or components (pinned or not)
+                const interfaceMsg = messages.find(m => 
+                    m.author.id === interaction.client.user?.id && 
+                    (m.embeds.length > 0 || m.components.length > 0)
+                );
+                
                 if (interfaceMsg) {
+                    console.log(`[Refresh] Found interface message: ${interfaceMsg.id}`);
                     const imageBuffer = await generateInterfaceImage();
                     const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
                     const embed = generateVcInterfaceEmbed(guild, tc.ownerId, 'interface.png');
@@ -600,10 +643,35 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     const components = createInterfaceComponents();
                     await interfaceMsg.edit({ embeds: [embed], files: [attachment], components });
                     interfacesUpdated++;
+                    console.log(`[Refresh] Updated interface for Team: ${channel.name}`);
                 } else {
-                    interfacesSkipped++;
+                    console.log(`[Refresh] No interface found in Team: ${channel.name}, sending new one`);
+                    // Send new interface if none exists
+                    try {
+                        const teamTypeName = tc.teamType.charAt(0) + tc.teamType.slice(1).toLowerCase();
+                        const userLimit = tc.teamType === 'DUO' ? 2 : tc.teamType === 'TRIO' ? 3 : 4;
+                        const imageBuffer = await generateInterfaceImage();
+                        const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
+                        const embed = generateVcInterfaceEmbed(guild, tc.ownerId, 'interface.png');
+                        embed.setTitle(`🎮 ${teamTypeName} Controls`);
+                        const components = createInterfaceComponents();
+                        const newMsg = await channel.send({
+                            content: `<@${tc.ownerId}> - **User Limit:** ${userLimit}`,
+                            embeds: [embed],
+                            files: [attachment],
+                            components,
+                        });
+                        await newMsg.pin().catch(() => {});
+                        interfacesUpdated++;
+                        console.log(`[Refresh] Sent new interface for Team: ${channel.name}`);
+                    } catch (sendErr) {
+                        console.log(`[Refresh] Failed to send interface to Team: ${channel.name}`, sendErr);
+                        interfacesSkipped++;
+                    }
                 }
-            } catch {
+            } catch (err) {
+                console.log(`[Refresh] Error updating Team interface: ${channel.name}`, err);
+                interfaceErrors.push(`Team ${channel.name}: ${err}`);
                 interfacesSkipped++;
             }
         }
@@ -717,19 +785,16 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     if (channelsDeleted > 0) response += `• **Empty channels deleted: ${channelsDeleted}**\n`;
     response += `• PVC permissions synced (${permsSynced} users)\n`;
     response += `• Team permissions synced (${teamPermsSynced} users)\n`;
-    if (interfacesUpdated > 0) {
-        response += `• **VC interfaces updated: ${interfacesUpdated}** (privacy button removed)\n`;
-    } else {
-        response += `• VC interfaces: 0 updated`;
-        if (interfacesSkipped > 0) response += ` (${interfacesSkipped} skipped - no interface found)`;
-        response += '\n';
-    }
-    if (teamInterfacesRegistered > 0) response += `• **Team interfaces (Duo/Trio/Squad): ${teamInterfacesRegistered} registered**\n`;
+    response += `• **VC interfaces updated/sent: ${interfacesUpdated}**`;
+    if (interfacesSkipped > 0) response += ` (${interfacesSkipped} skipped)`;
+    response += '\n';
+    if (teamInterfacesRegistered > 0) response += `• **Team generators (Duo/Trio/Squad): ${teamInterfacesRegistered} registered**\n`;
     if (pvcLogsChannel) response += `• PVC Logs: ${pvcLogsChannel}\n`;
     if (teamLogsChannel) response += `• Team Logs: ${teamLogsChannel}\n`;
     if (commandChannel) response += `• PVC Commands: ${commandChannel}\n`;
     if (teamCommandChannel) response += `• Team Commands: ${teamCommandChannel}\n`;
-    response += '\n> Ownership verified. Team interfaces reloaded. Privacy button removed.';
+    response += `\n**Channels in memory:** ${updatedPvcs.length} PVC, ${updatedTeamChannels.length} Team\n`;
+    response += '> Privacy removed. MoveMembers removed. Caches cleared.';
 
     await interaction.editReply(response);
 }

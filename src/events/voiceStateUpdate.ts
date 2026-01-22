@@ -605,21 +605,27 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
 
             try {
                 // Send the full interface canvas with buttons to VC text chat
+                console.log(`[CreatePVC] Generating interface image...`);
                 const imageBuffer = await generateInterfaceImage();
                 const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
                 const embed = generateVcInterfaceEmbed(guild, member.id, 'interface.png');
                 const components = createInterfaceComponents();
 
+                console.log(`[CreatePVC] Sending interface to ${newChannel.name}...`);
                 const interfaceMessage = await newChannel.send({
                     content: `<@${member.id}>`,
                     embeds: [embed],
                     files: [attachment],
                     components,
                 });
+                console.log(`[CreatePVC] Interface sent, message ID: ${interfaceMessage.id}`);
 
                 // Pin the interface message
                 await interfaceMessage.pin().catch(() => { });
-            } catch { }
+                console.log(`[CreatePVC] Interface pinned`);
+            } catch (interfaceError) {
+                console.error(`[CreatePVC] Failed to send interface:`, interfaceError);
+            }
 
             await logAction({
                 action: LogAction.CHANNEL_CREATED,
@@ -997,22 +1003,28 @@ async function createTeamChannel(client: PVCClient, state: VoiceState, teamType:
 
             try {
                 // Send the full interface canvas with buttons to team VC text chat
+                console.log(`[CreateTeamChannel] Generating interface image...`);
                 const imageBuffer = await generateInterfaceImage();
                 const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
                 const embed = generateVcInterfaceEmbed(guild, member.id, 'interface.png');
                 embed.setTitle(`🎮 ${teamType.charAt(0).toUpperCase() + teamType.slice(1)} Controls`);
                 const components = createInterfaceComponents();
 
+                console.log(`[CreateTeamChannel] Sending interface to ${newChannel.name}...`);
                 const interfaceMessage = await newChannel.send({
                     content: `<@${member.id}> - **User Limit:** ${userLimit}`,
                     embeds: [embed],
                     files: [attachment],
                     components,
                 });
+                console.log(`[CreateTeamChannel] Interface sent, message ID: ${interfaceMessage.id}`);
 
                 // Pin the interface message
                 await interfaceMessage.pin().catch(() => { });
-            } catch { }
+                console.log(`[CreateTeamChannel] Interface pinned`);
+            } catch (interfaceError) {
+                console.error(`[CreateTeamChannel] Failed to send interface:`, interfaceError);
+            }
 
             await logAction({
                 action: LogAction.TEAM_CHANNEL_CREATED,
