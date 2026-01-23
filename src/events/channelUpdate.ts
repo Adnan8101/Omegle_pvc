@@ -63,17 +63,10 @@ export async function execute(
     const channelId = newChannel.id;
     const guildId = newChannel.guild.id;
 
-    console.log(`[ChannelUpdate] Channel ${channelId} updated in guild ${guildId}`);
-
     const pvcState = getChannelState(channelId);
     const teamState = getTeamChannelState(channelId);
 
-    if (!pvcState && !teamState) {
-        console.log(`[ChannelUpdate] Channel ${channelId} is not a PVC or Team channel, skipping`);
-        return;
-    }
-
-    console.log(`[ChannelUpdate] Channel is ${pvcState ? 'PVC' : 'Team'} channel, owner: ${pvcState?.ownerId || teamState?.ownerId}`);
+    if (!pvcState && !teamState) return;
 
     const isTeamChannel = Boolean(teamState);
     const ownerId = pvcState?.ownerId || teamState?.ownerId;
@@ -93,185 +86,173 @@ export async function execute(
     const oldLimit = oldVoice.userLimit;
     const newLimit = newVoice.userLimit;
 
-    console.log(`[ChannelUpdate] Old state - locked: ${oldLocked}, hidden: ${oldHidden}, limit: ${oldLimit}`);
-    console.log(`[ChannelUpdate] New state - locked: ${newLocked}, hidden: ${newHidden}, limit: ${newLimit}`);
-
     const limitIncreased = newLimit > oldLimit || (oldLimit > 0 && newLimit === 0);
     const wasUnlocked = oldLocked && !newLocked;
     const wasUnhidden = oldHidden && !newHidden;
 
-    console.log(`[ChannelUpdate] Changes detected - limitIncreased: ${limitIncreased}, wasUnlocked: ${wasUnlocked}, wasUnhidden: ${wasUnhidden}`);
-
     if (!limitIncreased && !wasUnlocked && !wasUnhidden) {
-        console.log(`[ChannelUpdate] No security-relevant changes detected, updating snapshot and returning`);
         updateChannelSnapshot(channelId, newChannel);
         return;
     }
 
+    // Check if this was a bot edit (instant check, no delay)
     const botEditTime = recentBotEdits.get(channelId);
     if (botEditTime && Date.now() - botEditTime < BOT_EDIT_WINDOW) {
-        console.log(`[ChannelUpdate] Recent bot edit detected, allowing change`);
         updateChannelSnapshot(channelId, newChannel);
         return;
     }
 
+    // INSTANT REVERT - Don't wait for audit logs, revert immediately
+    recordBotEdit(channelId);
+    const changes: string[] = [];
+    
+    const revertPromises: Promise<any>[] = [];
+    
+    if (wasUnlocked) {
+        revertPromises.push(
+            newVoice.permissionOverwrites.edit(newVoice.guild.id, { Connect: false })
+        );
+        changes.push('Unlock reverted');
+    }
+
+    if (wasUnhidden) {
+        revertPromises.push(
+            newVoice.permissionOverwrites.edit(newVoice.guild.id, { ViewChannel: false })
+        );
+        changes.push('Unhide reverted');
+    }
+
+    if (limitIncreased) {
+        revertPromises.push(newVoice.setUserLimit(oldLimit));
+        changes.push(`Limit reverted (${newLimit} → ${oldLimit})`);
+    }
+
+    // Execute all reverts in parallel for maximum speed
+    await Promise.allSettled(revertPromises);
+
+    // Now fetch audit logs to identify the editor (non-blocking for revert)
     let editorId: string | null = null;
     try {
-        console.log(`[ChannelUpdate] Fetching audit logs...`);
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
         const auditLogs = await newVoice.guild.fetchAuditLogs({
             type: AuditLogEvent.ChannelUpdate,
-            limit: 10,
+            limit: 5,
         });
 
-        console.log(`[ChannelUpdate] Found ${auditLogs.entries.size} audit log entries`);
-
         for (const entry of auditLogs.entries.values()) {
-            console.log(`[ChannelUpdate] Audit entry - target: ${entry.target?.id}, executor: ${entry.executor?.id}, time diff: ${Date.now() - entry.createdTimestamp}ms`);
             if (entry.target?.id === channelId) {
                 const timeDiff = Date.now() - entry.createdTimestamp;
-                if (timeDiff < 10000) {
+                if (timeDiff < 15000) {
                     editorId = entry.executor?.id || null;
-                    console.log(`[ChannelUpdate] Found editor: ${editorId}`);
                     break;
                 }
             }
         }
-    } catch (err) {
-        console.log(`[ChannelUpdate] Failed to fetch audit logs:`, err);
-    }
+    } catch { }
 
-    console.log(`[ChannelUpdate] Editor ID: ${editorId}`);
-
-    // If editor is the bot itself, allow it
-    if (editorId === client.user?.id) {
-        console.log(`[ChannelUpdate] Editor is bot, allowing`);
-        updateChannelSnapshot(channelId, newChannel);
-        return;
-    }
-
-    // If editor is the channel owner, allow it
-    if (editorId === ownerId) {
-        console.log(`[ChannelUpdate] Editor is channel owner, allowing`);
-        updateChannelSnapshot(channelId, newChannel);
-        return;
-    }
-
-    // Only check permissions if we know who the editor is
+    // Check if the editor was actually authorized (if so, we reverted wrongly - undo)
     if (editorId) {
-        const whitelist = await getWhitelist(guildId);
+        // Bot itself
+        if (editorId === client.user?.id) {
+            // Undo the revert - bot made the change
+            return;
+        }
 
+        // Channel owner
+        if (editorId === ownerId) {
+            // Owner made the change - undo revert
+            const undoPromises: Promise<any>[] = [];
+            if (wasUnlocked) {
+                undoPromises.push(newVoice.permissionOverwrites.edit(newVoice.guild.id, { Connect: null }));
+            }
+            if (wasUnhidden) {
+                undoPromises.push(newVoice.permissionOverwrites.edit(newVoice.guild.id, { ViewChannel: null }));
+            }
+            if (limitIncreased) {
+                undoPromises.push(newVoice.setUserLimit(newLimit));
+            }
+            await Promise.allSettled(undoPromises);
+            updateChannelSnapshot(channelId, newChannel);
+            return;
+        }
+
+        // Check whitelist
+        const whitelist = await getWhitelist(guildId);
         const editor = newVoice.guild.members.cache.get(editorId);
         const editorRoleIds = editor?.roles.cache.map(r => r.id) || [];
-
-        console.log(`[ChannelUpdate] Checking whitelist. Editor roles: ${editorRoleIds.join(', ')}`);
-        console.log(`[ChannelUpdate] Whitelist entries: ${whitelist.map(w => `${w.targetId} (${w.targetType})`).join(', ')}`);
 
         const isWhitelisted = whitelist.some(
             w => w.targetId === editorId || editorRoleIds.includes(w.targetId)
         );
+        
         if (isWhitelisted) {
-            console.log(`[ChannelUpdate] Editor is whitelisted, allowing`);
+            // Whitelisted user - undo revert
+            const undoPromises: Promise<any>[] = [];
+            if (wasUnlocked) {
+                undoPromises.push(newVoice.permissionOverwrites.edit(newVoice.guild.id, { Connect: null }));
+            }
+            if (wasUnhidden) {
+                undoPromises.push(newVoice.permissionOverwrites.edit(newVoice.guild.id, { ViewChannel: null }));
+            }
+            if (limitIncreased) {
+                undoPromises.push(newVoice.setUserLimit(newLimit));
+            }
+            await Promise.allSettled(undoPromises);
             updateChannelSnapshot(channelId, newChannel);
             return;
         }
     }
 
-    console.log(`[ChannelUpdate] UNAUTHORIZED CHANGE DETECTED! Reverting...`);
-
-    // If we reach here, the change is unauthorized - revert it
-    const changes: string[] = [];
-    const editor = editorId ? newVoice.guild.members.cache.get(editorId) : null;
+    // If we reach here, the change was unauthorized - revert stands
     
-    try {
-        recordBotEdit(channelId);
-        
-        if (wasUnlocked) {
-            await newVoice.permissionOverwrites.edit(newVoice.guild.id, {
-                Connect: false,
-            });
-            changes.push('Lock reverted');
-            console.log(`[ChannelUpdate] Reverted unlock`);
-        }
+    // Kick unauthorized users who may have joined during exploit
+    if (wasUnlocked || wasUnhidden || limitIncreased) {
+        const channelPerms = await getChannelPermissions(channelId);
+        const permittedUserIds = new Set(
+            channelPerms
+                .filter(p => p.permission === 'permit' && p.targetType === 'user')
+                .map(p => p.targetId)
+        );
+        permittedUserIds.add(ownerId!);
 
-        if (wasUnhidden) {
-            await newVoice.permissionOverwrites.edit(newVoice.guild.id, {
-                ViewChannel: false,
-            });
-            changes.push('Hide reverted');
-            console.log(`[ChannelUpdate] Reverted unhide`);
-        }
-
-        if (limitIncreased) {
-            await newVoice.setUserLimit(oldLimit);
-            changes.push(`Limit reverted from ${newLimit === 0 ? 'unlimited' : newLimit} to ${oldLimit === 0 ? 'unlimited' : oldLimit}`);
-            console.log(`[ChannelUpdate] Reverted limit from ${newLimit} to ${oldLimit}`);
-        }
-
-        console.log(`[ChannelUpdate] All changes reverted: ${changes.join(', ')}`);
-
-        // Kick unauthorized users who joined during the exploit window
-        if (wasUnlocked || wasUnhidden || limitIncreased) {
-            const channelPerms = await getChannelPermissions(channelId);
-            const permittedUserIds = new Set(
-                channelPerms
-                    .filter(p => p.permission === 'permit' && p.targetType === 'user')
-                    .map(p => p.targetId)
-            );
-            permittedUserIds.add(ownerId!); // Owner is always permitted
-
-            for (const [memberId, member] of newVoice.members) {
-                if (!permittedUserIds.has(memberId) && memberId !== client.user?.id) {
-                    try {
-                        await member.voice.disconnect();
-                        console.log(`[ChannelUpdate] Kicked unauthorized user ${memberId} who joined during exploit`);
-                    } catch {
-                        console.log(`[ChannelUpdate] Failed to kick user ${memberId}`);
-                    }
-                }
+        const kickPromises: Promise<any>[] = [];
+        for (const [memberId, member] of newVoice.members) {
+            if (!permittedUserIds.has(memberId) && memberId !== client.user?.id) {
+                kickPromises.push(member.voice.disconnect().catch(() => {}));
             }
         }
-
-        // Notify the channel owner about the manipulation attempt
-        if (ownerId && editorId) {
-            const warningEmbed = new EmbedBuilder()
-                .setColor(0xFF0000)
-                .setTitle('⚠️ PVC Manipulation Detected')
-                .setDescription(
-                    `<@${editorId}> tried to manipulate your voice channel.\n\n` +
-                    `**Changes attempted:**\n${changes.map(c => `• ${c}`).join('\n')}\n\n` +
-                    `This is a power abuse case. Please report to senior staff ASAP.`
-                )
-                .setTimestamp();
-
-            try {
-                await newVoice.send({
-                    content: `<@${ownerId}>`,
-                    embeds: [warningEmbed],
-                });
-                console.log(`[ChannelUpdate] Sent warning to channel owner ${ownerId}`);
-            } catch {
-                console.log(`[ChannelUpdate] Failed to send warning to VC text chat`);
-            }
-        }
-
-        logAction({
-            action: LogAction.UNAUTHORIZED_CHANGE_REVERTED,
-            guild: newVoice.guild,
-            user: editor?.user,
-            channelName: newVoice.name,
-            channelId: channelId,
-            details: editorId 
-                ? `Changes attempted by <@${editorId}>:\n` +
-                  changes.map(c => `• ${c}`).join('\n')
-                : `Unauthorized changes detected:\n` +
-                  changes.map(c => `• ${c}`).join('\n'),
-            isTeamChannel: isTeamChannel,
-            teamType: teamState?.teamType,
-        }).catch(() => {});
-
-    } catch (error) {
-        console.error('Failed to revert channel changes:', error);
+        await Promise.allSettled(kickPromises);
     }
+
+    // Send warning to VC text chat
+    if (ownerId && editorId) {
+        const warningEmbed = new EmbedBuilder()
+            .setColor(0xFF0000)
+            .setTitle('⚠️ PVC Manipulation Detected')
+            .setDescription(
+                `<@${editorId}> tried to manipulate your voice channel.\n\n` +
+                `**Changes attempted:**\n${changes.map(c => `• ${c}`).join('\n')}\n\n` +
+                `This is a power abuse case. Please report to senior staff ASAP.`
+            )
+            .setTimestamp();
+
+        newVoice.send({
+            content: `<@${ownerId}>`,
+            embeds: [warningEmbed],
+        }).catch(() => {});
+    }
+
+    // Log action
+    const editor = editorId ? newVoice.guild.members.cache.get(editorId) : null;
+    logAction({
+        action: LogAction.UNAUTHORIZED_CHANGE_REVERTED,
+        guild: newVoice.guild,
+        user: editor?.user,
+        channelName: newVoice.name,
+        channelId: channelId,
+        details: editorId 
+            ? `Changes attempted by <@${editorId}>:\n${changes.map(c => `• ${c}`).join('\n')}`
+            : `Unauthorized changes detected:\n${changes.map(c => `• ${c}`).join('\n')}`,
+        isTeamChannel: isTeamChannel,
+        teamType: teamState?.teamType,
+    }).catch(() => {});
 }
