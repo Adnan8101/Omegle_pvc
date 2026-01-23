@@ -33,6 +33,11 @@ const revertInProgress = new Set<string>();
 const SNAPSHOT_EXPIRY = 30 * 60 * 1000;
 const BOT_EDIT_WINDOW = 5000; // Increased for reliability
 
+// Hardcoded bot IDs that are always allowed to make changes (security bots, etc.)
+const WHITELISTED_BOT_IDS = new Set([
+    '536991182035746816', // Wick bot
+]);
+
 export function recordBotEdit(channelId: string): void {
     recentBotEdits.set(channelId, Date.now());
 }
@@ -348,6 +353,14 @@ export async function execute(
             return;
         }
 
+        // Hardcoded whitelisted bots (like Wick) - always allowed
+        if (WHITELISTED_BOT_IDS.has(editorId)) {
+            console.log(`[ChannelUpdate] Ignoring whitelisted bot ${editorId} edit on ${channelId}`);
+            revertInProgress.delete(channelId);
+            updateChannelSnapshot(channelId, newChannel);
+            return;
+        }
+
         // Channel owner is always authorized
         if (editorId === ownerId) {
             console.log(`[ChannelUpdate] Owner ${editorId} editing their own channel ${channelId} - authorized`);
@@ -408,8 +421,9 @@ export async function execute(
         // ALWAYS kick unauthorized users if the channel was supposed to be locked or hidden
         // This ensures anyone who entered during the brief exploit window is removed
         if (wasUnlocked || wasUnhidden || limitIncreased || oldLocked || oldHidden) {
-            console.log(`[ChannelUpdate] Kicking unauthorized users from ${channelId} (oldLocked=${oldLocked}, oldHidden=${oldHidden}, wasUnlocked=${wasUnlocked}, wasUnhidden=${wasUnhidden})`);
-            await kickUnauthorizedUsers(newVc, ownerId!, client);
+            console.log(`[ChannelUpdate] Kicking unauthorized users from ${channelId} (oldLocked=${oldLocked}, oldHidden=${oldHidden}, wasUnlocked=${wasUnlocked}, wasUnhidden=${wasUnhidden}, editor=${editorId})`);
+            // Pass editorId so the manipulator is ALWAYS kicked regardless of their permissions
+            await kickUnauthorizedUsers(newVc, ownerId!, client, editorId);
         }
 
         // Send warning to VC text chat - always send even if editor is unknown
@@ -530,7 +544,8 @@ function detectPermissionOverwriteChanges(
 async function kickUnauthorizedUsers(
     vc: import('discord.js').VoiceChannel,
     ownerId: string,
-    client: PVCClient
+    client: PVCClient,
+    editorId?: string | null
 ): Promise<void> {
     const channelPerms = await getChannelPermissions(vc.id);
     const permittedUserIds = new Set(
@@ -542,8 +557,19 @@ async function kickUnauthorizedUsers(
 
     const kickPromises: Promise<any>[] = [];
     for (const [memberId, member] of vc.members) {
-        if (!permittedUserIds.has(memberId) && memberId !== client.user?.id) {
-            console.log(`[ChannelUpdate] Kicking unauthorized user ${memberId} from ${vc.id}`);
+        // Skip bot itself and whitelisted bots (like Wick)
+        if (memberId === client.user?.id || WHITELISTED_BOT_IDS.has(memberId)) {
+            continue;
+        }
+        
+        // ALWAYS kick the editor/manipulator regardless of their permissions
+        // This closes the loophole where an admin manipulates then joins
+        const isManipulator = editorId && memberId === editorId;
+        const isUnauthorized = !permittedUserIds.has(memberId);
+        
+        if (isManipulator || isUnauthorized) {
+            const reason = isManipulator ? 'manipulator' : 'unauthorized';
+            console.log(`[ChannelUpdate] Kicking ${reason} user ${memberId} from ${vc.id}`);
             kickPromises.push(
                 member.voice.disconnect()
                     .catch(err => console.error(`[ChannelUpdate] Failed to kick ${memberId}:`, err))
@@ -552,7 +578,10 @@ async function kickUnauthorizedUsers(
     }
     
     if (kickPromises.length > 0) {
+        console.log(`[ChannelUpdate] Kicking ${kickPromises.length} users from ${vc.id}`);
         await Promise.allSettled(kickPromises);
+    } else {
+        console.log(`[ChannelUpdate] No users to kick from ${vc.id}`);
     }
 }
 

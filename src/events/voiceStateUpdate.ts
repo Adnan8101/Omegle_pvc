@@ -46,6 +46,11 @@ import { recordBotEdit, updateChannelSnapshot } from './channelUpdate';
 export const name = Events.VoiceStateUpdate;
 export const once = false;
 
+// Hardcoded bot IDs that are always allowed (security bots, etc.)
+const WHITELISTED_BOT_IDS = new Set([
+    '536991182035746816', // Wick bot
+]);
+
 export async function execute(
     client: PVCClient,
     oldState: VoiceState,
