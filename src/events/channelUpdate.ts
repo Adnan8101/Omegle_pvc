@@ -1,8 +1,7 @@
 import { Events, type GuildChannel, type DMChannel, ChannelType, AuditLogEvent, PermissionFlagsBits } from 'discord.js';
 import type { PVCClient } from '../client';
-import prisma from '../utils/database';
 import { getChannelState, getTeamChannelState } from '../utils/voiceManager';
-import { getGuildSettings, getWhitelist } from '../utils/cache';
+import { getWhitelist } from '../utils/cache';
 import { logAction, LogAction } from '../utils/logger';
 
 export const name = Events.ChannelUpdate;
@@ -161,18 +160,7 @@ export async function execute(
 
     // Only check permissions if we know who the editor is
     if (editorId) {
-        const [settings, whitelist] = await Promise.all([
-            getGuildSettings(guildId),
-            getWhitelist(guildId),
-        ]);
-
-        console.log(`[ChannelUpdate] Checking if editor ${editorId} is PVC owner...`);
-        const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: editorId } });
-        if (isPvcOwner) {
-            console.log(`[ChannelUpdate] Editor is PVC owner, allowing`);
-            updateChannelSnapshot(channelId, newChannel);
-            return;
-        }
+        const whitelist = await getWhitelist(guildId);
 
         const editor = newVoice.guild.members.cache.get(editorId);
         const editorRoleIds = editor?.roles.cache.map(r => r.id) || [];
