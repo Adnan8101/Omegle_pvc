@@ -41,6 +41,7 @@ import {
 import { logAction, LogAction } from '../utils/logger';
 import { generateVcInterfaceEmbed, generateInterfaceImage, createInterfaceComponents } from '../utils/canvasGenerator';
 import { isPvcPaused } from '../utils/pauseManager';
+import { recordBotEdit, updateChannelSnapshot } from './channelUpdate';
 
 export const name = Events.VoiceStateUpdate;
 export const once = false;
@@ -558,6 +559,9 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
             );
 
             registerChannel(newChannel.id, guild.id, member.id);
+            
+            // Create initial snapshot for the new channel
+            updateChannelSnapshot(newChannel.id, newChannel);
 
             addUserToJoinOrder(newChannel.id, member.id);
 
@@ -642,6 +646,9 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
             }
 
             if (validPermissions.length > 0) {
+                // Record bot edit before modifying permissions
+                recordBotEdit(newChannel.id);
+                
                 const discordTasks = validPermissions.map(perm => ({
                     route: `perms:${newChannel.id}:${perm.targetId}`,
                     task: () => newChannel.permissionOverwrites.edit(perm.targetId, {
@@ -723,6 +730,9 @@ async function transferChannelOwnership(
         }
 
         const ownerPerms = getOwnerPermissions();
+
+        // Record bot edit before modifying channel
+        recordBotEdit(channelId);
 
         await channel.permissionOverwrites.edit(nextUserId, {
             ViewChannel: true,
@@ -915,6 +925,10 @@ async function createTeamChannel(client: PVCClient, state: VoiceState, teamType:
         );
 
         registerTeamChannel(newChannel.id, guild.id, member.id, teamType);
+        
+        // Create initial snapshot for the new team channel
+        updateChannelSnapshot(newChannel.id, newChannel);
+        
         addUserToJoinOrder(newChannel.id, member.id);
 
         await prisma.teamVoiceChannel.create({
@@ -1037,6 +1051,10 @@ async function transferTeamChannelOwnership(
         });
 
         const ownerPerms = getOwnerPermissions();
+        
+        // Record bot edit before modifying channel
+        recordBotEdit(channelId);
+        
         await channel.permissionOverwrites.edit(nextUserId, {
             ViewChannel: true,
             Connect: true,

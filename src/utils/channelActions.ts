@@ -4,6 +4,7 @@ import { executeWithRateLimit, Priority } from './rateLimit';
 import { transferOwnership as updateOwnershipMap, transferTeamOwnership, getTeamChannelState } from './voiceManager';
 import { getOwnerPermissions as getCachedOwnerPerms, invalidateChannelPermissions } from './cache';
 import { logAction, LogAction } from './logger';
+import { recordBotEdit } from '../events/channelUpdate';
 
 export async function transferChannelOwnership(
     guild: Guild,
@@ -28,6 +29,9 @@ export async function transferChannelOwnership(
 
     const oldOwnerFriends = !isTeamChannel ? await getCachedOwnerPerms(guild.id, currentOwnerId) : [];
     const newOwnerFriends = !isTeamChannel ? await getCachedOwnerPerms(guild.id, newOwnerId) : [];
+
+    // Record bot edit before modifying channel
+    recordBotEdit(channelId);
 
     await Promise.all([
         executeWithRateLimit(`perms:${channelId}`, async () => {

@@ -17,6 +17,7 @@ import prisma from '../../utils/database';
 import { batchUpsertPermissions, invalidateWhitelist, batchUpsertOwnerPermissions, batchDeleteOwnerPermissions, getOwnerPermissions as getCachedOwnerPerms, invalidateChannelPermissions } from '../../utils/cache';
 import { logAction, LogAction } from '../../utils/logger';
 import { isPvcPaused } from '../../utils/pauseManager';
+import { recordBotEdit } from '../../events/channelUpdate';
 
 export async function handleSelectMenuInteraction(
     interaction: AnySelectMenuInteraction
@@ -124,6 +125,9 @@ async function updateVoicePermissions(
     isTeamChannel: boolean = false
 ): Promise<void> {
     const targetIds = Array.from(targets.keys());
+
+    // Record bot edit before modifying permissions
+    recordBotEdit(channel.id);
 
     const discordTasks = targetIds.map(id => ({
         route: `perms:${channel.id}:${id}`,
@@ -411,6 +415,9 @@ async function handleUnblockSelect(
     const { users } = interaction;
     const targetIds = Array.from(users.keys());
 
+    // Record bot edit before modifying permissions
+    recordBotEdit(channel.id);
+
     const discordTasks = targetIds.map(id => ({
         route: `perms:${channel.id}:${id}`,
         task: () => channel.permissionOverwrites.delete(id).catch(() => { }),
@@ -454,6 +461,10 @@ async function handleRegionSelect(
     }
 
     const region = interaction.values[0];
+    
+    // Record bot edit before modifying channel
+    recordBotEdit(channel.id);
+    
     await executeWithRateLimit(`edit:${channel.id}`, () =>
         channel.setRTCRegion(region === 'auto' ? null : region),
         Priority.NORMAL

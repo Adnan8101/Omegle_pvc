@@ -25,6 +25,7 @@ import * as messageCreateEvent from './events/messageCreate';
 import * as guildCreateEvent from './events/guildCreate';
 import * as messageReactionAddEvent from './events/messageReactionAdd';
 import * as channelUpdateEvent from './events/channelUpdate';
+import * as channelDeleteEvent from './events/channelDelete';
 import { startCleanupInterval, stopCleanupInterval } from './utils/stateManager';
 
 client.commands.set(pvcSetup.data.name, pvcSetup);
@@ -69,14 +70,25 @@ client.on('messageReactionAdd', (reaction, user) =>
 client.on(channelUpdateEvent.name, (...args) =>
     channelUpdateEvent.execute(client, ...args)
 );
+client.on(channelDeleteEvent.name, (...args) =>
+    channelDeleteEvent.execute(client, ...args)
+);
 
-client.on('error', () => { });
+client.on('error', (error) => {
+    console.error('[Discord Error]:', error);
+});
 
-client.on('warn', () => { });
+client.on('warn', (warning) => {
+    console.warn('[Discord Warning]:', warning);
+});
 
-process.on('unhandledRejection', () => { });
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[Unhandled Rejection] at:', promise, 'reason:', reason);
+});
 
-process.on('uncaughtException', () => { });
+process.on('uncaughtException', (error) => {
+    console.error('[Uncaught Exception]:', error);
+});
 
 client.login(Config.token).catch(() => {
     process.exit(1);

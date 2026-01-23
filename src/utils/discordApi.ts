@@ -68,6 +68,7 @@ export async function safeSetChannelName(
     }
 
     try {
+        notifyBotEdit(channelId);
         const result = await executeWithRateLimit(`edit:${channelId}`, () =>
             channel.setName(name)
         );
@@ -152,6 +153,7 @@ export async function safeSetBitrate(
     }
 
     try {
+        notifyBotEdit(channelId);
         const result = await executeWithRateLimit(`edit:${channelId}`, () =>
             channel.setBitrate(bitrate)
         );
@@ -172,6 +174,7 @@ export async function safeSetRegion(
     }
 
     try {
+        notifyBotEdit(channelId);
         const result = await executeWithRateLimit(`edit:${channelId}`, () =>
             channel.setRTCRegion(region)
         );

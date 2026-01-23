@@ -20,6 +20,7 @@ import prisma from '../../utils/database';
 import { BUTTON_EMOJI_MAP } from '../../utils/canvasGenerator';
 import { logAction, LogAction } from '../../utils/logger';
 import { isPvcPaused } from '../../utils/pauseManager';
+import { recordBotEdit } from '../../events/channelUpdate';
 
 export async function handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
     const { customId, guild, member } = interaction;
@@ -658,6 +659,9 @@ async function handleClaim(
 
     const newOwner = await guild.members.fetch(userId);
 
+    // Record bot edit before modifying channel
+    recordBotEdit(voiceChannelId);
+    
     await executeWithRateLimit(`perms:${voiceChannelId}`, async () => {
         await channel.permissionOverwrites.delete(channelState.ownerId).catch(() => { });
         await channel.permissionOverwrites.edit(userId, {

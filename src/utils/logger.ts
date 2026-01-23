@@ -81,17 +81,18 @@ const ACTION_COLORS: Record<LogAction, number> = {
 };
 
 export async function logAction(data: LogData): Promise<void> {
+    const startTime = Date.now();
+    
     try {
-
         let webhookUrl: string | null = null;
 
         if (data.isTeamChannel) {
-
             const teamSettings = await prisma.teamVoiceSettings.findUnique({
                 where: { guildId: data.guild.id },
             });
             webhookUrl = teamSettings?.logsWebhookUrl || null;
 
+            // Fallback to PVC settings if team has no webhook
             if (!webhookUrl) {
                 const pvcSettings = await prisma.guildSettings.findUnique({
                     where: { guildId: data.guild.id },
@@ -99,7 +100,6 @@ export async function logAction(data: LogData): Promise<void> {
                 webhookUrl = pvcSettings?.logsWebhookUrl || null;
             }
         } else {
-
             const settings = await prisma.guildSettings.findUnique({
                 where: { guildId: data.guild.id },
             });
@@ -107,6 +107,7 @@ export async function logAction(data: LogData): Promise<void> {
         }
 
         if (!webhookUrl) {
+            console.log(`[Logger] No webhook configured for guild ${data.guild.id}, skipping log for: ${data.action}`);
             return;
         }
 
@@ -115,11 +116,15 @@ export async function logAction(data: LogData): Promise<void> {
         if (data.user) {
             const username = data.user instanceof GuildMember ? data.user.user.username : data.user.username;
             const userId = data.user instanceof GuildMember ? data.user.user.id : data.user.id;
-            description += `**User:** <@${userId}>`;
+            description += `**User:** <@${userId}> (${username})`;
         }
 
         if (data.channelName) {
             description += `${description ? '\n' : ''}**Channel:** ${data.channelName}`;
+        }
+
+        if (data.channelId) {
+            description += ` (<#${data.channelId}>)`;
         }
 
         if (data.teamType) {
@@ -132,13 +137,14 @@ export async function logAction(data: LogData): Promise<void> {
         }
 
         if (data.details) {
-            description += `\n**Details:** ${data.details}`;
+            description += `\n\n${data.details}`;
         }
 
         const embed = new EmbedBuilder()
             .setTitle(data.action)
-            .setDescription(description)
+            .setDescription(description || 'No details provided')
             .setColor(ACTION_COLORS[data.action])
+            .setFooter({ text: `Guild: ${data.guild.name}` })
             .setTimestamp();
 
         const botUser = data.guild.client.user;
@@ -146,7 +152,7 @@ export async function logAction(data: LogData): Promise<void> {
 
         const loggerName = data.isTeamChannel ? 'Team VC Logs' : 'PVC Logs';
 
-        await fetch(webhookUrl, {
+        const response = await fetch(webhookUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -155,5 +161,24 @@ export async function logAction(data: LogData): Promise<void> {
                 avatar_url: avatarURL,
             }),
         });
-    } catch { }
+
+        if (!response.ok) {
+            const errorText = await response.text().catch(() => 'Unknown error');
+            console.error(`[Logger] Webhook failed for guild ${data.guild.id}:`, {
+                status: response.status,
+                statusText: response.statusText,
+                error: errorText,
+                action: data.action,
+            });
+            
+            // If webhook is invalid (deleted), we could optionally clear it from DB
+            if (response.status === 404 || response.status === 401) {
+                console.warn(`[Logger] Webhook appears to be invalid for guild ${data.guild.id}. Consider clearing it.`);
+            }
+        } else {
+            console.log(`[Logger] Successfully sent ${data.action} log for guild ${data.guild.id} in ${Date.now() - startTime}ms`);
+        }
+    } catch (err) {
+        console.error(`[Logger] Failed to send log for ${data.action} in guild ${data.guild.id}:`, err);
+    }
 }
