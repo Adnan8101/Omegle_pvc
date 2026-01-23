@@ -289,7 +289,7 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
                         .setColor(0x5865F2)
                         .setDescription(
                             `I have noticed that <@${freq.targetId}> is getting access to your PVC frequently.\n\n` +
-                            `You can use \`/permanent_access add user:@\` and select <@${freq.targetId}> to give them automatic access to your future VCs.`
+                            `Use \`/permanent_access add\` user: <@${freq.targetId}>`
                         );
 
                     await message.reply({ embeds: [permanentAccessEmbed] }).catch(() => { });

@@ -3,6 +3,18 @@ import { executeWithRateLimit } from './rateLimit';
 import { unregisterChannel } from './voiceManager';
 import prisma from './database';
 
+let recordBotEditFn: ((channelId: string) => void) | null = null;
+
+export function setRecordBotEditFn(fn: (channelId: string) => void): void {
+    recordBotEditFn = fn;
+}
+
+function notifyBotEdit(channelId: string): void {
+    if (recordBotEditFn) {
+        recordBotEditFn(channelId);
+    }
+}
+
 export interface SafeResult<T> {
     success: boolean;
     data?: T;
@@ -77,6 +89,7 @@ export async function safeEditPermissions(
     }
 
     try {
+        notifyBotEdit(channelId);
         await executeWithRateLimit(`perms:${channelId}`, () =>
             channel.permissionOverwrites.edit(targetId, permissions)
         );
@@ -118,6 +131,7 @@ export async function safeSetUserLimit(
     }
 
     try {
+        notifyBotEdit(channelId);
         const result = await executeWithRateLimit(`edit:${channelId}`, () =>
             channel.setUserLimit(limit)
         );

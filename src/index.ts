@@ -24,6 +24,7 @@ import * as interactionCreateEvent from './events/interactionCreate';
 import * as messageCreateEvent from './events/messageCreate';
 import * as guildCreateEvent from './events/guildCreate';
 import * as messageReactionAddEvent from './events/messageReactionAdd';
+import * as channelUpdateEvent from './events/channelUpdate';
 import { startCleanupInterval, stopCleanupInterval } from './utils/stateManager';
 
 client.commands.set(pvcSetup.data.name, pvcSetup);
@@ -64,6 +65,9 @@ client.on(guildCreateEvent.name, (...args) =>
 );
 client.on('messageReactionAdd', (reaction, user) =>
     messageReactionAddEvent.handleMessageReactionAdd(reaction, user)
+);
+client.on(channelUpdateEvent.name, (...args) =>
+    channelUpdateEvent.execute(client, ...args)
 );
 
 client.on('error', () => { });

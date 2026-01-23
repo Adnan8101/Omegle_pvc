@@ -2,11 +2,14 @@ import { Events } from 'discord.js';
 import type { PVCClient } from '../client';
 import prisma from '../utils/database';
 import { registerInterfaceChannel, registerChannel, loadAllTeamInterfaces, registerTeamChannel, type TeamType } from '../utils/voiceManager';
+import { setRecordBotEditFn } from '../utils/discordApi';
+import { recordBotEdit } from './channelUpdate';
 
 export const name = Events.ClientReady;
 export const once = true;
 
 export async function execute(client: PVCClient): Promise<void> {
+    setRecordBotEditFn(recordBotEdit);
     await loadAllTeamInterfaces();
 
     try {

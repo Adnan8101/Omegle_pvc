@@ -34,6 +34,7 @@ export enum LogAction {
     TEAM_CHANNEL_DELETED = 'Team Channel Deleted',
 
     SETTINGS_UPDATED = 'Settings Updated',
+    UNAUTHORIZED_CHANGE_REVERTED = '⚠️ Unauthorized Change Reverted',
 }
 
 interface LogData {
@@ -76,6 +77,7 @@ const ACTION_COLORS: Record<LogAction, number> = {
     [LogAction.TEAM_CHANNEL_CREATED]: 0x00FF00,
     [LogAction.TEAM_CHANNEL_DELETED]: 0xFF0000,
     [LogAction.SETTINGS_UPDATED]: 0x3498DB,
+    [LogAction.UNAUTHORIZED_CHANGE_REVERTED]: 0xFF0000,
 };
 
 export async function logAction(data: LogData): Promise<void> {
