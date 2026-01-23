@@ -64,10 +64,17 @@ export async function execute(
     const channelId = newChannel.id;
     const guildId = newChannel.guild.id;
 
+    console.log(`[ChannelUpdate] Channel ${channelId} updated in guild ${guildId}`);
+
     const pvcState = getChannelState(channelId);
     const teamState = getTeamChannelState(channelId);
 
-    if (!pvcState && !teamState) return;
+    if (!pvcState && !teamState) {
+        console.log(`[ChannelUpdate] Channel ${channelId} is not a PVC or Team channel, skipping`);
+        return;
+    }
+
+    console.log(`[ChannelUpdate] Channel is ${pvcState ? 'PVC' : 'Team'} channel, owner: ${pvcState?.ownerId || teamState?.ownerId}`);
 
     const isTeamChannel = Boolean(teamState);
     const ownerId = pvcState?.ownerId || teamState?.ownerId;
@@ -87,23 +94,31 @@ export async function execute(
     const oldLimit = oldVoice.userLimit;
     const newLimit = newVoice.userLimit;
 
+    console.log(`[ChannelUpdate] Old state - locked: ${oldLocked}, hidden: ${oldHidden}, limit: ${oldLimit}`);
+    console.log(`[ChannelUpdate] New state - locked: ${newLocked}, hidden: ${newHidden}, limit: ${newLimit}`);
+
     const limitIncreased = newLimit > oldLimit || (oldLimit > 0 && newLimit === 0);
     const wasUnlocked = oldLocked && !newLocked;
     const wasUnhidden = oldHidden && !newHidden;
 
+    console.log(`[ChannelUpdate] Changes detected - limitIncreased: ${limitIncreased}, wasUnlocked: ${wasUnlocked}, wasUnhidden: ${wasUnhidden}`);
+
     if (!limitIncreased && !wasUnlocked && !wasUnhidden) {
+        console.log(`[ChannelUpdate] No security-relevant changes detected, updating snapshot and returning`);
         updateChannelSnapshot(channelId, newChannel);
         return;
     }
 
     const botEditTime = recentBotEdits.get(channelId);
     if (botEditTime && Date.now() - botEditTime < BOT_EDIT_WINDOW) {
+        console.log(`[ChannelUpdate] Recent bot edit detected, allowing change`);
         updateChannelSnapshot(channelId, newChannel);
         return;
     }
 
     let editorId: string | null = null;
     try {
+        console.log(`[ChannelUpdate] Fetching audit logs...`);
         await new Promise(resolve => setTimeout(resolve, 1000));
         
         const auditLogs = await newVoice.guild.fetchAuditLogs({
@@ -111,27 +126,35 @@ export async function execute(
             limit: 10,
         });
 
+        console.log(`[ChannelUpdate] Found ${auditLogs.entries.size} audit log entries`);
+
         for (const entry of auditLogs.entries.values()) {
+            console.log(`[ChannelUpdate] Audit entry - target: ${entry.target?.id}, executor: ${entry.executor?.id}, time diff: ${Date.now() - entry.createdTimestamp}ms`);
             if (entry.target?.id === channelId) {
                 const timeDiff = Date.now() - entry.createdTimestamp;
                 if (timeDiff < 10000) {
                     editorId = entry.executor?.id || null;
+                    console.log(`[ChannelUpdate] Found editor: ${editorId}`);
                     break;
                 }
             }
         }
-    } catch {
-        // If we can't fetch audit logs, still try to revert
+    } catch (err) {
+        console.log(`[ChannelUpdate] Failed to fetch audit logs:`, err);
     }
+
+    console.log(`[ChannelUpdate] Editor ID: ${editorId}`);
 
     // If editor is the bot itself, allow it
     if (editorId === client.user?.id) {
+        console.log(`[ChannelUpdate] Editor is bot, allowing`);
         updateChannelSnapshot(channelId, newChannel);
         return;
     }
 
     // If editor is the channel owner, allow it
     if (editorId === ownerId) {
+        console.log(`[ChannelUpdate] Editor is channel owner, allowing`);
         updateChannelSnapshot(channelId, newChannel);
         return;
     }
@@ -143,8 +166,10 @@ export async function execute(
             getWhitelist(guildId),
         ]);
 
+        console.log(`[ChannelUpdate] Checking if editor ${editorId} is PVC owner...`);
         const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: editorId } });
         if (isPvcOwner) {
+            console.log(`[ChannelUpdate] Editor is PVC owner, allowing`);
             updateChannelSnapshot(channelId, newChannel);
             return;
         }
@@ -152,14 +177,20 @@ export async function execute(
         const editor = newVoice.guild.members.cache.get(editorId);
         const editorRoleIds = editor?.roles.cache.map(r => r.id) || [];
 
+        console.log(`[ChannelUpdate] Checking whitelist. Editor roles: ${editorRoleIds.join(', ')}`);
+        console.log(`[ChannelUpdate] Whitelist entries: ${whitelist.map(w => `${w.targetId} (${w.targetType})`).join(', ')}`);
+
         const isWhitelisted = whitelist.some(
             w => w.targetId === editorId || editorRoleIds.includes(w.targetId)
         );
         if (isWhitelisted) {
+            console.log(`[ChannelUpdate] Editor is whitelisted, allowing`);
             updateChannelSnapshot(channelId, newChannel);
             return;
         }
     }
+
+    console.log(`[ChannelUpdate] UNAUTHORIZED CHANGE DETECTED! Reverting...`);
 
     // If we reach here, the change is unauthorized - revert it
     const changes: string[] = [];
@@ -173,6 +204,7 @@ export async function execute(
                 Connect: false,
             });
             changes.push('Lock reverted');
+            console.log(`[ChannelUpdate] Reverted unlock`);
         }
 
         if (wasUnhidden) {
@@ -180,12 +212,16 @@ export async function execute(
                 ViewChannel: false,
             });
             changes.push('Hide reverted');
+            console.log(`[ChannelUpdate] Reverted unhide`);
         }
 
         if (limitIncreased) {
             await newVoice.setUserLimit(oldLimit);
             changes.push(`Limit reverted from ${newLimit === 0 ? 'unlimited' : newLimit} to ${oldLimit === 0 ? 'unlimited' : oldLimit}`);
+            console.log(`[ChannelUpdate] Reverted limit from ${newLimit} to ${oldLimit}`);
         }
+
+        console.log(`[ChannelUpdate] All changes reverted: ${changes.join(', ')}`);
 
         logAction({
             action: LogAction.UNAUTHORIZED_CHANGE_REVERTED,

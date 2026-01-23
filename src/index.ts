@@ -66,9 +66,10 @@ client.on(guildCreateEvent.name, (...args) =>
 client.on('messageReactionAdd', (reaction, user) =>
     messageReactionAddEvent.handleMessageReactionAdd(reaction, user)
 );
-client.on(channelUpdateEvent.name, (...args) =>
-    channelUpdateEvent.execute(client, ...args)
-);
+client.on(channelUpdateEvent.name, (...args) => {
+    console.log('[Index] ChannelUpdate event received');
+    channelUpdateEvent.execute(client, ...args);
+});
 
 client.on('error', () => { });
 
