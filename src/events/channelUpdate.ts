@@ -169,87 +169,97 @@ export async function execute(
         return;
     }
 
-    // Get old permission states
-    const oldEveryonePerms = oldVc.permissionOverwrites.cache.get(oldVc.guild.id);
-    const newEveryonePerms = newVc.permissionOverwrites.cache.get(newVc.guild.id);
+    // Get the CORRECT state from snapshot (source of truth)
+    // If no snapshot exists, create one now and allow the change
+    const snapshot = getChannelSnapshot(channelId);
+    if (!snapshot) {
+        console.log(`[ChannelUpdate] No snapshot found for ${channelId}, creating initial snapshot`);
+        updateChannelSnapshot(channelId, newChannel);
+        return;
+    }
 
-    const oldLocked = oldEveryonePerms?.deny.has(PermissionFlagsBits.Connect) ?? false;
-    const newLocked = newEveryonePerms?.deny.has(PermissionFlagsBits.Connect) ?? false;
+    // Compare CURRENT state against SNAPSHOT (not oldChannel vs newChannel)
+    // This prevents losing track when admin manipulates multiple times
+    const snapshotEveryonePerms = snapshot.permissionOverwrites.get(newVc.guild.id);
+    const currentEveryonePerms = newVc.permissionOverwrites.cache.get(newVc.guild.id);
 
-    const oldHidden = oldEveryonePerms?.deny.has(PermissionFlagsBits.ViewChannel) ?? false;
-    const newHidden = newEveryonePerms?.deny.has(PermissionFlagsBits.ViewChannel) ?? false;
+    const correctLocked = (snapshotEveryonePerms?.deny && (snapshotEveryonePerms.deny & PermissionFlagsBits.Connect)) ? true : false;
+    const currentLocked = currentEveryonePerms?.deny.has(PermissionFlagsBits.Connect) ?? false;
 
-    // Detect ALL changes
+    const correctHidden = (snapshotEveryonePerms?.deny && (snapshotEveryonePerms.deny & PermissionFlagsBits.ViewChannel)) ? true : false;
+    const currentHidden = currentEveryonePerms?.deny.has(PermissionFlagsBits.ViewChannel) ?? false;
+
+    // Detect ALL changes by comparing CURRENT state vs SNAPSHOT (source of truth)
     const changes: string[] = [];
     const revertActions: (() => Promise<any>)[] = [];
 
     // Name change
-    if (oldVc.name !== newVc.name) {
-        changes.push(`Name: "${oldVc.name}" → "${newVc.name}"`);
-        revertActions.push(() => newVc.setName(oldVc.name));
+    if (snapshot.name !== newVc.name) {
+        changes.push(`Name: "${snapshot.name}" → "${newVc.name}"`);
+        revertActions.push(() => newVc.setName(snapshot.name));
     }
 
     // User limit change
-    if (oldVc.userLimit !== newVc.userLimit) {
-        changes.push(`Limit: ${oldVc.userLimit || 'unlimited'} → ${newVc.userLimit || 'unlimited'}`);
-        revertActions.push(() => newVc.setUserLimit(oldVc.userLimit));
+    if (snapshot.userLimit !== newVc.userLimit) {
+        changes.push(`Limit: ${snapshot.userLimit || 'unlimited'} → ${newVc.userLimit || 'unlimited'}`);
+        revertActions.push(() => newVc.setUserLimit(snapshot.userLimit));
     }
 
     // Bitrate change
-    if (oldVc.bitrate !== newVc.bitrate) {
-        changes.push(`Bitrate: ${oldVc.bitrate / 1000}kbps → ${newVc.bitrate / 1000}kbps`);
-        revertActions.push(() => newVc.setBitrate(oldVc.bitrate));
+    if (snapshot.bitrate !== newVc.bitrate) {
+        changes.push(`Bitrate: ${snapshot.bitrate / 1000}kbps → ${newVc.bitrate / 1000}kbps`);
+        revertActions.push(() => newVc.setBitrate(snapshot.bitrate));
     }
 
     // Region change
-    if (oldVc.rtcRegion !== newVc.rtcRegion) {
-        changes.push(`Region: ${oldVc.rtcRegion || 'auto'} → ${newVc.rtcRegion || 'auto'}`);
-        revertActions.push(() => newVc.setRTCRegion(oldVc.rtcRegion));
+    if (snapshot.rtcRegion !== newVc.rtcRegion) {
+        changes.push(`Region: ${snapshot.rtcRegion || 'auto'} → ${newVc.rtcRegion || 'auto'}`);
+        revertActions.push(() => newVc.setRTCRegion(snapshot.rtcRegion));
     }
 
     // NSFW change
-    if (oldVc.nsfw !== newVc.nsfw) {
-        changes.push(`NSFW: ${oldVc.nsfw ? 'ON' : 'OFF'} → ${newVc.nsfw ? 'ON' : 'OFF'}`);
-        revertActions.push(() => newVc.setNSFW(oldVc.nsfw));
+    if (snapshot.nsfw !== newVc.nsfw) {
+        changes.push(`NSFW: ${snapshot.nsfw ? 'ON' : 'OFF'} → ${newVc.nsfw ? 'ON' : 'OFF'}`);
+        revertActions.push(() => newVc.setNSFW(snapshot.nsfw));
     }
 
     // Slowmode change
-    if ((oldVc.rateLimitPerUser || 0) !== (newVc.rateLimitPerUser || 0)) {
-        changes.push(`Slowmode: ${oldVc.rateLimitPerUser || 0}s → ${newVc.rateLimitPerUser || 0}s`);
-        revertActions.push(() => newVc.setRateLimitPerUser(oldVc.rateLimitPerUser || 0));
+    if (snapshot.rateLimitPerUser !== (newVc.rateLimitPerUser || 0)) {
+        changes.push(`Slowmode: ${snapshot.rateLimitPerUser}s → ${newVc.rateLimitPerUser || 0}s`);
+        revertActions.push(() => newVc.setRateLimitPerUser(snapshot.rateLimitPerUser));
     }
 
     // Video quality mode change
-    if ((oldVc.videoQualityMode || 1) !== (newVc.videoQualityMode || 1)) {
+    if (snapshot.videoQualityMode !== (newVc.videoQualityMode || 1)) {
         const qualityNames: Record<number, string> = { 1: 'Auto', 2: '720p' };
-        changes.push(`Video Quality: ${qualityNames[oldVc.videoQualityMode || 1] || 'Auto'} → ${qualityNames[newVc.videoQualityMode || 1] || 'Auto'}`);
-        revertActions.push(() => newVc.setVideoQualityMode(oldVc.videoQualityMode || 1));
+        changes.push(`Video Quality: ${qualityNames[snapshot.videoQualityMode] || 'Auto'} → ${qualityNames[newVc.videoQualityMode || 1] || 'Auto'}`);
+        revertActions.push(() => newVc.setVideoQualityMode(snapshot.videoQualityMode));
     }
 
     // Lock/Unlock (permission changes)
-    if (oldLocked !== newLocked) {
-        if (newLocked) {
+    if (correctLocked !== currentLocked) {
+        if (currentLocked) {
             changes.push('Channel was locked (by external edit)');
-            revertActions.push(() => newVc.permissionOverwrites.edit(newVc.guild.id, { Connect: null }));
+            revertActions.push(() => newVc.permissionOverwrites.edit(newVc.guild.id, { Connect: correctLocked ? false : null }));
         } else {
             changes.push('Channel was unlocked (by external edit)');
-            revertActions.push(() => newVc.permissionOverwrites.edit(newVc.guild.id, { Connect: false }));
+            revertActions.push(() => newVc.permissionOverwrites.edit(newVc.guild.id, { Connect: correctLocked ? false : null }));
         }
     }
 
     // Hide/Unhide (permission changes)
-    if (oldHidden !== newHidden) {
-        if (newHidden) {
+    if (correctHidden !== currentHidden) {
+        if (currentHidden) {
             changes.push('Channel was hidden (by external edit)');
-            revertActions.push(() => newVc.permissionOverwrites.edit(newVc.guild.id, { ViewChannel: null }));
+            revertActions.push(() => newVc.permissionOverwrites.edit(newVc.guild.id, { ViewChannel: correctHidden ? false : null }));
         } else {
             changes.push('Channel was unhidden (by external edit)');
-            revertActions.push(() => newVc.permissionOverwrites.edit(newVc.guild.id, { ViewChannel: false }));
+            revertActions.push(() => newVc.permissionOverwrites.edit(newVc.guild.id, { ViewChannel: correctHidden ? false : null }));
         }
     }
 
-    // Check for other permission overwrite changes (non-@everyone)
-    const permissionChanges = detectPermissionOverwriteChanges(oldVc, newVc, ownerId!, guildId);
+    // Check for other permission overwrite changes (non-@everyone) - compare against snapshot
+    const permissionChanges = detectPermissionOverwriteChanges(snapshot, newVc, ownerId!, guildId);
     if (permissionChanges.changes.length > 0) {
         changes.push(...permissionChanges.changes);
         revertActions.push(...permissionChanges.revertActions);
@@ -257,11 +267,11 @@ export async function execute(
 
     // No changes detected
     if (changes.length === 0) {
-        updateChannelSnapshot(channelId, newChannel);
+        // Current state matches snapshot - all good
         return;
     }
 
-    // Fetch audit logs FIRST to identify who made the change
+    // CHANGES DETECTED - Fetch audit logs to identify who made the change
     // Try multiple audit log types since Discord uses different ones
     let editorId: string | null = null;
     try {
@@ -432,15 +442,15 @@ export async function execute(
         }
 
         // Kick intruders if security was compromised OR if channel should be locked/hidden
-        // This closes the loophole where users join during the brief unlock window
-        const wasUnlocked = oldLocked && !newLocked;
-        const wasUnhidden = oldHidden && !newHidden;
-        const limitIncreased = newVc.userLimit > oldVc.userLimit || (oldVc.userLimit > 0 && newVc.userLimit === 0);
+        // Use SNAPSHOT values to determine correct state, not event old/new values
+        const wasUnlocked = correctLocked && !currentLocked;
+        const wasUnhidden = correctHidden && !currentHidden;
+        const limitIncreased = newVc.userLimit > snapshot.userLimit || (snapshot.userLimit > 0 && newVc.userLimit === 0);
         
         // ALWAYS kick unauthorized users if the channel was supposed to be locked or hidden
         // This ensures anyone who entered during the brief exploit window is removed
-        if (wasUnlocked || wasUnhidden || limitIncreased || oldLocked || oldHidden) {
-            console.log(`[ChannelUpdate] Kicking unauthorized users from ${channelId} (oldLocked=${oldLocked}, oldHidden=${oldHidden}, wasUnlocked=${wasUnlocked}, wasUnhidden=${wasUnhidden}, editor=${editorId})`);
+        if (wasUnlocked || wasUnhidden || limitIncreased || correctLocked || correctHidden) {
+            console.log(`[ChannelUpdate] Kicking unauthorized users from ${channelId} (correctLocked=${correctLocked}, correctHidden=${correctHidden}, wasUnlocked=${wasUnlocked}, wasUnhidden=${wasUnhidden}, editor=${editorId})`);
             // Pass editorId so the manipulator is ALWAYS kicked regardless of their permissions
             await kickUnauthorizedUsers(newVc, ownerId!, client, editorId);
         }
@@ -465,7 +475,7 @@ export async function execute(
 }
 
 function detectPermissionOverwriteChanges(
-    oldVc: import('discord.js').VoiceChannel,
+    snapshot: ChannelSnapshot,
     newVc: import('discord.js').VoiceChannel,
     ownerId: string,
     guildId: string
@@ -473,24 +483,24 @@ function detectPermissionOverwriteChanges(
     const changes: string[] = [];
     const revertActions: (() => Promise<any>)[] = [];
 
-    const oldOverwrites = oldVc.permissionOverwrites.cache;
-    const newOverwrites = newVc.permissionOverwrites.cache;
+    const correctOverwrites = snapshot.permissionOverwrites;
+    const currentOverwrites = newVc.permissionOverwrites.cache;
 
     // Find removed overwrites (except @everyone which is handled separately)
-    for (const [id, oldOverwrite] of oldOverwrites) {
+    for (const [id, correctOverwrite] of correctOverwrites) {
         if (id === guildId) continue; // Skip @everyone
         if (id === ownerId) continue; // Skip owner perms
         
-        if (!newOverwrites.has(id)) {
-            const targetType = oldOverwrite.type === OverwriteType.Role ? 'Role' : 'User';
-            const mention = oldOverwrite.type === OverwriteType.Role ? `<@&${id}>` : `<@${id}>`;
+        if (!currentOverwrites.has(id)) {
+            const targetType = correctOverwrite.type === OverwriteType.Role ? 'Role' : 'User';
+            const mention = correctOverwrite.type === OverwriteType.Role ? `<@&${id}>` : `<@${id}>`;
             changes.push(`${targetType} permission removed: ${mention}`);
             
             revertActions.push(async () => {
-                // Restore the old permission overwrite
+                // Restore the correct permission overwrite from snapshot
                 const permUpdate: Record<string, boolean | null> = {};
-                const allowBits = new PermissionsBitField(oldOverwrite.allow.bitfield);
-                const denyBits = new PermissionsBitField(oldOverwrite.deny.bitfield);
+                const allowBits = new PermissionsBitField(correctOverwrite.allow);
+                const denyBits = new PermissionsBitField(correctOverwrite.deny);
                 
                 for (const [perm, value] of Object.entries(PermissionFlagsBits)) {
                     const bigIntValue = value as bigint;
@@ -502,20 +512,20 @@ function detectPermissionOverwriteChanges(
                 }
                 
                 await newVc.permissionOverwrites.edit(id, permUpdate, {
-                    type: oldOverwrite.type,
+                    type: correctOverwrite.type,
                 });
             });
         }
     }
 
-    // Find added overwrites
-    for (const [id, newOverwrite] of newOverwrites) {
+    // Find added overwrites (not in snapshot)
+    for (const [id, currentOverwrite] of currentOverwrites) {
         if (id === guildId) continue;
         if (id === ownerId) continue;
         
-        if (!oldOverwrites.has(id)) {
-            const targetType = newOverwrite.type === OverwriteType.Role ? 'Role' : 'User';
-            const mention = newOverwrite.type === OverwriteType.Role ? `<@&${id}>` : `<@${id}>`;
+        if (!correctOverwrites.has(id)) {
+            const targetType = currentOverwrite.type === OverwriteType.Role ? 'Role' : 'User';
+            const mention = currentOverwrite.type === OverwriteType.Role ? `<@&${id}>` : `<@${id}>`;
             changes.push(`${targetType} permission added: ${mention}`);
             
             revertActions.push(async () => {
@@ -525,25 +535,25 @@ function detectPermissionOverwriteChanges(
     }
 
     // Find modified overwrites
-    for (const [id, newOverwrite] of newOverwrites) {
+    for (const [id, currentOverwrite] of currentOverwrites) {
         if (id === guildId) continue;
         if (id === ownerId) continue;
         
-        const oldOverwrite = oldOverwrites.get(id);
-        if (!oldOverwrite) continue;
+        const correctOverwrite = correctOverwrites.get(id);
+        if (!correctOverwrite) continue;
 
-        const allowChanged = oldOverwrite.allow.bitfield !== newOverwrite.allow.bitfield;
-        const denyChanged = oldOverwrite.deny.bitfield !== newOverwrite.deny.bitfield;
+        const allowChanged = correctOverwrite.allow !== currentOverwrite.allow.bitfield;
+        const denyChanged = correctOverwrite.deny !== currentOverwrite.deny.bitfield;
 
         if (allowChanged || denyChanged) {
-            const targetType = newOverwrite.type === OverwriteType.Role ? 'Role' : 'User';
-            const mention = newOverwrite.type === OverwriteType.Role ? `<@&${id}>` : `<@${id}>`;
+            const targetType = currentOverwrite.type === OverwriteType.Role ? 'Role' : 'User';
+            const mention = currentOverwrite.type === OverwriteType.Role ? `<@&${id}>` : `<@${id}>`;
             changes.push(`${targetType} permission modified: ${mention}`);
             
             revertActions.push(async () => {
                 const permUpdate: Record<string, boolean | null> = {};
-                const allowBits = new PermissionsBitField(oldOverwrite.allow.bitfield);
-                const denyBits = new PermissionsBitField(oldOverwrite.deny.bitfield);
+                const allowBits = new PermissionsBitField(correctOverwrite.allow);
+                const denyBits = new PermissionsBitField(correctOverwrite.deny);
                 
                 for (const [perm, value] of Object.entries(PermissionFlagsBits)) {
                     const bigIntValue = value as bigint;
