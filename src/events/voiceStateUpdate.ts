@@ -41,7 +41,7 @@ import {
 import { logAction, LogAction } from '../utils/logger';
 import { generateVcInterfaceEmbed, generateInterfaceImage, createInterfaceComponents } from '../utils/canvasGenerator';
 import { isPvcPaused } from '../utils/pauseManager';
-import { recordBotEdit, updateChannelSnapshot } from './channelUpdate';
+import { recordBotEdit, updateChannelSnapshot, isChannelProtected } from './channelUpdate';
 
 export const name = Events.VoiceStateUpdate;
 export const once = false;
@@ -90,6 +90,38 @@ async function handleAccessProtection(
     const isTeamChannel = Boolean(teamChannelState);
 
     if (member.id === ownerId) return false;
+
+    // Check if channel is under protection (manipulation revert in progress)
+    // If so, kick unauthorized users immediately
+    const protection = isChannelProtected(newChannelId);
+    if (protection.protected) {
+        // During protection window, only permit owner and explicitly permitted users
+        const channelPerms = await getChannelPermissions(newChannelId);
+        const isPermitted = channelPerms.some(
+            p => p.targetId === member.id && p.permission === 'permit'
+        );
+        
+        if (!isPermitted) {
+            console.log(`[VoiceStateUpdate] Kicking ${member.id} - channel ${newChannelId} is under protection`);
+            fireAndForget(
+                `protection-kick:${member.id}`,
+                async () => {
+                    await member.voice.disconnect();
+                    const embed = new EmbedBuilder()
+                        .setColor(0xFF6B6B)
+                        .setTitle('🚫 Access Denied')
+                        .setDescription(
+                            `You were removed from **${channel.name}** because the channel was recently manipulated and is under protection.\n\n` +
+                            `Ask the owner to give you access.`
+                        )
+                        .setTimestamp();
+                    member.send({ embeds: [embed] }).catch(() => { });
+                },
+                Priority.HIGH
+            );
+            return true;
+        }
+    }
 
     const everyonePerms = channel.permissionOverwrites.cache.get(guild.id);
     const isLocked = everyonePerms?.deny.has('Connect') ?? false;

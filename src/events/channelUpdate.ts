@@ -29,14 +29,28 @@ interface ChannelSnapshot {
 const channelSnapshots = new Map<string, ChannelSnapshot>();
 const recentBotEdits = new Map<string, number>();
 const revertInProgress = new Set<string>();
+const recentReverts = new Map<string, number>(); // Debounce multiple events for same change
+const protectedChannels = new Map<string, { ownerId: string; until: number }>(); // Channels under protection during revert
 
 const SNAPSHOT_EXPIRY = 30 * 60 * 1000;
 const BOT_EDIT_WINDOW = 5000; // Increased for reliability
+const REVERT_DEBOUNCE = 3000; // Ignore duplicate events within 3 seconds
+const PROTECTION_WINDOW = 5000; // Keep channel protected for 5 seconds after revert
 
 // Hardcoded bot IDs that are always allowed to make changes (security bots, etc.)
 const WHITELISTED_BOT_IDS = new Set([
     '536991182035746816', // Wick bot
 ]);
+
+// Export function to check if a channel is under protection
+export function isChannelProtected(channelId: string): { protected: boolean; ownerId?: string } {
+    const protection = protectedChannels.get(channelId);
+    if (protection && Date.now() < protection.until) {
+        return { protected: true, ownerId: protection.ownerId };
+    }
+    protectedChannels.delete(channelId);
+    return { protected: false };
+}
 
 export function recordBotEdit(channelId: string): void {
     recentBotEdits.set(channelId, Date.now());
@@ -88,6 +102,16 @@ setInterval(() => {
             recentBotEdits.delete(channelId);
         }
     }
+    for (const [channelId, timestamp] of recentReverts) {
+        if (now - timestamp > REVERT_DEBOUNCE * 2) {
+            recentReverts.delete(channelId);
+        }
+    }
+    for (const [channelId, protection] of protectedChannels) {
+        if (now > protection.until) {
+            protectedChannels.delete(channelId);
+        }
+    }
 }, 60 * 1000);
 
 export async function execute(
@@ -108,6 +132,14 @@ export async function execute(
 
     // Prevent concurrent reverts
     if (revertInProgress.has(channelId)) {
+        console.log(`[ChannelUpdate] Skipping - revert already in progress for ${channelId}`);
+        return;
+    }
+
+    // Debounce: ignore if we recently reverted this channel (prevents duplicate notifications)
+    const lastRevert = recentReverts.get(channelId);
+    if (lastRevert && Date.now() - lastRevert < REVERT_DEBOUNCE) {
+        console.log(`[ChannelUpdate] Skipping - debounce active for ${channelId}`);
         return;
     }
 
@@ -143,81 +175,54 @@ export async function execute(
     // Name change
     if (oldVc.name !== newVc.name) {
         changes.push(`Name: "${oldVc.name}" → "${newVc.name}"`);
-        revertActions.push(async () => {
-            recordBotEdit(channelId);
-            await newVc.setName(oldVc.name);
-        });
+        revertActions.push(() => newVc.setName(oldVc.name));
     }
 
     // User limit change
     if (oldVc.userLimit !== newVc.userLimit) {
         changes.push(`Limit: ${oldVc.userLimit || 'unlimited'} → ${newVc.userLimit || 'unlimited'}`);
-        revertActions.push(async () => {
-            recordBotEdit(channelId);
-            await newVc.setUserLimit(oldVc.userLimit);
-        });
+        revertActions.push(() => newVc.setUserLimit(oldVc.userLimit));
     }
 
     // Bitrate change
     if (oldVc.bitrate !== newVc.bitrate) {
         changes.push(`Bitrate: ${oldVc.bitrate / 1000}kbps → ${newVc.bitrate / 1000}kbps`);
-        revertActions.push(async () => {
-            recordBotEdit(channelId);
-            await newVc.setBitrate(oldVc.bitrate);
-        });
+        revertActions.push(() => newVc.setBitrate(oldVc.bitrate));
     }
 
     // Region change
     if (oldVc.rtcRegion !== newVc.rtcRegion) {
         changes.push(`Region: ${oldVc.rtcRegion || 'auto'} → ${newVc.rtcRegion || 'auto'}`);
-        revertActions.push(async () => {
-            recordBotEdit(channelId);
-            await newVc.setRTCRegion(oldVc.rtcRegion);
-        });
+        revertActions.push(() => newVc.setRTCRegion(oldVc.rtcRegion));
     }
 
     // NSFW change
     if (oldVc.nsfw !== newVc.nsfw) {
         changes.push(`NSFW: ${oldVc.nsfw ? 'ON' : 'OFF'} → ${newVc.nsfw ? 'ON' : 'OFF'}`);
-        revertActions.push(async () => {
-            recordBotEdit(channelId);
-            await newVc.setNSFW(oldVc.nsfw);
-        });
+        revertActions.push(() => newVc.setNSFW(oldVc.nsfw));
     }
 
     // Slowmode change
     if ((oldVc.rateLimitPerUser || 0) !== (newVc.rateLimitPerUser || 0)) {
         changes.push(`Slowmode: ${oldVc.rateLimitPerUser || 0}s → ${newVc.rateLimitPerUser || 0}s`);
-        revertActions.push(async () => {
-            recordBotEdit(channelId);
-            await newVc.setRateLimitPerUser(oldVc.rateLimitPerUser || 0);
-        });
+        revertActions.push(() => newVc.setRateLimitPerUser(oldVc.rateLimitPerUser || 0));
     }
 
     // Video quality mode change
     if ((oldVc.videoQualityMode || 1) !== (newVc.videoQualityMode || 1)) {
         const qualityNames: Record<number, string> = { 1: 'Auto', 2: '720p' };
         changes.push(`Video Quality: ${qualityNames[oldVc.videoQualityMode || 1] || 'Auto'} → ${qualityNames[newVc.videoQualityMode || 1] || 'Auto'}`);
-        revertActions.push(async () => {
-            recordBotEdit(channelId);
-            await newVc.setVideoQualityMode(oldVc.videoQualityMode || 1);
-        });
+        revertActions.push(() => newVc.setVideoQualityMode(oldVc.videoQualityMode || 1));
     }
 
     // Lock/Unlock (permission changes)
     if (oldLocked !== newLocked) {
         if (newLocked) {
             changes.push('Channel was locked (by external edit)');
-            revertActions.push(async () => {
-                recordBotEdit(channelId);
-                await newVc.permissionOverwrites.edit(newVc.guild.id, { Connect: null });
-            });
+            revertActions.push(() => newVc.permissionOverwrites.edit(newVc.guild.id, { Connect: null }));
         } else {
             changes.push('Channel was unlocked (by external edit)');
-            revertActions.push(async () => {
-                recordBotEdit(channelId);
-                await newVc.permissionOverwrites.edit(newVc.guild.id, { Connect: false });
-            });
+            revertActions.push(() => newVc.permissionOverwrites.edit(newVc.guild.id, { Connect: false }));
         }
     }
 
@@ -225,16 +230,10 @@ export async function execute(
     if (oldHidden !== newHidden) {
         if (newHidden) {
             changes.push('Channel was hidden (by external edit)');
-            revertActions.push(async () => {
-                recordBotEdit(channelId);
-                await newVc.permissionOverwrites.edit(newVc.guild.id, { ViewChannel: null });
-            });
+            revertActions.push(() => newVc.permissionOverwrites.edit(newVc.guild.id, { ViewChannel: null }));
         } else {
             changes.push('Channel was unhidden (by external edit)');
-            revertActions.push(async () => {
-                recordBotEdit(channelId);
-                await newVc.permissionOverwrites.edit(newVc.guild.id, { ViewChannel: false });
-            });
+            revertActions.push(() => newVc.permissionOverwrites.edit(newVc.guild.id, { ViewChannel: false }));
         }
     }
 
@@ -242,10 +241,7 @@ export async function execute(
     const permissionChanges = detectPermissionOverwriteChanges(oldVc, newVc, ownerId!, guildId);
     if (permissionChanges.changes.length > 0) {
         changes.push(...permissionChanges.changes);
-        revertActions.push(...permissionChanges.revertActions.map(action => async () => {
-            recordBotEdit(channelId);
-            await action();
-        }));
+        revertActions.push(...permissionChanges.revertActions);
     }
 
     // No changes detected
@@ -402,7 +398,19 @@ export async function execute(
     // UNAUTHORIZED - REVERT IMMEDIATELY
     console.log(`[ChannelUpdate] Reverting unauthorized changes to ${channelId} by ${editorId || 'unknown'}: ${changes.join(', ')}`);
 
+    // Set debounce to prevent duplicate notifications from multiple Discord events
+    recentReverts.set(channelId, Date.now());
+    
+    // Mark channel as protected - anyone joining during this window will be kicked
+    protectedChannels.set(channelId, {
+        ownerId: ownerId!,
+        until: Date.now() + PROTECTION_WINDOW,
+    });
+
     try {
+        // Record bot edit ONCE before all reverts to prevent self-triggering
+        recordBotEdit(channelId);
+        
         // Execute all revert actions sequentially to avoid rate limits
         for (const action of revertActions) {
             try {
@@ -547,6 +555,16 @@ async function kickUnauthorizedUsers(
     client: PVCClient,
     editorId?: string | null
 ): Promise<void> {
+    // Small delay to catch users who joined during the revert process
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // Re-fetch the channel to get updated member list
+    const freshChannel = await vc.fetch().catch(() => null);
+    if (!freshChannel || freshChannel.type !== ChannelType.GuildVoice) {
+        console.log(`[ChannelUpdate] Channel ${vc.id} not found for kick operation`);
+        return;
+    }
+    
     const channelPerms = await getChannelPermissions(vc.id);
     const permittedUserIds = new Set(
         channelPerms
@@ -556,7 +574,7 @@ async function kickUnauthorizedUsers(
     permittedUserIds.add(ownerId);
 
     const kickPromises: Promise<any>[] = [];
-    for (const [memberId, member] of vc.members) {
+    for (const [memberId, member] of freshChannel.members) {
         // Skip bot itself and whitelisted bots (like Wick)
         if (memberId === client.user?.id || WHITELISTED_BOT_IDS.has(memberId)) {
             continue;
