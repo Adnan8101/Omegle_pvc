@@ -104,71 +104,70 @@ export async function execute(
 
     let editorId: string | null = null;
     try {
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 1000));
         
         const auditLogs = await newVoice.guild.fetchAuditLogs({
             type: AuditLogEvent.ChannelUpdate,
-            limit: 5,
+            limit: 10,
         });
 
         for (const entry of auditLogs.entries.values()) {
             if (entry.target?.id === channelId) {
                 const timeDiff = Date.now() - entry.createdTimestamp;
-                if (timeDiff < 5000) {
+                if (timeDiff < 10000) {
                     editorId = entry.executor?.id || null;
                     break;
                 }
             }
         }
     } catch {
-        return;
+        // If we can't fetch audit logs, still try to revert
     }
 
-    if (!editorId) {
-        updateChannelSnapshot(channelId, newChannel);
-        return;
-    }
-
+    // If editor is the bot itself, allow it
     if (editorId === client.user?.id) {
         updateChannelSnapshot(channelId, newChannel);
         return;
     }
 
+    // If editor is the channel owner, allow it
     if (editorId === ownerId) {
         updateChannelSnapshot(channelId, newChannel);
         return;
     }
 
-    const [settings, whitelist] = await Promise.all([
-        getGuildSettings(guildId),
-        getWhitelist(guildId),
-    ]);
+    // Only check permissions if we know who the editor is
+    if (editorId) {
+        const [settings, whitelist] = await Promise.all([
+            getGuildSettings(guildId),
+            getWhitelist(guildId),
+        ]);
 
-    const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: editorId } });
-    if (isPvcOwner) {
-        updateChannelSnapshot(channelId, newChannel);
-        return;
+        const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: editorId } });
+        if (isPvcOwner) {
+            updateChannelSnapshot(channelId, newChannel);
+            return;
+        }
+
+        const editor = newVoice.guild.members.cache.get(editorId);
+        const editorRoleIds = editor?.roles.cache.map(r => r.id) || [];
+
+        const isWhitelisted = whitelist.some(
+            w => w.targetId === editorId || editorRoleIds.includes(w.targetId)
+        );
+        if (isWhitelisted) {
+            updateChannelSnapshot(channelId, newChannel);
+            return;
+        }
     }
 
-    const editor = newVoice.guild.members.cache.get(editorId);
-    const editorRoleIds = editor?.roles.cache.map(r => r.id) || [];
-
-    if (settings?.staffRoleId && editorRoleIds.includes(settings.staffRoleId)) {
-        updateChannelSnapshot(channelId, newChannel);
-        return;
-    }
-
-    const isWhitelisted = whitelist.some(
-        w => w.targetId === editorId || editorRoleIds.includes(w.targetId)
-    );
-    if (isWhitelisted) {
-        updateChannelSnapshot(channelId, newChannel);
-        return;
-    }
-
+    // If we reach here, the change is unauthorized - revert it
     const changes: string[] = [];
+    const editor = editorId ? newVoice.guild.members.cache.get(editorId) : null;
     
     try {
+        recordBotEdit(channelId);
+        
         if (wasUnlocked) {
             await newVoice.permissionOverwrites.edit(newVoice.guild.id, {
                 Connect: false,
@@ -194,9 +193,13 @@ export async function execute(
             user: editor?.user,
             channelName: newVoice.name,
             channelId: channelId,
-            details: `Changes attempted by <@${editorId}>:\n` +
-                changes.map(c => `• ${c}`).join('\n') +
-                `\n\nOnly the channel owner or authorized staff can modify PVC settings.`,
+            details: editorId 
+                ? `Changes attempted by <@${editorId}>:\n` +
+                  changes.map(c => `• ${c}`).join('\n') +
+                  `\n\nOnly the channel owner, PVC owners, or admin strictness whitelist users can modify PVC settings.`
+                : `Unauthorized changes detected:\n` +
+                  changes.map(c => `• ${c}`).join('\n') +
+                  `\n\nOnly the channel owner, PVC owners, or admin strictness whitelist users can modify PVC settings.`,
             isTeamChannel: isTeamChannel,
             teamType: teamState?.teamType,
         }).catch(() => {});
