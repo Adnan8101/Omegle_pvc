@@ -188,7 +188,6 @@ async function recreateSetup(guild: Guild, existingSettings: any) {
             components,
         });
 
-
         await prisma.guildSettings.update({
             where: { guildId: guild.id },
             data: {

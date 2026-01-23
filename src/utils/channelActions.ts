@@ -10,15 +10,13 @@ export async function transferChannelOwnership(
     channelId: string,
     currentOwnerId: string,
     newOwnerId: string,
-    executor: GuildMember | null, // null if system or implicit
+    executor: GuildMember | null,
     channelName: string
 ): Promise<void> {
 
-    // Check if this is a team channel
     const teamState = getTeamChannelState(channelId);
     const isTeamChannel = Boolean(teamState);
 
-    // Update in-memory map (use correct function based on channel type)
     if (isTeamChannel) {
         transferTeamOwnership(channelId, newOwnerId);
     } else {
@@ -28,33 +26,29 @@ export async function transferChannelOwnership(
     const channel = guild.channels.cache.get(channelId);
     if (!channel || !channel.isVoiceBased()) return;
 
-    // Persistent History: Only applies to PVC, not team channels
     const oldOwnerFriends = !isTeamChannel ? await getCachedOwnerPerms(guild.id, currentOwnerId) : [];
     const newOwnerFriends = !isTeamChannel ? await getCachedOwnerPerms(guild.id, newOwnerId) : [];
 
     await Promise.all([
         executeWithRateLimit(`perms:${channelId}`, async () => {
-            // Grant Owner Perms to new owner
+
             await channel.permissionOverwrites.edit(newOwnerId, {
                 ViewChannel: true, Connect: true, Speak: true, Stream: true,
                 SendMessages: true, EmbedLinks: true, AttachFiles: true,
                 MuteMembers: true, DeafenMembers: true, ManageChannels: true,
             });
 
-            // Revoke Owner Perms from old owner
             await channel.permissionOverwrites.delete(currentOwnerId).catch(() => { });
 
-            // For PVC only: Remove Old Friends and Add New Friends
             if (!isTeamChannel) {
-                // Remove Old Friends
+
                 for (const friend of oldOwnerFriends) {
-                    // Don't remove if they are the new owner or in new friend list
+
                     if (friend.targetId !== newOwnerId && !newOwnerFriends.some(f => f.targetId === friend.targetId)) {
                         await channel.permissionOverwrites.delete(friend.targetId).catch(() => { });
                     }
                 }
 
-                // Add New Friends
                 for (const friend of newOwnerFriends) {
                     await channel.permissionOverwrites.edit(friend.targetId, {
                         ViewChannel: true, Connect: true, SendMessages: true, EmbedLinks: true, AttachFiles: true
@@ -62,17 +56,15 @@ export async function transferChannelOwnership(
                 }
             }
 
-            // Update Name (optional, nice to have)
             const newOwner = await guild.members.fetch(newOwnerId).catch(() => null);
             if (newOwner) {
-                const newName = isTeamChannel 
+                const newName = isTeamChannel
                     ? `${newOwner.displayName}'s ${teamState?.teamType ? teamState.teamType.charAt(0).toUpperCase() + teamState.teamType.slice(1) : 'Team'}`
                     : newOwner.displayName;
                 await channel.setName(newName).catch(() => { });
             }
         }, Priority.HIGH),
 
-        // Update correct database table based on channel type
         isTeamChannel
             ? prisma.teamVoiceChannel.update({
                 where: { channelId },
@@ -84,7 +76,6 @@ export async function transferChannelOwnership(
             }),
     ]);
 
-    // Force refresh cache
     invalidateChannelPermissions(channelId);
 
     if (executor) {

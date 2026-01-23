@@ -44,7 +44,7 @@ interface LogData {
     channelId?: string;
     details?: string;
     targetUser?: User | GuildMember;
-    teamType?: string;  // duo, trio, squad
+    teamType?: string;
     isTeamChannel?: boolean;
 }
 
@@ -80,17 +80,16 @@ const ACTION_COLORS: Record<LogAction, number> = {
 
 export async function logAction(data: LogData): Promise<void> {
     try {
-        // Determine which logs to use based on channel type
+
         let webhookUrl: string | null = null;
-        
+
         if (data.isTeamChannel) {
-            // Use team logs if available, fallback to PVC logs
+
             const teamSettings = await prisma.teamVoiceSettings.findUnique({
                 where: { guildId: data.guild.id },
             });
             webhookUrl = teamSettings?.logsWebhookUrl || null;
-            
-            // Fallback to PVC logs if team logs not configured
+
             if (!webhookUrl) {
                 const pvcSettings = await prisma.guildSettings.findUnique({
                     where: { guildId: data.guild.id },
@@ -98,7 +97,7 @@ export async function logAction(data: LogData): Promise<void> {
                 webhookUrl = pvcSettings?.logsWebhookUrl || null;
             }
         } else {
-            // Use PVC logs for regular channels
+
             const settings = await prisma.guildSettings.findUnique({
                 where: { guildId: data.guild.id },
             });
@@ -120,8 +119,7 @@ export async function logAction(data: LogData): Promise<void> {
         if (data.channelName) {
             description += `${description ? '\n' : ''}**Channel:** ${data.channelName}`;
         }
-        
-        // Add team type badge if present
+
         if (data.teamType) {
             description += `\n**Type:** ${data.teamType.toUpperCase()}`;
         }
@@ -143,7 +141,7 @@ export async function logAction(data: LogData): Promise<void> {
 
         const botUser = data.guild.client.user;
         const avatarURL = botUser?.displayAvatarURL() || undefined;
-        
+
         const loggerName = data.isTeamChannel ? 'Team VC Logs' : 'PVC Logs';
 
         await fetch(webhookUrl, {

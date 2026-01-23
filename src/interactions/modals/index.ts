@@ -9,7 +9,6 @@ export async function handleModalSubmit(interaction: ModalSubmitInteraction): Pr
     const { customId, guild } = interaction;
     if (!guild) return;
 
-    // Check if PVC system is paused
     if (isPvcPaused(guild.id) && customId.startsWith('pvc_')) {
         const pauseEmbed = new EmbedBuilder()
             .setColor(0xFF6B6B)
@@ -31,17 +30,15 @@ export async function handleModalSubmit(interaction: ModalSubmitInteraction): Pr
     }
 
     const userId = interaction.user.id;
-    
-    // CRITICAL FIX: Get the channel where the modal was triggered from
+
     const messageChannel = interaction.channel;
     let targetChannelId: string | undefined;
     let isTeamChannel = false;
-    
-    // The interface is in the voice channel's text chat
+
     if (messageChannel && 'type' in messageChannel && messageChannel.type === ChannelType.GuildVoice) {
         const pvcState = getChannelState(messageChannel.id);
         const teamState = getTeamChannelState(messageChannel.id);
-        
+
         if (pvcState && pvcState.ownerId === userId) {
             targetChannelId = messageChannel.id;
             isTeamChannel = false;
@@ -50,8 +47,7 @@ export async function handleModalSubmit(interaction: ModalSubmitInteraction): Pr
             isTeamChannel = true;
         }
     }
-    
-    // Fallback: Check ownership if not triggered from within a VC
+
     if (!targetChannelId) {
         let ownedChannelId = getChannelByOwner(guild.id, userId);
         if (!ownedChannelId) {
@@ -90,7 +86,7 @@ export async function handleModalSubmit(interaction: ModalSubmitInteraction): Pr
 }
 
 async function handleLimitModal(interaction: ModalSubmitInteraction, channelId: string, isTeamChannel: boolean = false): Promise<void> {
-    // Team channels have fixed limits
+
     if (isTeamChannel) {
         const channel = await validateVoiceChannel(interaction.guild!, channelId);
         const settings = await prisma.guildSettings.findUnique({ where: { guildId: interaction.guild!.id } });
@@ -98,9 +94,9 @@ async function handleLimitModal(interaction: ModalSubmitInteraction, channelId: 
         if (settings?.interfaceVcId) {
             message += `\n\nWant your own VC with unlimited space?\nCreate Private Voice Channel from <#${settings.interfaceVcId}>`;
         }
-        await interaction.reply({ 
-            content: message, 
-            flags: [MessageFlags.Ephemeral] 
+        await interaction.reply({
+            content: message,
+            flags: [MessageFlags.Ephemeral]
         });
         return;
     }
@@ -229,9 +225,9 @@ async function handleRenameModal(interaction: ModalSubmitInteraction, channelId:
         .setFooter({ text: '⏱️ Expires in 15 minutes' })
         .setTimestamp();
 
-    const approvalMessage = await commandChannel.send({ 
+    const approvalMessage = await commandChannel.send({
         content: `<@${interaction.user.id}> - **Pending Approval**`,
-        embeds: [embed] 
+        embeds: [embed]
     });
     await approvalMessage.react('✅');
 

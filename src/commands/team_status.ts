@@ -21,7 +21,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         return;
     }
 
-    // Check admin permissions
     if (!await canRunAdminCommand(interaction)) {
         await interaction.reply({ content: 'You need a role higher than the bot to use this command, or be the bot developer.', flags: [MessageFlags.Ephemeral] });
         return;
@@ -32,12 +31,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     try {
         const guild = interaction.guild;
 
-        // Get guild settings for admin strictness
         const guildSettings = await prisma.guildSettings.findUnique({
             where: { guildId: guild.id },
         });
 
-        // Get team settings
         const teamSettings = await prisma.teamVoiceSettings.findUnique({
             where: { guildId: guild.id },
             include: {
@@ -50,7 +47,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             return;
         }
 
-        // Get channel info
         const duoInterfaceChannel = teamSettings.duoVcId
             ? guild.channels.cache.get(teamSettings.duoVcId)
             : null;
@@ -61,7 +57,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             ? guild.channels.cache.get(teamSettings.squadVcId)
             : null;
 
-        // Count by type
         const duoCount = teamSettings.teamChannels.filter((c: any) => c.teamType === 'DUO').length;
         const trioCount = teamSettings.teamChannels.filter((c: any) => c.teamType === 'TRIO').length;
         const squadCount = teamSettings.teamChannels.filter((c: any) => c.teamType === 'SQUAD').length;
@@ -69,7 +64,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
 
         const adminStrictness = guildSettings?.adminStrictness ?? false;
 
-        // Build status embed - matching PVC status style
         const embed = new EmbedBuilder()
             .setTitle('Team Voice Channel System Status')
             .setColor(adminStrictness ? 0x00FF00 : 0xFF0000)
@@ -112,7 +106,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             )
             .setTimestamp();
 
-        // List active team channels if any
         if (teamSettings.teamChannels.length > 0) {
             const channelList = teamSettings.teamChannels.slice(0, 10).map((tc: { channelId: string; ownerId: string; teamType: string }) => {
                 const channel = guild.channels.cache.get(tc.channelId);
@@ -130,7 +123,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
 
         await interaction.editReply({ embeds: [embed] });
     } catch (error) {
-        console.error('Team status error:', error);
         await interaction.editReply('Failed to get team status.');
     }
 }

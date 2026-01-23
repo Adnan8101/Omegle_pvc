@@ -32,7 +32,6 @@ export const command: Command = {
 
         const code = interaction.options.getString('code', true);
 
-        // Make these available in eval scope
         const client = interaction.client;
         const channel = interaction.channel;
         const guild = interaction.guild;
@@ -42,7 +41,6 @@ export const command: Command = {
         try {
             await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
-            // Direct eval with async support
             let evaled = await eval(`(async () => { ${code} })()`);
 
             if (typeof evaled !== 'string') {

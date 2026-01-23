@@ -25,7 +25,6 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
     const { customId, guild, member } = interaction;
     if (!guild || !member) return;
 
-    // Check if PVC system is paused (excluding list buttons which are informational)
     if (isPvcPaused(guild.id) && customId.startsWith('pvc_')) {
         const pauseEmbed = new EmbedBuilder()
             .setColor(0xFF6B6B)
@@ -41,11 +40,9 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
         return;
     }
 
-    // Handle list_permanent button from !l command
     if (customId.startsWith('list_permanent_')) {
         const targetUserId = customId.replace('list_permanent_', '');
 
-        // Only the original user can click
         if (interaction.user.id !== targetUserId) {
             await interaction.reply({ content: 'This button is not for you.', ephemeral: true });
             return;
@@ -80,7 +77,6 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
         return;
     }
 
-    // Handle list_normal button - go back to channel info
     if (customId.startsWith('list_normal_')) {
         const targetUserId = customId.replace('list_normal_', '');
 
@@ -89,7 +85,6 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
             return;
         }
 
-        // Get user's PVC
         const pvc = await prisma.privateVoiceChannel.findFirst({
             where: { guildId: guild.id, ownerId: targetUserId },
             include: { permissions: true },
@@ -143,7 +138,6 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
         return;
     }
 
-    // Skip other list_ buttons (legacy/pagination)
     if (customId.startsWith('list_')) return;
 
     const userId = typeof member === 'string' ? member : member.user.id;
@@ -176,9 +170,8 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
         return;
     }
 
-    // Handle info and chat buttons - these should work for anyone in a PVC
     if (customId === 'pvc_info' || customId === 'pvc_chat') {
-        // Check if user is in a voice channel
+
         if (!voiceChannelId) {
             await interaction.reply({
                 content: 'You must be in a voice channel to use this button.',
@@ -193,7 +186,6 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
             return;
         }
 
-        // Check if it's a PVC or team channel
         const channelState = getChannelState(voiceChannelId) || getTeamChannelState(voiceChannelId);
         if (!channelState) {
             await interaction.reply({
@@ -214,19 +206,15 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
         }
     }
 
-    // CRITICAL FIX: Get the channel where the interface message is located
-    // This ensures actions apply to the correct channel when user has multiple channels
     const messageChannel = interaction.channel;
     let targetChannelId: string | undefined;
     let isTeamChannel = false;
-    
-    // PRIORITY 1: Check if user is in voice and that VC is theirs (PVC or Team)
+
     if (voiceChannelId) {
-        // Check memory first
+
         let pvcState = getChannelState(voiceChannelId);
         let teamState = getTeamChannelState(voiceChannelId);
-        
-        // FALLBACK: Check database if not in memory
+
         if (!pvcState && !teamState) {
             const pvcData = await prisma.privateVoiceChannel.findUnique({
                 where: { channelId: voiceChannelId },
@@ -234,8 +222,7 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
             const teamData = await prisma.teamVoiceChannel.findUnique({
                 where: { channelId: voiceChannelId },
             });
-            
-            // Re-register to memory if found in DB
+
             if (pvcData) {
                 const { registerChannel } = await import('../../utils/voiceManager');
                 registerChannel(pvcData.channelId, pvcData.guildId, pvcData.ownerId);
@@ -247,8 +234,7 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
                 teamState = { channelId: teamData.channelId, guildId: teamData.guildId, ownerId: teamData.ownerId, teamType: teamType };
             }
         }
-        
-        // Check ownership - prioritize the VC the user is currently in
+
         if (pvcState && pvcState.ownerId === userId) {
             targetChannelId = voiceChannelId;
             isTeamChannel = false;
@@ -256,7 +242,7 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
             targetChannelId = voiceChannelId;
             isTeamChannel = true;
         } else if (pvcState || teamState) {
-            // User is in someone else's VC
+
             await interaction.reply({
                 content: `⚠️ You can only use these controls in **your own** voice channel.\n\nThis channel belongs to someone else.`,
                 ephemeral: true,
@@ -264,8 +250,7 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
             return;
         }
     }
-    
-    // PRIORITY 2: If user not in voice or not in a PVC/team VC, check if they own ANY channel
+
     if (!targetChannelId) {
         let ownedChannelId = getChannelByOwner(guild.id, userId);
         if (!ownedChannelId) {
@@ -274,8 +259,7 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
         } else {
             isTeamChannel = false;
         }
-        
-        // If not found in memory, check database as final fallback
+
         if (!ownedChannelId) {
             const pvcData = await prisma.privateVoiceChannel.findFirst({
                 where: { guildId: guild.id, ownerId: userId },
@@ -283,11 +267,10 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
             const teamData = !pvcData ? await prisma.teamVoiceChannel.findFirst({
                 where: { guildId: guild.id, ownerId: userId },
             }) : null;
-            
+
             ownedChannelId = pvcData?.channelId || teamData?.channelId || undefined;
             isTeamChannel = Boolean(teamData);
-            
-            // Re-register if found in DB
+
             if (pvcData) {
                 const { registerChannel } = await import('../../utils/voiceManager');
                 registerChannel(pvcData.channelId, pvcData.guildId, pvcData.ownerId);
@@ -297,7 +280,7 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
                 registerTeamChannel(teamData.channelId, teamData.guildId, teamData.ownerId, teamType);
             }
         }
-        
+
         targetChannelId = ownedChannelId;
     }
 
@@ -315,9 +298,9 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
             pvc_unblock: 'Unblock User',
             pvc_transfer: 'Transfer Ownership',
         };
-        
+
         const buttonName = buttonLabels[customId] || 'this feature';
-        
+
         await interaction.reply({
             content: `⚠️ **${buttonName}** can only be used by the voice channel owner.\n\nYou currently do not own a private voice channel.`,
             ephemeral: true,
@@ -331,7 +314,6 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
         return;
     }
 
-    // Disable limit button for team channels (fixed limits)
     if (customId === 'pvc_limit' && isTeamChannel) {
         const teamState = getTeamChannelState(targetChannelId);
         const settings = await prisma.guildSettings.findUnique({ where: { guildId: interaction.guild!.id } });
@@ -573,17 +555,15 @@ async function handleBlock(interaction: ButtonInteraction): Promise<void> {
 
 async function handleUnblock(interaction: ButtonInteraction): Promise<void> {
     const guild = interaction.guild!;
-    
-    // Check for both PVC and team channel ownership
+
     let ownedChannelId = getChannelByOwner(guild.id, interaction.user.id);
     let isTeamChannel = false;
-    
+
     if (!ownedChannelId) {
         ownedChannelId = getTeamChannelByOwner(guild.id, interaction.user.id);
         isTeamChannel = Boolean(ownedChannelId);
     }
-    
-    // If not found in memory, check database as fallback
+
     if (!ownedChannelId) {
         const pvcData = await prisma.privateVoiceChannel.findFirst({
             where: { guildId: guild.id, ownerId: interaction.user.id },
@@ -591,7 +571,7 @@ async function handleUnblock(interaction: ButtonInteraction): Promise<void> {
         const teamData = !pvcData ? await prisma.teamVoiceChannel.findFirst({
             where: { guildId: guild.id, ownerId: interaction.user.id },
         }) : null;
-        
+
         ownedChannelId = pvcData?.channelId || teamData?.channelId || undefined;
         isTeamChannel = Boolean(teamData);
     }
@@ -601,7 +581,6 @@ async function handleUnblock(interaction: ButtonInteraction): Promise<void> {
         return;
     }
 
-    // Query from correct permission table based on channel type
     const blockedUsers = isTeamChannel
         ? await prisma.teamVoicePermission.findMany({
             where: { channelId: ownedChannelId, permission: 'ban' },
@@ -701,16 +680,14 @@ async function handleDelete(interaction: ButtonInteraction): Promise<void> {
     const { guild, user } = interaction;
     if (!guild) return;
 
-    // Check both PVC and team channel ownership
     let ownedChannelId = getChannelByOwner(guild.id, user.id);
     let isTeamChannel = false;
-    
+
     if (!ownedChannelId) {
         ownedChannelId = getTeamChannelByOwner(guild.id, user.id);
         isTeamChannel = Boolean(ownedChannelId);
     }
-    
-    // If not in memory, check database
+
     if (!ownedChannelId) {
         const pvcData = await prisma.privateVoiceChannel.findFirst({
             where: { guildId: guild.id, ownerId: user.id },
@@ -718,7 +695,7 @@ async function handleDelete(interaction: ButtonInteraction): Promise<void> {
         const teamData = !pvcData ? await prisma.teamVoiceChannel.findFirst({
             where: { guildId: guild.id, ownerId: user.id },
         }) : null;
-        
+
         ownedChannelId = pvcData?.channelId || teamData?.channelId || undefined;
         isTeamChannel = Boolean(teamData);
     }
@@ -815,8 +792,7 @@ async function handleDeleteConfirm(interaction: ButtonInteraction): Promise<void
 
     try {
         const channelName = channel.name;
-        
-        // Unregister from correct system
+
         if (isTeamChannel) {
             const { unregisterTeamChannel } = await import('../../utils/voiceManager');
             unregisterTeamChannel(channelId);
@@ -827,7 +803,7 @@ async function handleDeleteConfirm(interaction: ButtonInteraction): Promise<void
             await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
             await prisma.voicePermission.deleteMany({ where: { channelId } }).catch(() => { });
         }
-        
+
         await channel.delete();
 
         await logAction({
@@ -904,11 +880,10 @@ async function handleChat(interaction: ButtonInteraction, channel: any): Promise
 
 async function handleInfo(interaction: ButtonInteraction, channel: any): Promise<void> {
     const guild = interaction.guild!;
-    
-    // Check both PVC and team channel state
+
     let channelState = getChannelState(channel.id);
     let isTeamChannel = false;
-    
+
     if (!channelState) {
         const teamState = getTeamChannelState(channel.id);
         if (teamState) {

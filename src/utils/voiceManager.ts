@@ -13,7 +13,6 @@ const guildInterfaces = new Map<string, string>();
 const joinOrder = new Map<string, string[]>();
 const tempPermittedUsers = new Map<string, Set<string>>();
 
-// Race condition protection: Track ongoing channel creation
 const creationLocks = new Map<string, Promise<void>>();
 
 const userCooldowns = new Map<string, number>();
@@ -36,37 +35,27 @@ export function setCooldown(userId: string, action: keyof typeof COOLDOWNS): voi
     userCooldowns.set(key, Date.now());
 }
 
-/**
- * Acquire a lock for channel creation to prevent race conditions
- * Returns true if lock acquired, false if already locked
- */
 export async function acquireCreationLock(guildId: string, userId: string): Promise<boolean> {
     const key = `${guildId}:${userId}`;
-    
-    // Check if there's already a lock
+
     if (creationLocks.has(key)) {
         return false;
     }
-    
-    // Create a new lock promise
+
     let releaseLock: () => void;
     const lockPromise = new Promise<void>((resolve) => {
         releaseLock = resolve;
     });
-    
+
     creationLocks.set(key, lockPromise);
-    
-    // Auto-release after 10 seconds as safety measure
+
     setTimeout(() => {
         releaseCreationLock(guildId, userId);
     }, 10000);
-    
+
     return true;
 }
 
-/**
- * Release a creation lock
- */
 export function releaseCreationLock(guildId: string, userId: string): void {
     const key = `${guildId}:${userId}`;
     const lockPromise = creationLocks.get(key);
@@ -210,11 +199,8 @@ export function clearTempPermissions(channelId: string): void {
     tempPermittedUsers.delete(channelId);
 }
 
-/**
- * Clear all state for a specific guild (for refresh)
- */
 export function clearGuildState(guildId: string): void {
-    // Clear all channels for this guild
+
     for (const [channelId, state] of channelStates) {
         if (state.guildId === guildId) {
             channelStates.delete(channelId);
@@ -223,41 +209,32 @@ export function clearGuildState(guildId: string): void {
         }
     }
 
-    // Clear owner mappings for this guild
     for (const key of ownerToChannel.keys()) {
         if (key.startsWith(guildId + ':')) {
             ownerToChannel.delete(key);
         }
     }
 
-    // Clear interface
     guildInterfaces.delete(guildId);
 
-    // Clear team interfaces
     for (const key of teamInterfaces.keys()) {
         if (key.startsWith(guildId + ':')) {
             teamInterfaces.delete(key);
         }
     }
 
-    // Clear team channels
     for (const [channelId, state] of teamChannelStates) {
         if (state.guildId === guildId) {
             teamChannelStates.delete(channelId);
         }
     }
 
-    // Clear team owner mappings
     for (const key of teamOwnerToChannel.keys()) {
         if (key.startsWith(guildId + ':')) {
             teamOwnerToChannel.delete(key);
         }
     }
 }
-
-// ============================================
-// Team Voice Channel System
-// ============================================
 
 export type TeamType = 'duo' | 'trio' | 'squad';
 
@@ -274,12 +251,11 @@ interface TeamChannelState {
     teamType: TeamType;
 }
 
-const teamInterfaces = new Map<string, string>(); // key: guildId:type, value: channelId
+const teamInterfaces = new Map<string, string>();
 const teamChannelStates = new Map<string, TeamChannelState>();
-const teamOwnerToChannel = new Map<string, string>(); // key: guildId:ownerId, value: channelId
+const teamOwnerToChannel = new Map<string, string>();
 
 export function registerTeamInterfaceChannel(guildId: string, type: TeamType, channelId: string): void {
-    console.log(`[VoiceManager] Registering team interface: ${guildId}:${type} -> ${channelId}`);
     teamInterfaces.set(`${guildId}:${type}`, channelId);
 }
 
@@ -295,17 +271,11 @@ export function isTeamInterfaceChannel(channelId: string): boolean {
 }
 
 export function getTeamInterfaceType(channelId: string): TeamType | undefined {
-    console.log(`[VoiceManager] Checking team interface type for channel ${channelId}`);
-    console.log(`[VoiceManager] Registered team interfaces:`, Array.from(teamInterfaces.entries()));
     for (const [key, interfaceId] of teamInterfaces) {
-        console.log(`[VoiceManager] Comparing ${interfaceId} === ${channelId}`);
         if (interfaceId === channelId) {
-            const type = key.split(':')[1] as TeamType;
-            console.log(`[VoiceManager] Found match! Type: ${type}`);
-            return type;
+            return key.split(':')[1] as TeamType;
         }
     }
-    console.log(`[VoiceManager] No match found for channel ${channelId}`);
     return undefined;
 }
 
@@ -358,30 +328,16 @@ export function getGuildTeamChannels(guildId: string): TeamChannelState[] {
     return Array.from(teamChannelStates.values()).filter(s => s.guildId === guildId);
 }
 
-/**
- * Load all team interfaces from database on bot startup
- */
 export async function loadAllTeamInterfaces(): Promise<void> {
     try {
         const { default: prisma } = await import('./database');
         const allTeamSettings = await prisma.teamVoiceSettings.findMany();
-        
-        console.log(`[VoiceManager] Loading ${allTeamSettings.length} team settings from database`);
-        
+
         for (const settings of allTeamSettings) {
-            if (settings.duoVcId) {
-                registerTeamInterfaceChannel(settings.guildId, 'duo', settings.duoVcId);
-            }
-            if (settings.trioVcId) {
-                registerTeamInterfaceChannel(settings.guildId, 'trio', settings.trioVcId);
-            }
-            if (settings.squadVcId) {
-                registerTeamInterfaceChannel(settings.guildId, 'squad', settings.squadVcId);
-            }
+            if (settings.duoVcId) registerTeamInterfaceChannel(settings.guildId, 'duo', settings.duoVcId);
+            if (settings.trioVcId) registerTeamInterfaceChannel(settings.guildId, 'trio', settings.trioVcId);
+            if (settings.squadVcId) registerTeamInterfaceChannel(settings.guildId, 'squad', settings.squadVcId);
         }
-        
-        console.log(`[VoiceManager] Team interfaces loaded:`, Array.from(teamInterfaces.entries()));
     } catch (error) {
-        console.error('[VoiceManager] Error loading team interfaces:', error);
-    }
+        }
 }

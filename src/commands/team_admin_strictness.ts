@@ -31,7 +31,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         return;
     }
 
-    // Check if user can run admin commands (bot developer or higher role than bot)
     if (!await canRunAdminCommand(interaction)) {
         await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', flags: [MessageFlags.Ephemeral] });
         return;
@@ -41,7 +40,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     const enabled = mode === 'on';
 
     try {
-        // Update the main guild settings - admin strictness applies to BOTH PVC and team channels
+
         await prisma.guildSettings.upsert({
             where: { guildId: interaction.guild.id },
             update: { adminStrictness: enabled },
@@ -61,7 +60,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             flags: [MessageFlags.Ephemeral],
         });
     } catch (error) {
-        console.error('Team admin strictness error:', error);
         if (!interaction.replied && !interaction.deferred) {
             await interaction.reply({
                 content: 'Failed to update admin strictness setting.',

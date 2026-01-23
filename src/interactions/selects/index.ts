@@ -24,7 +24,6 @@ export async function handleSelectMenuInteraction(
     const { customId, guild } = interaction;
     if (!guild) return;
 
-    // Check if PVC system is paused (excluding admin delete which requires admin perms anyway)
     if (isPvcPaused(guild.id) && customId.startsWith('pvc_') && customId !== 'pvc_admin_delete_select') {
         const pauseEmbed = new EmbedBuilder()
             .setColor(0xFF6B6B)
@@ -42,18 +41,15 @@ export async function handleSelectMenuInteraction(
 
     const userId = interaction.user.id;
 
-    // CRITICAL FIX: Get the channel where the select menu was triggered
-    // This ensures actions apply to the correct channel when user has multiple channels
     const messageChannel = interaction.channel;
     let targetChannelId: string | undefined;
     let isTeamChannel = false;
-    
-    // The interface message is sent IN the voice channel's text chat
+
     if (messageChannel && 'type' in messageChannel && messageChannel.type === ChannelType.GuildVoice) {
-        // Check if this voice channel is a PVC or team channel owned by user
+
         const pvcState = getChannelState(messageChannel.id);
         const teamState = getTeamChannelState(messageChannel.id);
-        
+
         if (pvcState && pvcState.ownerId === userId) {
             targetChannelId = messageChannel.id;
             isTeamChannel = false;
@@ -62,8 +58,7 @@ export async function handleSelectMenuInteraction(
             isTeamChannel = true;
         }
     }
-    
-    // Fallback: If select wasn't triggered from within a VC, check ownership
+
     if (!targetChannelId) {
         let ownedChannelId = getChannelByOwner(guild.id, userId);
         if (!ownedChannelId) {
@@ -168,7 +163,6 @@ async function updateVoicePermissions(
         }
     }
 
-    // Use correct permission table based on channel type
     if (isTeamChannel) {
         for (const id of targetIds) {
             await prisma.teamVoicePermission.upsert({
@@ -213,7 +207,6 @@ async function handleAddUserSelect(
 
     await updateVoicePermissions(channel, users, 'user', 'permit', { ViewChannel: true, Connect: true, SendMessages: true, EmbedLinks: true, AttachFiles: true }, isTeamChannel);
 
-    // Persistent History: Save to OwnerPermission using Cache Helper (PVC only, not team channels)
     const targetIds = Array.from(users.keys());
     if (!isTeamChannel) {
         await batchUpsertOwnerPermissions(
@@ -265,7 +258,6 @@ async function handleRemoveUserSelect(
     }));
     await executeParallel(discordTasks);
 
-    // Delete from correct permission table based on channel type
     if (isTeamChannel) {
         await prisma.teamVoicePermission.deleteMany({
             where: {
@@ -282,7 +274,6 @@ async function handleRemoveUserSelect(
         });
     }
 
-    // Persistent History: Remove from OwnerPermission using Cache Helper (PVC only, not team channels)
     if (!isTeamChannel) {
         await batchDeleteOwnerPermissions(
             interaction.guild!.id,
@@ -427,7 +418,6 @@ async function handleUnblockSelect(
     }));
     await executeParallel(discordTasks);
 
-    // Delete from correct permission table based on channel type
     if (isTeamChannel) {
         await prisma.teamVoicePermission.deleteMany({
             where: {

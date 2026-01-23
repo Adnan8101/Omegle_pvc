@@ -53,16 +53,10 @@ export async function execute(
     const member = newState.member || oldState.member;
     if (!member || member.user.bot) return;
 
-    console.log(`[VoiceState] User: ${member.user.username} | Old: ${oldState.channelId} | New: ${newState.channelId}`);
-
     if (newState.channelId && newState.channelId !== oldState.channelId) {
-        console.log(`[VoiceState] User ${member.user.username} joined channel ${newState.channelId}`);
         const wasKicked = await handleAccessProtection(client, newState);
-
         if (!wasKicked) {
             await handleJoin(client, newState);
-        } else {
-            console.log(`[VoiceState] User ${member.user.username} was kicked from channel`);
         }
     }
 
@@ -78,11 +72,9 @@ async function handleAccessProtection(
     const { channelId: newChannelId, guild, member } = newState;
     if (!newChannelId || !member) return false;
 
-    // Check both PVC and team channel state
     const channelState = getChannelState(newChannelId);
     const teamChannelState = getTeamChannelState(newChannelId);
-    
-    // Not a PVC or team channel
+
     if (!channelState && !teamChannelState) return false;
 
     const channel = guild.channels.cache.get(newChannelId);
@@ -90,8 +82,7 @@ async function handleAccessProtection(
 
     const ownerId = channelState?.ownerId || teamChannelState?.ownerId;
     const isTeamChannel = Boolean(teamChannelState);
-    
-    // Owner can always join
+
     if (member.id === ownerId) return false;
 
     const everyonePerms = channel.permissionOverwrites.cache.get(guild.id);
@@ -102,14 +93,12 @@ async function handleAccessProtection(
     if (!isLocked && !isHidden && !isFull) return false;
 
     const memberRoleIds = member.roles.cache.map(r => r.id);
-    
-    // Get guild settings and whitelist (works for both PVC and team)
+
     const [settings, whitelist] = await Promise.all([
         getGuildSettings(guild.id),
         getWhitelist(guild.id),
     ]);
-    
-    // Get channel-specific permissions based on channel type
+
     let channelPerms: Array<{targetId: string; targetType: string; permission: string}> = [];
     if (isTeamChannel) {
         const teamPerms = await prisma.teamVoicePermission.findMany({
@@ -134,12 +123,11 @@ async function handleAccessProtection(
 
     const hasAdminPerm = member.permissions.has('Administrator') || member.permissions.has('ManageChannels');
 
-    // Admin strictness applies to BOTH PVC and team channels
     if (!settings?.adminStrictness) {
-        // If strictness is OFF, admins bypass protection
+
         if (hasAdminPerm) return false;
     } else {
-        // If strictness is ON, check whitelist (applies to both PVC and team)
+
         const isWhitelisted = whitelist.some(
             w => w.targetId === member.id || memberRoleIds.includes(w.targetId)
         );
@@ -149,7 +137,6 @@ async function handleAccessProtection(
     const reason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
     const channelTypeName = isTeamChannel ? 'team channel' : 'voice channel';
 
-    // FIRE AND FORGET: Don't wait for kick to complete
     fireAndForget(
         `kick:${member.id}`,
         async () => {
@@ -170,7 +157,6 @@ async function handleAccessProtection(
         Priority.LOW
     );
 
-    // Log asynchronously
     logAction({
         action: LogAction.USER_REMOVED,
         guild: guild,
@@ -191,18 +177,17 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
 
     let isInterface = isInterfaceChannel(channelId);
 
-    // FALLBACK: If not in memory, check DB (handles restart edge cases)
     if (!isInterface) {
         const settings = await getGuildSettings(guild.id);
         if (settings?.interfaceVcId === channelId) {
-            // Found in DB but not in memory - register it now
+
             registerInterfaceChannel(guild.id, channelId);
             isInterface = true;
         }
     }
 
     if (isInterface) {
-        // Check if PVC system is paused
+
         if (isPvcPaused(guild.id)) {
             try {
                 await member.voice.disconnect();
@@ -223,53 +208,36 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
         return;
     }
 
-    // Check for team interface channels
     let teamType = getTeamInterfaceType(channelId);
-    console.log(`[HandleJoin] Checking team interface for channel ${channelId}: ${teamType || 'NOT TEAM'}`);
-    
-    // FALLBACK: If not in memory, check DB (handles restart edge cases or mismatched data)
+
     if (!teamType) {
         const teamSettings = await prisma.teamVoiceSettings.findUnique({
             where: { guildId: guild.id },
         });
-        
+
         if (teamSettings) {
-            console.log(`[HandleJoin] Checking DB team settings - duo: ${teamSettings.duoVcId}, trio: ${teamSettings.trioVcId}, squad: ${teamSettings.squadVcId}`);
-            
             if (teamSettings.duoVcId === channelId) {
                 teamType = 'duo';
                 registerTeamInterfaceChannel(guild.id, 'duo', channelId);
-                console.log(`[HandleJoin] Found duo in DB, registered to memory`);
             } else if (teamSettings.trioVcId === channelId) {
                 teamType = 'trio';
                 registerTeamInterfaceChannel(guild.id, 'trio', channelId);
-                console.log(`[HandleJoin] Found trio in DB, registered to memory`);
             } else if (teamSettings.squadVcId === channelId) {
                 teamType = 'squad';
                 registerTeamInterfaceChannel(guild.id, 'squad', channelId);
-                console.log(`[HandleJoin] Found squad in DB, registered to memory`);
-            } else {
-                console.log(`[HandleJoin] Channel ${channelId} not matching any team interface in DB`);
             }
-        } else {
-            console.log(`[HandleJoin] No team settings found in DB for guild ${guild.id}`);
         }
     }
-    
-    // IMPORTANT: Check if user is joining their OWN channel (PVC or team - not the interface)
+
     const ownedTeamChannel = getTeamChannelByOwner(guild.id, member.id);
     const ownedPvcChannel = getChannelByOwner(guild.id, member.id);
-    
+
     if (ownedTeamChannel === channelId || ownedPvcChannel === channelId) {
-        console.log(`[HandleJoin] User ${member.user.username} joined their own channel ${channelId}, skipping creation`);
-        return; // User joined their own created channel, don't create another
+        return;
     }
-    
+
     if (teamType) {
-        console.log(`[HandleJoin] Team interface detected! Type: ${teamType}`);
-        // Check if PVC system is paused
         if (isPvcPaused(guild.id)) {
-            console.log(`[HandleJoin] PVC system is paused, disconnecting user`);
             try {
                 await member.voice.disconnect();
                 const pauseEmbed = new EmbedBuilder()
@@ -285,12 +253,10 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
             } catch { }
             return;
         }
-        console.log(`[HandleJoin] Calling createTeamChannel with type: ${teamType}`);
         await createTeamChannel(client, state, teamType);
         return;
     }
 
-    // Check if joining an existing PVC
     const channelState = getChannelState(channelId);
     if (channelState) {
         const channel = guild.channels.cache.get(channelId);
@@ -310,7 +276,6 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
         return;
     }
 
-    // Check if joining an existing team channel
     const teamChannelState = getTeamChannelState(channelId);
     if (teamChannelState) {
         const channel = guild.channels.cache.get(channelId);
@@ -336,7 +301,6 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
     const { channelId, guild, member } = state;
     if (!channelId) return;
 
-    // Check for regular PVC
     const channelState = getChannelState(channelId);
     if (channelState) {
         if (member) {
@@ -370,17 +334,12 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
 
                 await deletePrivateChannel(channelId, guild.id);
             } else {
-                // Check if only bots remain in the channel
                 const allBots = channel.members.every(m => m.user.bot);
                 if (allBots && channel.members.size > 0) {
-                    console.log(`[HandleLeave] Only bots remain in PVC ${channelId}, kicking them`);
-                    
-                    // Kick all bots
                     for (const [, botMember] of channel.members) {
                         await botMember.voice.disconnect().catch(() => { });
                     }
-                    
-                    // Channel will be auto-deleted when empty
+
                     await logAction({
                         action: LogAction.CHANNEL_DELETED,
                         guild: guild,
@@ -398,7 +357,6 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
         return;
     }
 
-    // Check for team channel
     const teamChannelState = getTeamChannelState(channelId);
     if (teamChannelState) {
         if (member) {
@@ -436,17 +394,12 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
 
                 await deleteTeamChannel(channelId, guild.id);
             } else {
-                // Check if only bots remain in the channel
                 const allBots = channel.members.every(m => m.user.bot);
                 if (allBots && channel.members.size > 0) {
-                    console.log(`[HandleLeave] Only bots remain in Team channel ${channelId}, kicking them`);
-                    
-                    // Kick all bots
                     for (const [, botMember] of channel.members) {
                         await botMember.voice.disconnect().catch(() => { });
                     }
-                    
-                    // Channel will be auto-deleted when empty
+
                     await logAction({
                         action: LogAction.TEAM_CHANNEL_DELETED,
                         guild: guild,
@@ -471,10 +424,9 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
 
     if (!member || !interfaceChannel) return;
 
-    // RACE CONDITION PROTECTION: Acquire lock before proceeding
     const lockAcquired = await acquireCreationLock(guild.id, member.id);
     if (!lockAcquired) {
-        // Another creation is already in progress for this user
+
         try {
             await member.voice.disconnect();
         } catch { }
@@ -490,46 +442,35 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
             return;
         }
 
-        // Double-check ownership after acquiring lock - CHECK BOTH PVC AND TEAM CHANNELS
         let existingChannel = getChannelByOwner(guild.id, member.id);
         let existingType = 'PVC';
-        
-        // Also check for team channels - user should only have ONE channel of any type
+
         if (!existingChannel) {
             existingChannel = getTeamChannelByOwner(guild.id, member.id);
             existingType = 'Team';
         }
 
         if (existingChannel) {
-            console.log(`[CreatePrivateChannel] Found channel in memory - ${existingType}: ${existingChannel}`);
-            
-            // CRITICAL: Verify ownership in database before blocking
             let actuallyOwnsChannel = false;
             if (existingType === 'Team') {
                 const teamDbCheck = await prisma.teamVoiceChannel.findUnique({
                     where: { channelId: existingChannel },
                 });
                 actuallyOwnsChannel = teamDbCheck?.ownerId === member.id;
-                console.log(`[CreatePrivateChannel] Database ownership check: ${actuallyOwnsChannel} (DB owner: ${teamDbCheck?.ownerId})`);
             } else {
                 const pvcDbCheck = await prisma.privateVoiceChannel.findUnique({
                     where: { channelId: existingChannel },
                 });
                 actuallyOwnsChannel = pvcDbCheck?.ownerId === member.id;
-                console.log(`[CreatePrivateChannel] Database ownership check: ${actuallyOwnsChannel} (DB owner: ${pvcDbCheck?.ownerId})`);
             }
-            
+
             if (!actuallyOwnsChannel) {
-                // Memory was stale - user no longer owns this channel, clean up
-                console.log(`[CreatePrivateChannel] Memory stale - user no longer owns channel, cleaning up`);
                 if (existingType === 'Team') {
                     unregisterTeamChannel(existingChannel);
                 } else {
                     unregisterChannel(existingChannel);
                 }
-                // Continue to create new channel
             } else {
-                // User actually owns the channel - verify it exists in Discord
                 const channel = guild.channels.cache.get(existingChannel);
                 if (channel && channel.type === ChannelType.GuildVoice) {
                     try {
@@ -541,7 +482,6 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                     releaseCreationLock(guild.id, member.id);
                     return;
                 } else {
-                    // Channel exists in memory but not in Discord - clean up stale data
                     if (existingType === 'Team') {
                         unregisterTeamChannel(existingChannel);
                         await prisma.teamVoiceChannel.delete({
@@ -557,10 +497,8 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
             }
         }
 
-        // Verify interface channel still exists in Discord
         const interfaceExists = guild.channels.cache.has(interfaceChannel.id);
         if (!interfaceExists) {
-            // Interface channel was deleted - unregister and disconnect user
             unregisterInterfaceChannel(guild.id);
             try {
                 await member.voice.disconnect();
@@ -573,7 +511,6 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
 
         const ownerPerms = getOwnerPermissions();
 
-        // Persistent History: Load from Cache
         const savedPermissions = await getCachedOwnerPerms(guild.id, member.id);
         const permissionOverwrites: any[] = [
             {
@@ -582,10 +519,10 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                 deny: ownerPerms.deny,
             },
         ];
-        // Apply saved permissions to channel overrides - VALIDATE each one first
+
         const invalidTargetIds: string[] = [];
         for (const p of savedPermissions) {
-            // Check if user/role still exists in guild cache
+
             const isValidMember = guild.members.cache.has(p.targetId);
             const isValidRole = guild.roles.cache.has(p.targetId);
 
@@ -598,7 +535,7 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                 invalidTargetIds.push(p.targetId);
             }
         }
-        // Clean up invalid permissions from DB in background
+
         if (invalidTargetIds.length > 0) {
             prisma.ownerPermission.deleteMany({
                 where: {
@@ -609,7 +546,6 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
             }).catch(() => { });
         }
 
-        // IMMEDIATE priority - J2C must NEVER wait in queue
         const newChannel = await executeWithRateLimit(
                 `create:${guild.id}`,
                 () => guild.channels.create({
@@ -641,8 +577,6 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                 },
             });
 
-            // RELEASE LOCK IMMEDIATELY after successful channel creation and registration
-            // This prevents race conditions during the async operations below
             releaseCreationLock(guild.id, member.id);
 
             const freshMember = await guild.members.fetch(member.id);
@@ -650,28 +584,20 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
             await freshMember.voice.setChannel(newChannel);
 
             try {
-                // Send the full interface canvas with buttons to VC text chat
-                console.log(`[CreatePVC] Generating interface image...`);
                 const imageBuffer = await generateInterfaceImage();
                 const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
                 const embed = generateVcInterfaceEmbed(guild, member.id, 'interface.png');
                 const components = createInterfaceComponents();
 
-                console.log(`[CreatePVC] Sending interface to ${newChannel.name}...`);
                 const interfaceMessage = await newChannel.send({
                     content: `<@${member.id}>`,
                     embeds: [embed],
                     files: [attachment],
                     components,
                 });
-                console.log(`[CreatePVC] Interface sent, message ID: ${interfaceMessage.id}`);
 
-                // Pin the interface message
                 await interfaceMessage.pin().catch(() => { });
-                console.log(`[CreatePVC] Interface pinned`);
-            } catch (interfaceError) {
-                console.error(`[CreatePVC] Failed to send interface:`, interfaceError);
-            }
+            } catch { }
 
             await logAction({
                 action: LogAction.CHANNEL_CREATED,
@@ -737,9 +663,8 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                 );
             }
         }
-    } catch (error) { 
-        // Error occurred, ensure lock is released
-        console.error(`[CreatePrivateChannel] ERROR:`, error);
+    } catch (error) {
+
         releaseCreationLock(guild.id, member.id);
     }
 }
@@ -751,22 +676,20 @@ async function transferChannelOwnership(
     channel: any
 ): Promise<void> {
     try {
-        // First try to get next user from join order
+
         let nextUserId = getNextUserInOrder(channelId);
-        
-        // If no one in join order, pick any member currently in the channel
+
         if (!nextUserId && channel.members.size > 0) {
             const currentState = getChannelState(channelId);
             const teamState = getTeamChannelState(channelId);
             const oldOwnerId = currentState?.ownerId || teamState?.ownerId;
-            
-            // Get first member that's not the old owner
+
             const availableMember = channel.members.find((m: any) => m.id !== oldOwnerId && !m.user.bot);
             if (availableMember) {
                 nextUserId = availableMember.id;
             }
         }
-        
+
         if (!nextUserId) {
             return;
         }
@@ -780,7 +703,6 @@ async function transferChannelOwnership(
         const teamState = getTeamChannelState(channelId);
         const isTeamChannel = Boolean(teamState);
 
-        // Update memory state using proper transfer function
         if (currentState) {
             transferOwnership(channelId, nextUserId);
         }
@@ -815,7 +737,6 @@ async function transferChannelOwnership(
             ManageChannels: true,
         });
 
-        // Rename channel to new owner's name
         try {
             await executeWithRateLimit(
                 `rename:${channelId}`,
@@ -879,18 +800,10 @@ async function deletePrivateChannel(channelId: string, guildId: string): Promise
 async function createTeamChannel(client: PVCClient, state: VoiceState, teamType: TeamType): Promise<void> {
     const { guild, member, channel: interfaceChannel } = state;
 
-    console.log(`[CreateTeamChannel] START - User: ${member?.user.username}, Type: ${teamType}, Guild: ${guild.name}`);
-    console.log(`[CreateTeamChannel] Interface channel: ${interfaceChannel?.id}`);
+    if (!member || !interfaceChannel) return;
 
-    if (!member || !interfaceChannel) {
-        console.log(`[CreateTeamChannel] ABORT - Missing member or interface channel`);
-        return;
-    }
-
-    // RACE CONDITION PROTECTION: Acquire lock before proceeding
     const lockAcquired = await acquireCreationLock(guild.id, member.id);
     if (!lockAcquired) {
-        // Another creation is already in progress for this user
         try {
             await member.voice.disconnect();
         } catch { }
@@ -906,63 +819,48 @@ async function createTeamChannel(client: PVCClient, state: VoiceState, teamType:
             return;
         }
 
-        // ENFORCEMENT: Double-check if user already owns ANY channel (PVC or team) after acquiring lock
-        console.log(`[CreateTeamChannel] Checking for existing channels owned by ${member.user.username}`);
-        
-        // Check for regular PVC first
         let existingChannel = getChannelByOwner(guild.id, member.id);
         let existingType = 'PVC';
-        
-        // Then check for team channels
+
         if (!existingChannel) {
             existingChannel = getTeamChannelByOwner(guild.id, member.id);
             existingType = 'Team';
         }
 
         if (existingChannel) {
-            console.log(`[CreateTeamChannel] Found channel in memory - ${existingType}: ${existingChannel}`);
-            
-            // CRITICAL: Verify ownership in database before blocking
             let actuallyOwnsChannel = false;
             if (existingType === 'Team') {
                 const teamDbCheck = await prisma.teamVoiceChannel.findUnique({
                     where: { channelId: existingChannel },
                 });
                 actuallyOwnsChannel = teamDbCheck?.ownerId === member.id;
-                console.log(`[CreateTeamChannel] Database ownership check: ${actuallyOwnsChannel} (DB owner: ${teamDbCheck?.ownerId})`);
             } else {
                 const pvcDbCheck = await prisma.privateVoiceChannel.findUnique({
                     where: { channelId: existingChannel },
                 });
                 actuallyOwnsChannel = pvcDbCheck?.ownerId === member.id;
-                console.log(`[CreateTeamChannel] Database ownership check: ${actuallyOwnsChannel} (DB owner: ${pvcDbCheck?.ownerId})`);
             }
-            
+
             if (!actuallyOwnsChannel) {
-                // Memory was stale - user no longer owns this channel, clean up
-                console.log(`[CreateTeamChannel] Memory stale - user no longer owns channel, cleaning up`);
                 if (existingType === 'Team') {
                     unregisterTeamChannel(existingChannel);
                 } else {
                     unregisterChannel(existingChannel);
                 }
-                // Continue to create new channel
             } else {
-                // User actually owns the channel - verify it exists in Discord
                 const channel = guild.channels.cache.get(existingChannel);
                 const existingState = existingType === 'Team' ? getTeamChannelState(existingChannel) : getChannelState(existingChannel);
-                
+
                 if (channel && channel.type === ChannelType.GuildVoice) {
                     try {
                         const freshMember = await guild.members.fetch(member.id);
                         if (freshMember.voice.channelId) {
                             await freshMember.voice.setChannel(channel);
-                            
-                            // Send info message about existing channel
+
                             const channelTypeName = existingType === 'Team' && existingState && 'teamType' in existingState
                                 ? existingState.teamType.toUpperCase()
                                 : 'Private Voice';
-                            
+
                             const embed = new EmbedBuilder()
                                 .setColor(0xFFA500)
                                 .setTitle('Existing Channel')
@@ -978,7 +876,6 @@ async function createTeamChannel(client: PVCClient, state: VoiceState, teamType:
                     releaseCreationLock(guild.id, member.id);
                     return;
                 } else {
-                    // Channel exists in memory but not in Discord - clean up stale data
                     if (existingType === 'Team') {
                         unregisterTeamChannel(existingChannel);
                         await prisma.teamVoiceChannel.delete({
@@ -999,7 +896,6 @@ async function createTeamChannel(client: PVCClient, state: VoiceState, teamType:
         const userLimit = TEAM_USER_LIMITS[teamType];
         const ownerPerms = getOwnerPermissions();
 
-        console.log(`[CreateTeamChannel] Creating channel - Type: ${teamType}, Limit: ${userLimit}`);
         const newChannel = await executeWithRateLimit(
             `create:${guild.id}`,
             () => guild.channels.create({
@@ -1018,14 +914,9 @@ async function createTeamChannel(client: PVCClient, state: VoiceState, teamType:
             Priority.IMMEDIATE
         );
 
-        console.log(`[CreateTeamChannel] Channel created: ${newChannel.id} - ${newChannel.name}`);
-
         registerTeamChannel(newChannel.id, guild.id, member.id, teamType);
-        console.log(`[CreateTeamChannel] Channel registered in memory`);
-
         addUserToJoinOrder(newChannel.id, member.id);
 
-        console.log(`[CreateTeamChannel] Saving to database...`);
         await prisma.teamVoiceChannel.create({
             data: {
                 channelId: newChannel.id,
@@ -1035,42 +926,29 @@ async function createTeamChannel(client: PVCClient, state: VoiceState, teamType:
                 createdAt: new Date(),
             },
         });
-        console.log(`[CreateTeamChannel] Database record created`);
 
-        // RELEASE LOCK IMMEDIATELY after successful channel creation and registration
-        // This prevents race conditions during the async operations below
         releaseCreationLock(guild.id, member.id);
-        
+
         const freshMember = await guild.members.fetch(member.id);
         if (freshMember.voice.channelId) {
-            console.log(`[CreateTeamChannel] Moving user to new channel...`);
             await freshMember.voice.setChannel(newChannel);
-            console.log(`[CreateTeamChannel] User moved successfully`);
 
             try {
-                // Send the full interface canvas with buttons to team VC text chat
-                console.log(`[CreateTeamChannel] Generating interface image...`);
                 const imageBuffer = await generateInterfaceImage();
                 const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
                 const embed = generateVcInterfaceEmbed(guild, member.id, 'interface.png');
                 embed.setTitle(`🎮 ${teamType.charAt(0).toUpperCase() + teamType.slice(1)} Controls`);
                 const components = createInterfaceComponents();
 
-                console.log(`[CreateTeamChannel] Sending interface to ${newChannel.name}...`);
                 const interfaceMessage = await newChannel.send({
                     content: `<@${member.id}> - **User Limit:** ${userLimit}`,
                     embeds: [embed],
                     files: [attachment],
                     components,
                 });
-                console.log(`[CreateTeamChannel] Interface sent, message ID: ${interfaceMessage.id}`);
 
-                // Pin the interface message
                 await interfaceMessage.pin().catch(() => { });
-                console.log(`[CreateTeamChannel] Interface pinned`);
-            } catch (interfaceError) {
-                console.error(`[CreateTeamChannel] Failed to send interface:`, interfaceError);
-            }
+            } catch { }
 
             await logAction({
                 action: LogAction.TEAM_CHANNEL_CREATED,
@@ -1082,17 +960,13 @@ async function createTeamChannel(client: PVCClient, state: VoiceState, teamType:
                 isTeamChannel: true,
                 teamType: teamType,
             });
-            console.log(`[CreateTeamChannel] Logged action to webhook`);
         } else {
-            console.log(`[CreateTeamChannel] CLEANUP - User not in voice, deleting channel`);
             await newChannel.delete();
             unregisterTeamChannel(newChannel.id);
             await prisma.teamVoiceChannel.delete({ where: { channelId: newChannel.id } }).catch(() => { });
             return;
         }
-    } catch (error) { 
-        // Error occurred, ensure lock is released
-        console.error(`[CreateTeamChannel] ERROR:`, error);
+    } catch (error) {
         releaseCreationLock(guild.id, member.id);
     }
 }
@@ -1135,19 +1009,17 @@ async function transferTeamChannelOwnership(
     try {
         const teamState = getTeamChannelState(channelId);
         const oldOwnerId = teamState?.ownerId;
-        
-        // First try to get next user from join order
+
         let nextUserId = getNextUserInOrder(channelId);
-        
-        // If no one in join order, pick any member currently in the channel
+
         if (!nextUserId && channel.members.size > 0) {
-            // Get first member that's not the old owner
+
             const availableMember = channel.members.find((m: any) => m.id !== oldOwnerId && !m.user.bot);
             if (availableMember) {
                 nextUserId = availableMember.id;
             }
         }
-        
+
         if (!nextUserId) {
             return;
         }
@@ -1178,7 +1050,6 @@ async function transferTeamChannelOwnership(
             ManageChannels: true,
         });
 
-        // Rename to new owner's team name, preserving team type
         const teamType = teamState?.teamType || 'Team';
         const teamTypeName = teamType.charAt(0).toUpperCase() + teamType.slice(1).toLowerCase();
         try {

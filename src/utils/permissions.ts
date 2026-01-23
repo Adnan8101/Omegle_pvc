@@ -9,18 +9,11 @@ export interface PermissionDiff {
     deny: bigint;
 }
 
-/**
- * Check if user can run admin commands.
- * Allowed if:
- * 1. User is the bot developer
- * 2. User's highest role is above the bot's highest role
- */
 export async function canRunAdminCommand(interaction: ChatInputCommandInteraction): Promise<boolean> {
     if (!interaction.guild || !interaction.member) {
         return false;
     }
 
-    // Bot developer has full access
     if (interaction.user.id === BOT_DEVELOPER_ID) {
         return true;
     }
@@ -28,31 +21,21 @@ export async function canRunAdminCommand(interaction: ChatInputCommandInteractio
     const member = interaction.member as GuildMember;
     const botMember = await interaction.guild.members.fetchMe();
 
-    // Get highest role positions
     const userHighestRole = member.roles.highest;
     const botHighestRole = botMember.roles.highest;
 
-    // User's role must be higher than bot's role
     return userHighestRole.position > botHighestRole.position;
 }
 
-/**
- * Check if user can toggle admin strictness.
- * Allowed if:
- * 1. User is the server owner
- * 2. User is one of the 3 authorized users (bot dev + 2 others)
- */
 export async function canToggleStrictness(interaction: ChatInputCommandInteraction): Promise<boolean> {
     if (!interaction.guild || !interaction.member) {
         return false;
     }
 
-    // Check if user is server owner
     if (interaction.guild.ownerId === interaction.user.id) {
         return true;
     }
 
-    // Check if user is one of the authorized users
     if (AUTHORIZED_USER_IDS.includes(interaction.user.id)) {
         return true;
     }
@@ -60,10 +43,6 @@ export async function canToggleStrictness(interaction: ChatInputCommandInteracti
     return false;
 }
 
-/**
- * Calculates permission differences to minimize API calls.
- * Only returns changes that need to be applied.
- */
 export function calculatePermissionDiff(
     channel: VoiceChannel,
     targetId: string,
@@ -73,7 +52,7 @@ export function calculatePermissionDiff(
     const existing = channel.permissionOverwrites.cache.get(targetId);
 
     if (!existing) {
-        // No existing override, need to create
+
         if (desiredAllow !== 0n || desiredDeny !== 0n) {
             return { targetId, allow: desiredAllow, deny: desiredDeny };
         }
@@ -83,7 +62,6 @@ export function calculatePermissionDiff(
     const currentAllow = existing.allow.bitfield;
     const currentDeny = existing.deny.bitfield;
 
-    // Check if any change is needed
     if (currentAllow === desiredAllow && currentDeny === desiredDeny) {
         return null;
     }
@@ -91,9 +69,6 @@ export function calculatePermissionDiff(
     return { targetId, allow: desiredAllow, deny: desiredDeny };
 }
 
-/**
- * Lock a voice channel - prevents anyone from joining
- */
 export function getLockPermissions(): { allow: bigint; deny: bigint } {
     return {
         allow: 0n,
@@ -101,9 +76,6 @@ export function getLockPermissions(): { allow: bigint; deny: bigint } {
     };
 }
 
-/**
- * Unlock a voice channel - restores join access
- */
 export function getUnlockPermissions(): { allow: bigint; deny: bigint } {
     return {
         allow: 0n,
@@ -111,9 +83,6 @@ export function getUnlockPermissions(): { allow: bigint; deny: bigint } {
     };
 }
 
-/**
- * Hide a voice channel - makes it invisible
- */
 export function getHidePermissions(): { allow: bigint; deny: bigint } {
     return {
         allow: 0n,
@@ -121,9 +90,6 @@ export function getHidePermissions(): { allow: bigint; deny: bigint } {
     };
 }
 
-/**
- * Unhide a voice channel - restores visibility
- */
 export function getUnhidePermissions(): { allow: bigint; deny: bigint } {
     return {
         allow: 0n,
@@ -131,9 +97,6 @@ export function getUnhidePermissions(): { allow: bigint; deny: bigint } {
     };
 }
 
-/**
- * Get permissions for a permitted user/role
- */
 export function getPermitPermissions(): { allow: bigint; deny: bigint } {
     return {
         allow: PermissionsBitField.Flags.ViewChannel | PermissionsBitField.Flags.Connect |
@@ -143,9 +106,6 @@ export function getPermitPermissions(): { allow: bigint; deny: bigint } {
     };
 }
 
-/**
- * Get permissions for a banned user/role
- */
 export function getBanPermissions(): { allow: bigint; deny: bigint } {
     return {
         allow: 0n,
@@ -153,9 +113,6 @@ export function getBanPermissions(): { allow: bigint; deny: bigint } {
     };
 }
 
-/**
- * Get owner permissions for a private voice channel
- */
 export function getOwnerPermissions(): { allow: bigint; deny: bigint } {
     return {
         allow:

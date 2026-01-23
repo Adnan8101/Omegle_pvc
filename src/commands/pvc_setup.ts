@@ -152,7 +152,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             reason: 'For logging PVC actions',
         });
 
-
         await prisma.guildSettings.upsert({
             where: { guildId: guild.id },
             update: {

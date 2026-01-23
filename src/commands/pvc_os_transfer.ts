@@ -38,8 +38,6 @@ export const command: Command = {
         const targetChannel = interaction.options.getChannel('vc', true) as import('discord.js').VoiceChannel;
         const newOwnerUser = interaction.options.getUser('owner', true);
 
-
-        // Security Check: Developer ID, or Admin with Higher Role than Bot
         const isDeveloper = DEVELOPER_IDS.includes(user.id);
 
         const guildMember = member as GuildMember;
@@ -48,7 +46,6 @@ export const command: Command = {
         const hasHigherRole = botMember && guildMember.roles.highest.position > botMember.roles.highest.position;
         const hasAdminPerm = guildMember.permissions.has(PermissionFlagsBits.Administrator);
 
-        // Allow if: Developer OR (Admin Permission AND Higher Role than Bot)
         if (!isDeveloper && !(hasAdminPerm && hasHigherRole)) {
             await interaction.reply({
                 content: '🚫 Access Denied. You must be a Bot Developer or an Administrator with a role higher than the bot.',
@@ -91,7 +88,6 @@ export const command: Command = {
             });
 
         } catch (error) {
-            console.error(error);
             await interaction.editReply({
                 content: '❌ An error occurred while transferring the channel.',
             });

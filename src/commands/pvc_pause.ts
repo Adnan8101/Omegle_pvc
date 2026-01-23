@@ -59,7 +59,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             .setFooter({ text: `Paused by ${interaction.user.tag}` })
             .setTimestamp();
 
-        // Send notification to interface text channel if it exists
         if (settings?.interfaceTextId) {
             const interfaceChannel = interaction.guild.channels.cache.get(settings.interfaceTextId);
             if (interfaceChannel && interfaceChannel.type === ChannelType.GuildText) {
@@ -68,7 +67,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }
         }
 
-        // Log the action
         await logAction({
             action: LogAction.PVC_SETUP,
             guild: interaction.guild,

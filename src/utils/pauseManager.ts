@@ -1,8 +1,6 @@
-
 const pausedGuilds = new Set<string>();
-
-// Pause message cache (guildId -> messageId)
 const pauseMessageCache = new Map<string, string>();
+
 export function isPvcPaused(guildId: string): boolean {
     return pausedGuilds.has(guildId);
 }
@@ -18,6 +16,7 @@ export function resumePvc(guildId: string): void {
 export function getPausedGuilds(): string[] {
     return Array.from(pausedGuilds);
 }
+
 export function setPauseMessageId(guildId: string, messageId: string): void {
     pauseMessageCache.set(guildId, messageId);
 }
@@ -25,7 +24,6 @@ export function setPauseMessageId(guildId: string, messageId: string): void {
 export function getPauseMessageId(guildId: string): string | undefined {
     return pauseMessageCache.get(guildId);
 }
-
 
 export function clearPauseMessageId(guildId: string): void {
     pauseMessageCache.delete(guildId);

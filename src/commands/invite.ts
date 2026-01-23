@@ -14,7 +14,7 @@ const data = new SlashCommandBuilder()
     .setDMPermission(true);
 
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    // Required permissions for the PVC bot
+
     const permissions = [
         PermissionFlagsBits.ViewChannel,
         PermissionFlagsBits.ManageChannels,
@@ -30,10 +30,8 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         PermissionFlagsBits.ManageMessages,
     ];
 
-    // Calculate permission value
     const permissionValue = permissions.reduce((acc, perm) => acc | perm, 0n);
 
-    // Generate invite URL
     const inviteUrl = `https://discord.com/api/oauth2/authorize?client_id=${Config.clientId}&permissions=${permissionValue}&scope=bot%20applications.commands`;
 
     const embed = new EmbedBuilder()

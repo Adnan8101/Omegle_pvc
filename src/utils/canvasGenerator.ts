@@ -58,22 +58,19 @@ export async function generateInterfaceImage(): Promise<Buffer> {
     const canvas = createCanvas(canvasWidth, canvasHeight);
     const ctx = canvas.getContext('2d');
 
-    // Draw buttons
     for (let r = 0; r < BUTTON_LAYOUT.length; r++) {
         const row = BUTTON_LAYOUT[r];
         for (let c = 0; c < row.length; c++) {
             const btn = row[c];
-            if (!btn) continue; // Skip if button doesn't exist
-            
+            if (!btn) continue;
+
             const x = startX + c * (buttonWidth + gap);
             const y = startY + r * (buttonHeight + gap);
 
-            // Draw button background (rounded rect)
-            ctx.fillStyle = '#232428'; // Discord button dark color
+            ctx.fillStyle = '#232428';
             roundRect(ctx, x, y, buttonWidth, buttonHeight, 15);
             ctx.fill();
 
-            // Draw Emoji
             try {
                 const emojiData = BUTTON_EMOJI_MAP[btn.id];
                 if (emojiData) {
@@ -82,21 +79,18 @@ export async function generateInterfaceImage(): Promise<Buffer> {
                     ctx.drawImage(emojiImg, x + 15, y + 12, 36, 36);
                 }
             } catch (e) {
-                // Fallback if emoji fails to load
+
             }
 
-            // Draw Text
             ctx.fillStyle = '#FFFFFF';
             ctx.font = 'bold 20px "Verdana", "Arial", sans-serif';
             ctx.textAlign = 'left';
             ctx.textBaseline = 'middle';
 
-            // Ensure text fits within button (max width = buttonWidth - emoji space - padding)
-            const maxTextWidth = buttonWidth - 75; // 65px for emoji + 10px right padding
+            const maxTextWidth = buttonWidth - 75;
             const textX = x + 65;
             const textY = y + buttonHeight / 2;
 
-            // Measure and scale text if needed
             let currentFont = 20;
             ctx.font = `bold ${currentFont}px "Verdana", "Arial", sans-serif`;
             let textWidth = ctx.measureText(btn.label).width;

@@ -32,11 +32,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         const guild = interaction.guild;
         const guildId = guild.id;
 
-        // 1. Fetch current settings to get channel IDs
         const settings = await prisma.guildSettings.findUnique({
             where: { guildId },
             include: {
-                privateChannels: true, // Get all active PVCs
+                privateChannels: true,
             },
         });
 
@@ -48,7 +47,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         let channelsDeleted = 0;
         let errors = 0;
 
-        // 2. Delete Interface Text Channel
         if (settings.interfaceTextId) {
             const channel = guild.channels.cache.get(settings.interfaceTextId);
             if (channel) {
@@ -59,7 +57,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }
         }
 
-        // 3. Delete "Join to Create" Voice Channel
         if (settings.interfaceVcId) {
             const channel = guild.channels.cache.get(settings.interfaceVcId);
             if (channel) {
@@ -68,11 +65,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 });
                 channelsDeleted++;
             }
-            // Cleanup memory
+
             unregisterInterfaceChannel(guildId);
         }
 
-        // 4. Delete all active Private Voice Channels
         for (const pvc of settings.privateChannels) {
             const channel = guild.channels.cache.get(pvc.channelId);
             if (channel) {
@@ -81,17 +77,14 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 });
                 channelsDeleted++;
             }
-            // Cleanup memory (though DB delete handles sync usually, good to be safe)
+
             unregisterChannel(pvc.channelId);
         }
 
-        // 5. Delete DB Records
-        // Deleting GuildSettings cascades to PrivateVoiceChannel and VoicePermission
         await prisma.guildSettings.delete({
             where: { guildId },
         });
 
-        // 6. Delete Strictness Whitelist (No relation, manual delete)
         await prisma.strictnessWhitelist.deleteMany({
             where: { guildId },
         });

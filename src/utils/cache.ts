@@ -1,5 +1,3 @@
-
-
 interface CacheEntry<T> {
     data: T;
     expiresAt: number;
@@ -32,7 +30,7 @@ class TTLCache<K, V> {
     }
 
     set(key: K, value: V, ttlMs?: number): void {
-        // LRU eviction if at max size
+
         if (this.cache.size >= this.maxSize) {
             const firstKey = this.cache.keys().next().value;
             if (firstKey !== undefined) {
@@ -66,7 +64,6 @@ class TTLCache<K, V> {
         this.cache.clear();
     }
 
-    // Cleanup expired entries (call periodically)
     cleanup(): number {
         const now = Date.now();
         let removed = 0;
@@ -86,15 +83,13 @@ class TTLCache<K, V> {
     }
 }
 
-// Cache TTL configurations (in milliseconds)
 const CACHE_TTL = {
-    GUILD_SETTINGS: 5 * 60 * 1000,      // 5 minutes - rarely changes
-    CHANNEL_PERMISSIONS: 2 * 60 * 1000,  // 2 minutes
-    OWNER_PERMISSIONS: 2 * 60 * 1000,    // 2 minutes
-    WHITELIST: 5 * 60 * 1000,            // 5 minutes
+    GUILD_SETTINGS: 5 * 60 * 1000,
+    CHANNEL_PERMISSIONS: 2 * 60 * 1000,
+    OWNER_PERMISSIONS: 2 * 60 * 1000,
+    WHITELIST: 5 * 60 * 1000,
 };
 
-// Type definitions
 interface CachedGuildSettings {
     id: string;
     guildId: string;
@@ -166,8 +161,6 @@ export function invalidateChannelPermissions(channelId: string): void {
     channelPermissionsCache.delete(channelId);
 }
 
-// ============ Owner Permissions (Persistent) ============
-
 export async function getOwnerPermissions(guildId: string, ownerId: string): Promise<CachedPermission[]> {
     const cacheKey = `${guildId}:${ownerId}`;
 
@@ -211,14 +204,6 @@ export async function getWhitelist(guildId: string): Promise<CachedWhitelistEntr
 export function invalidateWhitelist(guildId: string): void {
     whitelistCache.delete(guildId);
 }
-
-// Cleanup expired entries automatically every 5 minutes
-setInterval(() => {
-    guildSettingsCache.cleanup();
-    channelPermissionsCache.cleanup();
-    ownerPermissionsCache.cleanup();
-    whitelistCache.cleanup();
-}, 5 * 60 * 1000); // Every 5 minutes
 
 export async function batchUpsertPermissions(
     channelId: string,

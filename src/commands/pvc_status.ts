@@ -21,7 +21,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         return;
     }
 
-    // Check admin permissions
     if (!await canRunAdminCommand(interaction)) {
         await interaction.reply({ content: 'You need a role higher than the bot to use this command, or be the bot developer.', flags: [MessageFlags.Ephemeral] });
         return;
@@ -32,7 +31,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     try {
         const guild = interaction.guild;
 
-        // Get guild settings
         const settings = await prisma.guildSettings.findUnique({
             where: { guildId: guild.id },
             include: {
@@ -40,7 +38,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             },
         });
 
-        // Get team settings
         const teamSettings = await prisma.teamVoiceSettings.findUnique({
             where: { guildId: guild.id },
             include: {
@@ -53,7 +50,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             return;
         }
 
-        // Get channel info
         const interfaceTextChannel = settings.interfaceTextId
             ? guild.channels.cache.get(settings.interfaceTextId)
             : null;
@@ -61,7 +57,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             ? guild.channels.cache.get(settings.interfaceVcId)
             : null;
 
-        // Build status embed
         const embed = new EmbedBuilder()
             .setTitle('PVC System Status')
             .setColor(settings.adminStrictness ? 0x00FF00 : 0xFF0000)
@@ -94,7 +89,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             )
             .setTimestamp();
 
-        // List active PVC channels if any
         if (settings.privateChannels.length > 0) {
             const channelList = settings.privateChannels.slice(0, 10).map((pvc: { channelId: string; ownerId: string }) => {
                 const channel = guild.channels.cache.get(pvc.channelId);
@@ -109,7 +103,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             });
         }
 
-        // List active team channels if any
         if (teamSettings && teamSettings.teamChannels.length > 0) {
             const channelList = teamSettings.teamChannels.slice(0, 10).map((tc: { channelId: string; ownerId: string; teamType: string }) => {
                 const channel = guild.channels.cache.get(tc.channelId);

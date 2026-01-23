@@ -103,7 +103,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         return;
     }
 
-    // Update PVC logs webhook
     let pvcLogsWebhookUrl = settings?.logsWebhookUrl;
     if (pvcLogsChannel && pvcLogsChannel.type === ChannelType.GuildText) {
         try {
@@ -118,11 +117,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }
             pvcLogsWebhookUrl = webhook.url;
         } catch (error: any) {
-            console.error('PVC Webhook error:', error?.message || error);
+
         }
     }
 
-    // Update Team logs webhook
     let teamLogsWebhookUrl = teamSettings?.logsWebhookUrl;
     if (teamLogsChannel && teamLogsChannel.type === ChannelType.GuildText) {
         try {
@@ -137,11 +135,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }
             teamLogsWebhookUrl = webhook.url;
         } catch (error: any) {
-            console.error('Team Webhook error:', error?.message || error);
+
         }
     }
 
-    // Update PVC settings
     if (settings) {
         await prisma.guildSettings.update({
             where: { guildId: guild.id },
@@ -155,7 +152,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         });
     }
 
-    // Update Team settings
     if (teamSettings) {
         await prisma.teamVoiceSettings.update({
             where: { guildId: guild.id },
@@ -172,10 +168,8 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     invalidateGuildSettings(guild.id);
     invalidateAllCaches();
 
-    // FULL STATE RELOAD: Clear in-memory state and reload from DB
     clearGuildState(guild.id);
 
-    // Reload settings from DB
     const freshSettings = await prisma.guildSettings.findUnique({
         where: { guildId: guild.id },
         include: { privateChannels: true },
@@ -193,7 +187,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
 
-    // CRITICAL: Re-register team interface channels (Duo/Trio/Squad generators)
     let teamInterfacesRegistered = 0;
     if (freshTeamSettings) {
         if (freshTeamSettings.duoVcId) {
@@ -201,9 +194,9 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             if (duoVc) {
                 registerTeamInterfaceChannel(guild.id, 'duo', freshTeamSettings.duoVcId);
                 teamInterfacesRegistered++;
-                console.log(`[Refresh] Registered duo interface: ${freshTeamSettings.duoVcId}`);
+
             } else {
-                console.log(`[Refresh] Duo interface channel ${freshTeamSettings.duoVcId} not found in guild`);
+
             }
         }
         if (freshTeamSettings.trioVcId) {
@@ -211,9 +204,9 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             if (trioVc) {
                 registerTeamInterfaceChannel(guild.id, 'trio', freshTeamSettings.trioVcId);
                 teamInterfacesRegistered++;
-                console.log(`[Refresh] Registered trio interface: ${freshTeamSettings.trioVcId}`);
+
             } else {
-                console.log(`[Refresh] Trio interface channel ${freshTeamSettings.trioVcId} not found in guild`);
+
             }
         }
         if (freshTeamSettings.squadVcId) {
@@ -221,14 +214,13 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             if (squadVc) {
                 registerTeamInterfaceChannel(guild.id, 'squad', freshTeamSettings.squadVcId);
                 teamInterfacesRegistered++;
-                console.log(`[Refresh] Registered squad interface: ${freshTeamSettings.squadVcId}`);
+
             } else {
-                console.log(`[Refresh] Squad interface channel ${freshTeamSettings.squadVcId} not found in guild`);
+
             }
         }
     }
 
-    // Re-register all active PVCs
     if (freshSettings?.privateChannels) {
         const validPvcs = [];
         const invalidPvcIds = [];
@@ -243,7 +235,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }
         }
 
-        // Clean up stale PVCs from DB in parallel
         if (invalidPvcIds.length > 0) {
             prisma.privateVoiceChannel.deleteMany({
                 where: { channelId: { in: invalidPvcIds } },
@@ -251,7 +242,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
 
-    // Re-register all active team channels
     if (freshTeamSettings?.teamChannels) {
         const invalidTeamIds = [];
 
@@ -264,7 +254,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }
         }
 
-        // Clean up stale team channels from DB
         if (invalidTeamIds.length > 0) {
             prisma.teamVoiceChannel.deleteMany({
                 where: { channelId: { in: invalidTeamIds } },
@@ -272,61 +261,53 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
 
-    // OWNERSHIP VERIFICATION: Check all VCs and transfer ownership if owner not present
     let ownershipTransfers = 0;
     let channelsDeleted = 0;
-    
-    // Check PVC ownership
+
     if (freshSettings?.privateChannels) {
         for (const pvc of freshSettings.privateChannels) {
             const channel = guild.channels.cache.get(pvc.channelId);
             if (channel && channel.type === ChannelType.GuildVoice) {
                 const ownerInChannel = channel.members.has(pvc.ownerId);
-                
+
                 if (!ownerInChannel) {
-                    // Owner not in channel - need to transfer or delete
+
                     if (channel.members.size === 0) {
-                        // Channel is empty - delete it
+
                         try {
                             await channel.delete('Refresh: Empty channel cleanup');
                             await prisma.privateVoiceChannel.delete({ where: { channelId: pvc.channelId } }).catch(() => {});
                             channelsDeleted++;
                         } catch { }
                     } else {
-                        // Channel has members - transfer to next person (first non-bot member)
+
                         const nextOwner = channel.members.find(m => !m.user.bot);
                         if (nextOwner) {
-                            // Transfer ownership
+
                             transferOwnership(pvc.channelId, nextOwner.id);
-                            
-                            // Update database
+
                             await prisma.privateVoiceChannel.update({
                                 where: { channelId: pvc.channelId },
                                 data: { ownerId: nextOwner.id },
                             });
-                            
-                            // Update Discord permissions - give new owner full perms
+
                             const ownerPerms = getOwnerPermissions();
                             await channel.permissionOverwrites.edit(nextOwner.id, {
                                 ViewChannel: true, Connect: true, Speak: true, Stream: true,
                                 SendMessages: true, EmbedLinks: true, AttachFiles: true,
                                 MuteMembers: true, DeafenMembers: true, ManageChannels: true,
                             }).catch(() => {});
-                            
-                            // Rename channel to new owner
+
                             await channel.setName(nextOwner.displayName).catch(() => {});
-                            
-                            // Re-register with new owner
+
                             registerChannel(pvc.channelId, pvc.guildId, nextOwner.id);
-                            
-                            // Rebuild join order for this channel
+
                             const membersInOrder = Array.from(channel.members.values())
                                 .filter(m => !m.user.bot && m.id !== nextOwner.id);
                             for (const member of membersInOrder) {
                                 addUserToJoinOrder(pvc.channelId, member.id);
                             }
-                            
-                            // Send notification
+
                             try {
                                 const embed = new EmbedBuilder()
                                     .setColor(0x9B59B6)
@@ -335,7 +316,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                                     .setTimestamp();
                                 await channel.send({ embeds: [embed] });
                             } catch { }
-                            
+
                             await logAction({
                                 action: LogAction.CHANNEL_TRANSFERRED,
                                 guild: guild,
@@ -344,12 +325,12 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                                 channelId: pvc.channelId,
                                 details: `Ownership transferred during refresh (previous owner not present)`,
                             });
-                            
+
                             ownershipTransfers++;
                         }
                     }
                 } else {
-                    // Owner is in channel - rebuild join order based on current members
+
                     const membersInOrder = Array.from(channel.members.values())
                         .filter(m => !m.user.bot && m.id !== pvc.ownerId);
                     for (const member of membersInOrder) {
@@ -359,58 +340,51 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }
         }
     }
-    
-    // Check Team channel ownership
+
     if (freshTeamSettings?.teamChannels) {
         for (const tc of freshTeamSettings.teamChannels) {
             const channel = guild.channels.cache.get(tc.channelId);
             if (channel && channel.type === ChannelType.GuildVoice) {
                 const ownerInChannel = channel.members.has(tc.ownerId);
-                
+
                 if (!ownerInChannel) {
-                    // Owner not in channel - need to transfer or delete
+
                     if (channel.members.size === 0) {
-                        // Channel is empty - delete it
+
                         try {
                             await channel.delete('Refresh: Empty team channel cleanup');
                             await prisma.teamVoiceChannel.delete({ where: { channelId: tc.channelId } }).catch(() => {});
                             channelsDeleted++;
                         } catch { }
                     } else {
-                        // Channel has members - transfer to next person (first non-bot member)
+
                         const nextOwner = channel.members.find(m => !m.user.bot);
                         if (nextOwner) {
-                            // Transfer ownership
+
                             transferTeamOwnership(tc.channelId, nextOwner.id);
-                            
-                            // Update database
+
                             await prisma.teamVoiceChannel.update({
                                 where: { channelId: tc.channelId },
                                 data: { ownerId: nextOwner.id },
                             });
-                            
-                            // Update Discord permissions - give new owner full perms
+
                             await channel.permissionOverwrites.edit(nextOwner.id, {
                                 ViewChannel: true, Connect: true, Speak: true, Stream: true,
                                 SendMessages: true, EmbedLinks: true, AttachFiles: true,
                                 MuteMembers: true, DeafenMembers: true, ManageChannels: true,
                             }).catch(() => {});
-                            
-                            // Rename channel to new owner with team type
+
                             const teamTypeName = tc.teamType.charAt(0) + tc.teamType.slice(1).toLowerCase();
                             await channel.setName(`${nextOwner.displayName}'s ${teamTypeName}`).catch(() => {});
-                            
-                            // Re-register with new owner
+
                             registerTeamChannel(tc.channelId, tc.guildId, nextOwner.id, tc.teamType.toLowerCase() as 'duo' | 'trio' | 'squad');
-                            
-                            // Rebuild join order for this channel
+
                             const membersInOrder = Array.from(channel.members.values())
                                 .filter(m => !m.user.bot && m.id !== nextOwner.id);
                             for (const member of membersInOrder) {
                                 addUserToJoinOrder(tc.channelId, member.id);
                             }
-                            
-                            // Send notification
+
                             try {
                                 const embed = new EmbedBuilder()
                                     .setColor(0x9B59B6)
@@ -419,7 +393,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                                     .setTimestamp();
                                 await channel.send({ embeds: [embed] });
                             } catch { }
-                            
+
                             await logAction({
                                 action: LogAction.CHANNEL_TRANSFERRED,
                                 guild: guild,
@@ -430,12 +404,12 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                                 isTeamChannel: true,
                                 teamType: tc.teamType.toLowerCase(),
                             });
-                            
+
                             ownershipTransfers++;
                         }
                     }
                 } else {
-                    // Owner is in channel - rebuild join order based on current members
+
                     const membersInOrder = Array.from(channel.members.values())
                         .filter(m => !m.user.bot && m.id !== tc.ownerId);
                     for (const member of membersInOrder) {
@@ -446,35 +420,30 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
 
-    // PERMISSION SYNC: Update permissions to match current VC members
-    // Re-fetch from DB to get updated owners after transfers
     const updatedPvcs = await prisma.privateVoiceChannel.findMany({
         where: { guildId: guild.id },
     });
     const updatedTeamChannels = await prisma.teamVoiceChannel.findMany({
         where: { guildId: guild.id },
     });
-    
+
     let permsSynced = 0;
     let teamPermsSynced = 0;
-    
+
     for (const pvc of updatedPvcs) {
         const channel = guild.channels.cache.get(pvc.channelId);
         if (channel && channel.type === ChannelType.GuildVoice) {
-            // Get current members in the VC (excluding the owner)
+
             const currentMemberIds = channel.members
                 .filter(m => m.id !== pvc.ownerId && !m.user.bot)
                 .map(m => m.id);
 
-            // Delete all old permissions for this channel
             await prisma.voicePermission.deleteMany({
                 where: { channelId: pvc.channelId, permission: 'permit' },
             });
 
-            // Invalidate cache so !l shows fresh data
             invalidateChannelPermissions(pvc.channelId);
 
-            // Create permissions for current members only
             if (currentMemberIds.length > 0) {
                 await prisma.voicePermission.createMany({
                     data: currentMemberIds.map(userId => ({
@@ -488,17 +457,14 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 permsSynced += currentMemberIds.length;
             }
 
-            // DISCORD SYNC: Update Discord permissions for owner and all current members
-            // Grant chat permissions (SendMessages, EmbedLinks, AttachFiles)
             try {
-                // Update owner permissions
+
                 await channel.permissionOverwrites.edit(pvc.ownerId, {
                     ViewChannel: true, Connect: true, Speak: true, Stream: true,
                     SendMessages: true, EmbedLinks: true, AttachFiles: true,
                     MuteMembers: true, DeafenMembers: true, ManageChannels: true,
                 });
 
-                // Update all current member permissions
                 for (const memberId of currentMemberIds) {
                     await channel.permissionOverwrites.edit(memberId, {
                         ViewChannel: true, Connect: true,
@@ -509,24 +475,20 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
 
-    // TEAM CHANNEL PERMISSION SYNC
     for (const tc of updatedTeamChannels) {
         const channel = guild.channels.cache.get(tc.channelId);
         if (channel && channel.type === ChannelType.GuildVoice) {
-            // Get current members in the VC (excluding the owner)
+
             const currentMemberIds = channel.members
                 .filter(m => m.id !== tc.ownerId && !m.user.bot)
                 .map(m => m.id);
 
-            // Delete all old permissions for this team channel
             await prisma.teamVoicePermission.deleteMany({
                 where: { channelId: tc.channelId, permission: 'permit' },
             });
 
-            // Invalidate cache
             invalidateChannelPermissions(tc.channelId);
 
-            // Create permissions for current members only
             if (currentMemberIds.length > 0) {
                 await prisma.teamVoicePermission.createMany({
                     data: currentMemberIds.map(userId => ({
@@ -540,16 +502,14 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 teamPermsSynced += currentMemberIds.length;
             }
 
-            // DISCORD SYNC: Update Discord permissions
             try {
-                // Update owner permissions
+
                 await channel.permissionOverwrites.edit(tc.ownerId, {
                     ViewChannel: true, Connect: true, Speak: true, Stream: true,
                     SendMessages: true, EmbedLinks: true, AttachFiles: true,
                     MuteMembers: true, DeafenMembers: true, ManageChannels: true,
                 });
 
-                // Update all current member permissions
                 for (const memberId of currentMemberIds) {
                     await channel.permissionOverwrites.edit(memberId, {
                         ViewChannel: true, Connect: true,
@@ -560,39 +520,33 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
 
-    // Update all existing interface messages in active PVCs and Team channels (use updated owner IDs)
     let interfacesUpdated = 0;
     let interfacesSkipped = 0;
     let interfaceErrors: string[] = [];
-    
-    console.log(`[Refresh] Updating interfaces for ${updatedPvcs.length} PVCs and ${updatedTeamChannels.length} Team channels`);
-    
+
     for (const pvc of updatedPvcs) {
         const channel = guild.channels.cache.get(pvc.channelId);
         if (channel && channel.type === ChannelType.GuildVoice) {
             try {
                 console.log(`[Refresh] Fetching messages from PVC: ${channel.name} (${pvc.channelId})`);
                 const messages = await channel.messages.fetch({ limit: 20 });
-                console.log(`[Refresh] Found ${messages.size} messages in ${channel.name}`);
-                
-                // Find any bot message with embeds or components (pinned or not)
-                const interfaceMsg = messages.find(m => 
-                    m.author.id === interaction.client.user?.id && 
+
+                const interfaceMsg = messages.find(m =>
+                    m.author.id === interaction.client.user?.id &&
                     (m.embeds.length > 0 || m.components.length > 0)
                 );
-                
+
                 if (interfaceMsg) {
-                    console.log(`[Refresh] Found interface message: ${interfaceMsg.id}`);
+
                     const imageBuffer = await generateInterfaceImage();
                     const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
                     const embed = generateVcInterfaceEmbed(guild, pvc.ownerId, 'interface.png');
                     const components = createInterfaceComponents();
                     await interfaceMsg.edit({ embeds: [embed], files: [attachment], components });
                     interfacesUpdated++;
-                    console.log(`[Refresh] Updated interface for PVC: ${channel.name}`);
+
                 } else {
-                    console.log(`[Refresh] No interface found in PVC: ${channel.name}, sending new one`);
-                    // Send new interface if none exists
+
                     try {
                         const imageBuffer = await generateInterfaceImage();
                         const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
@@ -606,36 +560,34 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                         });
                         await newMsg.pin().catch(() => {});
                         interfacesUpdated++;
-                        console.log(`[Refresh] Sent new interface for PVC: ${channel.name}`);
+
                     } catch (sendErr) {
-                        console.log(`[Refresh] Failed to send interface to PVC: ${channel.name}`, sendErr);
+
                         interfacesSkipped++;
                     }
                 }
             } catch (err) {
-                console.log(`[Refresh] Error updating PVC interface: ${channel.name}`, err);
+
                 interfaceErrors.push(`PVC ${channel.name}: ${err}`);
                 interfacesSkipped++;
             }
         }
     }
-    
+
     for (const tc of updatedTeamChannels) {
         const channel = guild.channels.cache.get(tc.channelId);
         if (channel && channel.type === ChannelType.GuildVoice) {
             try {
                 console.log(`[Refresh] Fetching messages from Team: ${channel.name} (${tc.channelId})`);
                 const messages = await channel.messages.fetch({ limit: 20 });
-                console.log(`[Refresh] Found ${messages.size} messages in ${channel.name}`);
-                
-                // Find any bot message with embeds or components (pinned or not)
-                const interfaceMsg = messages.find(m => 
-                    m.author.id === interaction.client.user?.id && 
+
+                const interfaceMsg = messages.find(m =>
+                    m.author.id === interaction.client.user?.id &&
                     (m.embeds.length > 0 || m.components.length > 0)
                 );
-                
+
                 if (interfaceMsg) {
-                    console.log(`[Refresh] Found interface message: ${interfaceMsg.id}`);
+
                     const imageBuffer = await generateInterfaceImage();
                     const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
                     const embed = generateVcInterfaceEmbed(guild, tc.ownerId, 'interface.png');
@@ -643,10 +595,9 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     const components = createInterfaceComponents();
                     await interfaceMsg.edit({ embeds: [embed], files: [attachment], components });
                     interfacesUpdated++;
-                    console.log(`[Refresh] Updated interface for Team: ${channel.name}`);
+
                 } else {
-                    console.log(`[Refresh] No interface found in Team: ${channel.name}, sending new one`);
-                    // Send new interface if none exists
+
                     try {
                         const teamTypeName = tc.teamType.charAt(0) + tc.teamType.slice(1).toLowerCase();
                         const userLimit = tc.teamType === 'DUO' ? 2 : tc.teamType === 'TRIO' ? 3 : 4;
@@ -663,14 +614,14 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                         });
                         await newMsg.pin().catch(() => {});
                         interfacesUpdated++;
-                        console.log(`[Refresh] Sent new interface for Team: ${channel.name}`);
+
                     } catch (sendErr) {
-                        console.log(`[Refresh] Failed to send interface to Team: ${channel.name}`, sendErr);
+
                         interfacesSkipped++;
                     }
                 }
             } catch (err) {
-                console.log(`[Refresh] Error updating Team interface: ${channel.name}`, err);
+
                 interfaceErrors.push(`Team ${channel.name}: ${err}`);
                 interfacesSkipped++;
             }
@@ -678,14 +629,13 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     }
 
     const interfaceTextChannel = guild.channels.cache.get(freshSettings?.interfaceTextId || settings?.interfaceTextId || '');
-    
+
     let mainInterfaceUpdated = false;
-    
-    // Try to update main interface - skip if channel or message doesn't exist
+
     if (interfaceTextChannel && interfaceTextChannel.type === ChannelType.GuildText) {
         try {
             let oldMessage: Message | null = null;
-            
+
             try {
                 const messages = await interfaceTextChannel.messages.fetch({ limit: 10 });
                 const botMessage = messages.find(m => m.author.id === interaction.client.user?.id && m.embeds.length > 0);
@@ -693,7 +643,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     oldMessage = botMessage;
                 }
             } catch {
-                // Messages couldn't be fetched - skip
+
             }
 
             const row1 = new ActionRowBuilder<ButtonBuilder>();
@@ -737,7 +687,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     });
                     mainInterfaceUpdated = true;
                 } catch {
-                    // Message was deleted or can't be edited - try sending new one
+
                     try {
                         await interfaceTextChannel.send({
                             embeds: [embed],
@@ -758,11 +708,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 } catch { }
             }
         } catch {
-            // Interface update failed - continue with response
+
         }
     }
 
-    // Log action (non-blocking)
     logAction({
         action: LogAction.PVC_REFRESHED,
         guild: guild,
@@ -770,7 +719,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         details: `System refreshed - Ownership transfers: ${ownershipTransfers}, Deleted: ${channelsDeleted}${pvcLogsChannel ? `, PVC logs: ${pvcLogsChannel}` : ''}${teamLogsChannel ? `, Team logs: ${teamLogsChannel}` : ''}${commandChannel ? `, PVC commands: ${commandChannel}` : ''}${teamCommandChannel ? `, Team commands: ${teamCommandChannel}` : ''}`,
     }).catch(() => {});
 
-    // Build response
     let response = '✅ **PVC & Team System Refreshed**\n\n';
     response += '**State Reloaded:**\n';
     if (mainInterfaceUpdated) {

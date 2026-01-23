@@ -41,20 +41,20 @@ export async function withRetry<T>(
         try {
             return await operation();
         } catch (error: any) {
-            const isConnectionError = 
+            const isConnectionError =
                 error.code === 'P1001' ||
                 error.code === 'P1002' ||
                 error.code === 'P1008' ||
                 error.code === 'P1017' ||
                 error.message?.includes('connection') ||
                 error.message?.includes('timeout');
-            
+
             if (!isConnectionError || attempt === maxRetries) {
                 throw error;
             }
-            
+
             await new Promise(resolve => setTimeout(resolve, delay * attempt));
-            
+
             try {
                 await prisma.$connect();
             } catch {

@@ -30,7 +30,7 @@ client.commands.set(pvcSetup.data.name, pvcSetup);
 client.commands.set(adminStrictness.data.name, adminStrictness);
 client.commands.set(teamAdminStrictness.data.name, teamAdminStrictness);
 client.commands.set(pvcStatus.data.name, pvcStatus);
-client.commands.set('status', pvcStatus); // Alias for pvc_status
+client.commands.set('status', pvcStatus);
 client.commands.set(pvcCommandChannel.data.name, pvcCommandChannel);
 client.commands.set(pvcStaffRole.data.name, pvcStaffRole);
 client.commands.set(pvcCleanup.data.name, pvcCleanup);

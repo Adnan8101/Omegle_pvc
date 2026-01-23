@@ -31,7 +31,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
 
     const guildId = interaction.guild.id;
 
-    // Check if already running
     if (!isPvcPaused(guildId)) {
         await interaction.reply({
             content: '⚠️ The PVC system is not paused. It is already running normally.',
@@ -43,13 +42,11 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
     try {
-        // Resume the PVC system
+
         resumePvc(guildId);
 
-        // Get the interface text channel
         const settings = await getGuildSettings(guildId);
 
-        // Delete the pause notification message if it exists
         if (settings?.interfaceTextId) {
             const interfaceChannel = interaction.guild.channels.cache.get(settings.interfaceTextId);
             if (interfaceChannel && interfaceChannel.type === ChannelType.GuildText) {
@@ -62,7 +59,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     clearPauseMessageId(guildId);
                 }
 
-                // Send resume notification
                 const resumeEmbed = new EmbedBuilder()
                     .setColor(0x57F287)
                     .setTitle('▶️ PVC System Resumed')
@@ -80,7 +76,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
 
                 const resumeMessage = await interfaceChannel.send({ embeds: [resumeEmbed] });
 
-                // Auto-delete the resume message after 30 seconds
                 setTimeout(async () => {
                     try {
                         await resumeMessage.delete();
@@ -89,7 +84,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }
         }
 
-        // Log the action
         await logAction({
             action: LogAction.PVC_SETUP,
             guild: interaction.guild,

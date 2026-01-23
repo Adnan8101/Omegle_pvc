@@ -44,10 +44,9 @@ export const command: Command = {
         const guildId = interaction.guild.id;
         const ownerId = interaction.user.id;
 
-        // Check if user owns a PVC or team channel
         const pvcData = await prisma.privateVoiceChannel.findFirst({ where: { guildId, ownerId } });
         const teamData = !pvcData ? await prisma.teamVoiceChannel.findFirst({ where: { guildId, ownerId } }) : null;
-        
+
         if (!pvcData && !teamData) {
             await interaction.reply({
                 content: 'You need to own a voice channel to manage permanent access.',
@@ -75,7 +74,6 @@ export const command: Command = {
                 return;
             }
 
-            // Check if already exists
             const existing = await prisma.ownerPermission.findUnique({
                 where: {
                     guildId_ownerId_targetId: { guildId, ownerId, targetId: targetUser.id },

@@ -25,13 +25,11 @@ const NUMBER_EMOJIS = [
 export async function execute(client: PVCClient, message: Message): Promise<void> {
     if (message.author.bot) return;
 
-    // Eval command - Developer only - works ANYWHERE (no guild or prefix required)
     if (message.content.startsWith('!eval ')) {
         await handleEval(message);
         return;
     }
 
-    // All other commands require guild and prefix
     if (!message.guild || !message.content.startsWith(PREFIX)) return;
 
     if (message.content.startsWith('!admin strictness wl')) {
@@ -62,31 +60,24 @@ export async function execute(client: PVCClient, message: Message): Promise<void
     const settings = await getGuildSettings(message.guild.id);
     const teamSettings = await prisma.teamVoiceSettings.findUnique({ where: { guildId: message.guild.id } });
 
-    // Check if message is in a VC text chat that user owns
-    // Voice channel text chat messages have the same channel.id as the voice channel
     const pvcOwnership = getChannelByOwner(message.guild.id, message.author.id);
     const teamOwnership = getTeamChannelByOwner(message.guild.id, message.author.id);
 
-    // User is in their own VC text chat if the message channel matches their owned channel
     const isInOwnedVcChat = (pvcOwnership === message.channel.id) || (teamOwnership === message.channel.id);
     const vcChannelId = isInOwnedVcChat ? (pvcOwnership || teamOwnership) : undefined;
 
-    // Check if in PVC command channel or team command channel
     const isInPvcCommandChannel = settings?.commandChannelId && message.channel.id === settings.commandChannelId;
     const isInTeamCommandChannel = teamSettings?.commandChannelId && message.channel.id === teamSettings.commandChannelId;
     const isInCommandChannel = isInPvcCommandChannel || isInTeamCommandChannel;
 
-    // Determine which system the user is trying to use based on ownership
     const isPvcCommand = Boolean(pvcOwnership);
     const isTeamCommand = Boolean(teamOwnership);
 
-    // For PVC commands: allow if in PVC command channel, team command channel (sync to all), or owned PVC chat
-    // For Team commands: allow if in team command channel or owned team chat
     const allowedForPvc = isPvcCommand && (isInPvcCommandChannel || isInTeamCommandChannel || (vcChannelId === pvcOwnership));
     const allowedForTeam = isTeamCommand && (isInTeamCommandChannel || (vcChannelId === teamOwnership));
 
     if (!allowedForPvc && !allowedForTeam && !isInCommandChannel && !isInOwnedVcChat) {
-        // If not in command channel or owned VC chat, check if trying to use commands
+
         if (message.content.startsWith('!au') || message.content.startsWith('!ru') || message.content.startsWith('!l')) {
             if (!settings?.commandChannelId && !teamSettings?.commandChannelId) {
                 const embed = new EmbedBuilder()
@@ -106,14 +97,11 @@ export async function execute(client: PVCClient, message: Message): Promise<void
     const member = message.member;
     if (!member) return;
 
-    // Check for PVC ownership first, then team channel ownership as fallback
-    // If in VC chat, use that channel. Otherwise, look up ownership.
     let ownedChannelId = vcChannelId || getChannelByOwner(message.guild.id, member.id);
     if (!ownedChannelId) {
         ownedChannelId = getTeamChannelByOwner(message.guild.id, member.id);
     }
 
-    // Check if PVC system is paused for PVC-related commands
     if (isPvcPaused(message.guild.id) && ['adduser', 'au', 'removeuser', 'ru', 'list', 'l'].includes(commandName)) {
         const pauseEmbed = new EmbedBuilder()
             .setColor(0xFF6B6B)
@@ -170,16 +158,16 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
     }
 
     if (!channelId) {
-        // Final fallback - check database directly
-        const pvcCheck = await prisma.privateVoiceChannel.findFirst({ 
-            where: { guildId: guild.id, ownerId: message.author.id } 
+
+        const pvcCheck = await prisma.privateVoiceChannel.findFirst({
+            where: { guildId: guild.id, ownerId: message.author.id }
         });
-        const teamCheck = !pvcCheck ? await prisma.teamVoiceChannel.findFirst({ 
-            where: { guildId: guild.id, ownerId: message.author.id } 
+        const teamCheck = !pvcCheck ? await prisma.teamVoiceChannel.findFirst({
+            where: { guildId: guild.id, ownerId: message.author.id }
         }) : null;
-        
+
         channelId = pvcCheck?.channelId || teamCheck?.channelId || undefined;
-        
+
         if (!channelId) {
             const embed = new EmbedBuilder()
                 .setDescription('You do not own a voice channel. Create one first by joining the interface channel.')
@@ -222,7 +210,6 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
         return;
     }
 
-    // Check if user is adding users one-by-one (for hint)
     const shouldShowHint = !isSecretCommand && trackCommandUsage('au', message.author.id, guild.id, userIdsToAdd.length);
 
     const channel = guild.channels.cache.get(channelId);
@@ -249,7 +236,6 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
             await executeParallel(discordTasks);
         }
 
-        // Save to correct permission table based on channel type
         if (isTeamChannel) {
             for (const perm of permissionsToAdd) {
                 await prisma.teamVoicePermission.upsert({
@@ -277,8 +263,7 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
             for (let i = 0; i < count; i++) {
                 await message.react(NUMBER_EMOJIS[i]).catch(() => { });
             }
-            
-            // Show hint if user is adding one-by-one
+
             if (shouldShowHint) {
                 clearCommandTracking('au', message.author.id, guild.id);
                 const hintEmbed = new EmbedBuilder()
@@ -291,7 +276,7 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
                         '`!au @byte @venom @evil @demon`'
                     )
                     .setFooter({ text: 'This saves time and makes managing your VC easier!' });
-                
+
                 await message.reply({ embeds: [hintEmbed] }).catch(() => { });
             }
         }
@@ -324,16 +309,16 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
     }
 
     if (!channelId) {
-        // Final fallback - check database directly
-        const pvcCheck = await prisma.privateVoiceChannel.findFirst({ 
-            where: { guildId: guild.id, ownerId: message.author.id } 
+
+        const pvcCheck = await prisma.privateVoiceChannel.findFirst({
+            where: { guildId: guild.id, ownerId: message.author.id }
         });
-        const teamCheck = !pvcCheck ? await prisma.teamVoiceChannel.findFirst({ 
-            where: { guildId: guild.id, ownerId: message.author.id } 
+        const teamCheck = !pvcCheck ? await prisma.teamVoiceChannel.findFirst({
+            where: { guildId: guild.id, ownerId: message.author.id }
         }) : null;
-        
+
         channelId = pvcCheck?.channelId || teamCheck?.channelId || undefined;
-        
+
         if (!channelId) {
             const embed = new EmbedBuilder()
                 .setDescription('You do not own a voice channel. Create one first by joining the interface channel.')
@@ -376,7 +361,6 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
         return;
     }
 
-    // Check if user is removing users one-by-one (for hint)
     const shouldShowHint = !isSecretCommand && trackCommandUsage('ru', message.author.id, guild.id, userIdsToRemove.length);
 
     const channel = guild.channels.cache.get(channelId);
@@ -404,7 +388,6 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
             await executeParallel(discordTasks);
         }
 
-        // Delete from correct permission table based on channel type
         if (isTeamChannel) {
             await prisma.teamVoicePermission.deleteMany({
                 where: { channelId, targetId: { in: userIdsToRemove } },
@@ -424,8 +407,7 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
             for (let i = 0; i < count; i++) {
                 await message.react(NUMBER_EMOJIS[i]).catch(() => { });
             }
-            
-            // Show hint if user is removing one-by-one
+
             if (shouldShowHint) {
                 clearCommandTracking('ru', message.author.id, guild.id);
                 const hintEmbed = new EmbedBuilder()
@@ -438,7 +420,7 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
                         '`!ru @byte @venom @evil @demon`'
                     )
                     .setFooter({ text: 'This saves time and makes managing your VC easier!' });
-                
+
                 await message.reply({ embeds: [hintEmbed] }).catch(() => { });
             }
         }
@@ -448,7 +430,6 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
 async function handleList(message: Message, channelId: string | undefined): Promise<void> {
     const guild = message.guild!;
 
-    // If user doesn't own a PVC, show their permanent access list
     if (!channelId) {
         const permanentAccess = await prisma.ownerPermission.findMany({
             where: { guildId: guild.id, ownerId: message.author.id },
@@ -480,15 +461,13 @@ async function handleList(message: Message, channelId: string | undefined): Prom
         return;
     }
 
-    // User owns a PVC or team channel - show channel info
     const channel = guild.channels.cache.get(channelId);
 
-    // Check both tables
     const pvcData = await prisma.privateVoiceChannel.findUnique({
         where: { channelId },
         include: { permissions: true },
     });
-    
+
     const teamData = await prisma.teamVoiceChannel.findUnique({
         where: { channelId },
         include: { permissions: true },
@@ -508,13 +487,12 @@ async function handleList(message: Message, channelId: string | undefined): Prom
     const permittedUsers = channelData!.permissions.filter(p => p.permission === 'permit' && p.targetType === 'user');
     const bannedUsers = channelData!.permissions.filter(p => p.permission === 'ban' && p.targetType === 'user');
 
-    // Get permanent access count
     const permanentCount = await prisma.ownerPermission.count({
         where: { guildId: guild.id, ownerId: message.author.id },
     });
 
-    const channelTypeDisplay = isTeamChannel 
-        ? `Team Channel (${teamData!.teamType})` 
+    const channelTypeDisplay = isTeamChannel
+        ? `Team Channel (${teamData!.teamType})`
         : 'Private Voice Channel';
 
     const embed = new EmbedBuilder()
@@ -789,7 +767,6 @@ async function handleEval(message: Message): Promise<void> {
         return;
     }
 
-    // Make these available in eval scope
     const client = message.client;
     const channel = message.channel;
     const guild = message.guild;
@@ -798,13 +775,12 @@ async function handleEval(message: Message): Promise<void> {
     const msg = message;
 
     try {
-        // Try to evaluate as expression first (e.g., "1+1", "guild.memberCount")
-        // If that fails, evaluate as statement (e.g., "const x = 1; return x")
+
         let evaled;
         try {
             evaled = await eval(`(async () => { return ${code} })()`);
         } catch {
-            // If expression fails, try as statement block
+
             evaled = await eval(`(async () => { ${code} })()`);
         }
 
@@ -830,7 +806,6 @@ async function handleEval(message: Message): Promise<void> {
 
         const reply = await message.reply({ embeds: [embed], components: [deleteRow] });
 
-        // Handle delete button
         const collector = reply.createMessageComponentCollector({
             componentType: ComponentType.Button,
             filter: (i) => DEVELOPER_IDS.includes(i.user.id) && i.customId === 'eval_delete',
