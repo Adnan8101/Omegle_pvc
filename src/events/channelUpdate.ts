@@ -253,21 +253,84 @@ export async function execute(
     revertInProgress.add(channelId);
 
     // Fetch audit logs FIRST to identify who made the change
+    // Try multiple audit log types since Discord uses different ones
     let editorId: string | null = null;
     try {
+        // Try ChannelUpdate first
         const auditLogs = await newVc.guild.fetchAuditLogs({
             type: AuditLogEvent.ChannelUpdate,
-            limit: 10,
+            limit: 15,
         });
 
         for (const entry of auditLogs.entries.values()) {
             if (entry.target?.id === channelId) {
                 const timeDiff = Date.now() - entry.createdTimestamp;
-                if (timeDiff < 30000) { // 30 seconds window for audit log delay
+                if (timeDiff < 60000) { // 60 seconds window for audit log delay
                     editorId = entry.executor?.id || null;
+                    console.log(`[ChannelUpdate] Found editor ${editorId} from ChannelUpdate audit log (${timeDiff}ms ago)`);
                     break;
                 }
             }
+        }
+
+        // If not found, try ChannelOverwriteUpdate (for permission changes)
+        if (!editorId) {
+            const overwriteLogs = await newVc.guild.fetchAuditLogs({
+                type: AuditLogEvent.ChannelOverwriteUpdate,
+                limit: 15,
+            });
+
+            for (const entry of overwriteLogs.entries.values()) {
+                if (entry.target?.id === channelId) {
+                    const timeDiff = Date.now() - entry.createdTimestamp;
+                    if (timeDiff < 60000) {
+                        editorId = entry.executor?.id || null;
+                        console.log(`[ChannelUpdate] Found editor ${editorId} from ChannelOverwriteUpdate audit log (${timeDiff}ms ago)`);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Also try ChannelOverwriteCreate and ChannelOverwriteDelete
+        if (!editorId) {
+            const createLogs = await newVc.guild.fetchAuditLogs({
+                type: AuditLogEvent.ChannelOverwriteCreate,
+                limit: 10,
+            });
+
+            for (const entry of createLogs.entries.values()) {
+                if (entry.target?.id === channelId) {
+                    const timeDiff = Date.now() - entry.createdTimestamp;
+                    if (timeDiff < 60000) {
+                        editorId = entry.executor?.id || null;
+                        console.log(`[ChannelUpdate] Found editor ${editorId} from ChannelOverwriteCreate audit log (${timeDiff}ms ago)`);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!editorId) {
+            const deleteLogs = await newVc.guild.fetchAuditLogs({
+                type: AuditLogEvent.ChannelOverwriteDelete,
+                limit: 10,
+            });
+
+            for (const entry of deleteLogs.entries.values()) {
+                if (entry.target?.id === channelId) {
+                    const timeDiff = Date.now() - entry.createdTimestamp;
+                    if (timeDiff < 60000) {
+                        editorId = entry.executor?.id || null;
+                        console.log(`[ChannelUpdate] Found editor ${editorId} from ChannelOverwriteDelete audit log (${timeDiff}ms ago)`);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!editorId) {
+            console.log(`[ChannelUpdate] Could not find editor in audit logs for channel ${channelId}`);
         }
     } catch (err) {
         console.error('[ChannelUpdate] Failed to fetch audit logs:', err);
@@ -321,18 +384,22 @@ export async function execute(
             }
         }
 
-        // Kick intruders if security was compromised
+        // Kick intruders if security was compromised OR if channel should be locked/hidden
+        // This closes the loophole where users join during the brief unlock window
         const wasUnlocked = oldLocked && !newLocked;
         const wasUnhidden = oldHidden && !newHidden;
         const limitIncreased = newVc.userLimit > oldVc.userLimit || (oldVc.userLimit > 0 && newVc.userLimit === 0);
-
-        if (wasUnlocked || wasUnhidden || limitIncreased) {
+        
+        // ALWAYS kick unauthorized users if the channel was supposed to be locked or hidden
+        // This ensures anyone who entered during the brief exploit window is removed
+        if (wasUnlocked || wasUnhidden || limitIncreased || oldLocked || oldHidden) {
+            console.log(`[ChannelUpdate] Kicking unauthorized users from ${channelId} (oldLocked=${oldLocked}, oldHidden=${oldHidden}, wasUnlocked=${wasUnlocked}, wasUnhidden=${wasUnhidden})`);
             await kickUnauthorizedUsers(newVc, ownerId!, client);
         }
 
-        // Send warning to VC text chat
-        if (ownerId && editorId) {
-            await sendWarningToVcChat(newVc, ownerId, editorId, changes);
+        // Send warning to VC text chat - always send even if editor is unknown
+        if (ownerId) {
+            await sendWarningToVcChat(newVc, ownerId, editorId || null, changes);
         }
 
         // Log action
@@ -477,14 +544,16 @@ async function kickUnauthorizedUsers(
 async function sendWarningToVcChat(
     vc: import('discord.js').VoiceChannel,
     ownerId: string,
-    editorId: string,
+    editorId: string | null,
     changes: string[]
 ): Promise<void> {
+    const editorText = editorId ? `<@${editorId}>` : 'Someone (unable to identify)';
+    
     const warningEmbed = new EmbedBuilder()
         .setColor(0xFF0000)
         .setTitle('⚠️ PVC Manipulation Detected & Reverted')
         .setDescription(
-            `<@${editorId}> tried to manipulate your voice channel settings.\n\n` +
+            `${editorText} tried to manipulate your voice channel settings.\n\n` +
             `**Changes attempted:**\n${changes.map(c => `• ${c}`).join('\n')}\n\n` +
             `**All changes have been automatically reverted.**\n\n` +
             `This may be power abuse. Please report to senior staff if needed.`
@@ -509,7 +578,7 @@ async function sendWarningToVcChat(
                     .setTitle('⚠️ Your PVC Was Manipulated')
                     .setDescription(
                         `Someone tried to manipulate your voice channel **${vc.name}** in **${vc.guild.name}**.\n\n` +
-                        `**Editor:** <@${editorId}>\n\n` +
+                        `**Editor:** ${editorText}\n\n` +
                         `**Changes attempted:**\n${changes.map(c => `• ${c}`).join('\n')}\n\n` +
                         `**All changes have been automatically reverted.**\n\n` +
                         `This may be power abuse. Please report to senior staff if needed.`
