@@ -1,7 +1,7 @@
-import { Events, type GuildChannel, type DMChannel, ChannelType, AuditLogEvent, PermissionFlagsBits } from 'discord.js';
+import { Events, type GuildChannel, type DMChannel, ChannelType, AuditLogEvent, PermissionFlagsBits, EmbedBuilder } from 'discord.js';
 import type { PVCClient } from '../client';
 import { getChannelState, getTeamChannelState } from '../utils/voiceManager';
-import { getWhitelist } from '../utils/cache';
+import { getWhitelist, getChannelPermissions } from '../utils/cache';
 import { logAction, LogAction } from '../utils/logger';
 
 export const name = Events.ChannelUpdate;
@@ -211,6 +211,51 @@ export async function execute(
 
         console.log(`[ChannelUpdate] All changes reverted: ${changes.join(', ')}`);
 
+        // Kick unauthorized users who joined during the exploit window
+        if (wasUnlocked || wasUnhidden || limitIncreased) {
+            const channelPerms = await getChannelPermissions(channelId);
+            const permittedUserIds = new Set(
+                channelPerms
+                    .filter(p => p.permission === 'permit' && p.targetType === 'user')
+                    .map(p => p.targetId)
+            );
+            permittedUserIds.add(ownerId!); // Owner is always permitted
+
+            for (const [memberId, member] of newVoice.members) {
+                if (!permittedUserIds.has(memberId) && memberId !== client.user?.id) {
+                    try {
+                        await member.voice.disconnect();
+                        console.log(`[ChannelUpdate] Kicked unauthorized user ${memberId} who joined during exploit`);
+                    } catch {
+                        console.log(`[ChannelUpdate] Failed to kick user ${memberId}`);
+                    }
+                }
+            }
+        }
+
+        // Notify the channel owner about the manipulation attempt
+        if (ownerId && editorId) {
+            const warningEmbed = new EmbedBuilder()
+                .setColor(0xFF0000)
+                .setTitle('⚠️ PVC Manipulation Detected')
+                .setDescription(
+                    `<@${editorId}> tried to manipulate your voice channel.\n\n` +
+                    `**Changes attempted:**\n${changes.map(c => `• ${c}`).join('\n')}\n\n` +
+                    `This is a power abuse case. Please report to senior staff ASAP.`
+                )
+                .setTimestamp();
+
+            try {
+                await newVoice.send({
+                    content: `<@${ownerId}>`,
+                    embeds: [warningEmbed],
+                });
+                console.log(`[ChannelUpdate] Sent warning to channel owner ${ownerId}`);
+            } catch {
+                console.log(`[ChannelUpdate] Failed to send warning to VC text chat`);
+            }
+        }
+
         logAction({
             action: LogAction.UNAUTHORIZED_CHANGE_REVERTED,
             guild: newVoice.guild,
@@ -219,11 +264,9 @@ export async function execute(
             channelId: channelId,
             details: editorId 
                 ? `Changes attempted by <@${editorId}>:\n` +
-                  changes.map(c => `• ${c}`).join('\n') +
-                  `\n\nOnly the channel owner, PVC owners, or admin strictness whitelist users can modify PVC settings.`
+                  changes.map(c => `• ${c}`).join('\n')
                 : `Unauthorized changes detected:\n` +
-                  changes.map(c => `• ${c}`).join('\n') +
-                  `\n\nOnly the channel owner, PVC owners, or admin strictness whitelist users can modify PVC settings.`,
+                  changes.map(c => `• ${c}`).join('\n'),
             isTeamChannel: isTeamChannel,
             teamType: teamState?.teamType,
         }).catch(() => {});
