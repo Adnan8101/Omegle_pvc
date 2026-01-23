@@ -7,6 +7,7 @@ import { getGuildSettings, batchUpsertPermissions, batchUpsertOwnerPermissions, 
 import { executeParallel, Priority } from '../utils/rateLimit';
 import { isPvcPaused } from '../utils/pauseManager';
 import { trackCommandUsage, clearCommandTracking, trackAccessGrant, markAccessSuggested } from '../utils/commandTracker';
+import { recordBotEdit } from './channelUpdate';
 
 export const name = Events.MessageCreate;
 export const once = false;
@@ -222,6 +223,9 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
 
     try {
         if (channel && channel.type === ChannelType.GuildVoice) {
+            // Record bot edit to prevent channelUpdate from treating this as manipulation
+            recordBotEdit(channelId);
+            
             const discordTasks = userIdsToAdd.map(userId => ({
                 route: `perms:${channelId}:${userId}`,
                 task: () => channel.permissionOverwrites.edit(userId, {
@@ -383,6 +387,9 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
 
     try {
         if (channel && channel.type === ChannelType.GuildVoice) {
+            // Record bot edit to prevent channelUpdate from treating this as manipulation
+            recordBotEdit(channelId);
+            
             const discordTasks: Array<{ route: string; task: () => Promise<any>; priority: Priority }> = [];
 
             for (const userId of userIdsToRemove) {
