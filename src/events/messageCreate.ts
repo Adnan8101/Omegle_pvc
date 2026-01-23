@@ -3,7 +3,7 @@ import { inspect } from 'util';
 import type { PVCClient } from '../client';
 import prisma from '../utils/database';
 import { getChannelByOwner, getTeamChannelByOwner } from '../utils/voiceManager';
-import { getGuildSettings, batchUpsertPermissions, batchUpsertOwnerPermissions, batchDeleteOwnerPermissions, invalidateChannelPermissions, invalidateOwnerPermissions } from '../utils/cache';
+import { getGuildSettings, batchUpsertPermissions, batchUpsertOwnerPermissions, batchDeleteOwnerPermissions, invalidateChannelPermissions, invalidateOwnerPermissions, invalidateWhitelist } from '../utils/cache';
 import { executeParallel, Priority } from '../utils/rateLimit';
 import { isPvcPaused } from '../utils/pauseManager';
 import { trackCommandUsage, clearCommandTracking, trackAccessGrant, markAccessSuggested } from '../utils/commandTracker';
@@ -644,6 +644,8 @@ async function handleAdminStrictnessWL(message: Message): Promise<void> {
                     targetType: targetType,
                 },
             });
+            // Invalidate cache so changes take effect immediately
+            invalidateWhitelist(message.guild.id);
             await message.react('✅').catch(() => { });
         } else if (action === 'remove') {
             await prisma.strictnessWhitelist.delete({
@@ -654,6 +656,8 @@ async function handleAdminStrictnessWL(message: Message): Promise<void> {
                     },
                 },
             }).catch(() => { });
+            // Invalidate cache so changes take effect immediately
+            invalidateWhitelist(message.guild.id);
             await message.react('✅').catch(() => { });
         }
     } catch (err) {

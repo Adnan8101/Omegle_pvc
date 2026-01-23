@@ -342,6 +342,7 @@ export async function execute(
     if (editorId) {
         // Bot's own edits should have been caught by recordBotEdit
         if (editorId === client.user?.id) {
+            console.log(`[ChannelUpdate] Ignoring bot's own edit on ${channelId}`);
             revertInProgress.delete(channelId);
             updateChannelSnapshot(channelId, newChannel);
             return;
@@ -349,23 +350,37 @@ export async function execute(
 
         // Channel owner is always authorized
         if (editorId === ownerId) {
+            console.log(`[ChannelUpdate] Owner ${editorId} editing their own channel ${channelId} - authorized`);
             isAuthorized = true;
         }
 
         // Check whitelist
         if (!isAuthorized) {
             const whitelist = await getWhitelist(guildId);
+            console.log(`[ChannelUpdate] Whitelist for guild ${guildId}:`, JSON.stringify(whitelist));
+            
             const editor = newVc.guild.members.cache.get(editorId);
             const editorRoleIds = editor?.roles.cache.map(r => r.id) || [];
+            console.log(`[ChannelUpdate] Editor ${editorId} has roles:`, editorRoleIds);
 
-            isAuthorized = whitelist.some(
+            const matchedEntry = whitelist.find(
                 w => w.targetId === editorId || editorRoleIds.includes(w.targetId)
             );
+            
+            if (matchedEntry) {
+                console.log(`[ChannelUpdate] Editor ${editorId} is whitelisted via ${matchedEntry.targetId} (${matchedEntry.targetType}) - authorized`);
+                isAuthorized = true;
+            } else {
+                console.log(`[ChannelUpdate] Editor ${editorId} is NOT in whitelist - unauthorized`);
+            }
         }
+    } else {
+        console.log(`[ChannelUpdate] Could not identify editor for ${channelId}`);
     }
 
     // If authorized, allow the change
     if (isAuthorized) {
+        console.log(`[ChannelUpdate] Change authorized - updating snapshot for ${channelId}`);
         revertInProgress.delete(channelId);
         updateChannelSnapshot(channelId, newChannel);
         return;
