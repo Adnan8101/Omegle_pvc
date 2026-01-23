@@ -28,14 +28,15 @@ interface ChannelSnapshot {
 
 const channelSnapshots = new Map<string, ChannelSnapshot>();
 const recentBotEdits = new Map<string, number>();
-const revertInProgress = new Set<string>();
-const recentReverts = new Map<string, number>(); // Debounce multiple events for same change
+const revertInProgress = new Map<string, number>(); // Changed to Map to track start time
+const recentNotifications = new Map<string, number>(); // Only for notification debounce, NOT for revert blocking
 const protectedChannels = new Map<string, { ownerId: string; until: number }>(); // Channels under protection during revert
 
 const SNAPSHOT_EXPIRY = 30 * 60 * 1000;
 const BOT_EDIT_WINDOW = 5000; // Increased for reliability
-const REVERT_DEBOUNCE = 3000; // Ignore duplicate events within 3 seconds
+const NOTIFICATION_DEBOUNCE = 3000; // Only debounce notifications, not reverts
 const PROTECTION_WINDOW = 5000; // Keep channel protected for 5 seconds after revert
+const MAX_REVERT_TIME = 10000; // Max time a revert should take before we allow another
 
 // Hardcoded bot IDs that are always allowed to make changes (security bots, etc.)
 const WHITELISTED_BOT_IDS = new Set([
@@ -102,9 +103,9 @@ setInterval(() => {
             recentBotEdits.delete(channelId);
         }
     }
-    for (const [channelId, timestamp] of recentReverts) {
-        if (now - timestamp > REVERT_DEBOUNCE * 2) {
-            recentReverts.delete(channelId);
+    for (const [channelId, timestamp] of recentNotifications) {
+        if (now - timestamp > NOTIFICATION_DEBOUNCE * 2) {
+            recentNotifications.delete(channelId);
         }
     }
     for (const [channelId, protection] of protectedChannels) {
@@ -112,7 +113,14 @@ setInterval(() => {
             protectedChannels.delete(channelId);
         }
     }
-}, 60 * 1000);
+    // Clear stuck reverts (safety net)
+    for (const [channelId, startTime] of revertInProgress) {
+        if (now - startTime > MAX_REVERT_TIME) {
+            console.log(`[ChannelUpdate] Clearing stuck revert for ${channelId}`);
+            revertInProgress.delete(channelId);
+        }
+    }
+}, 10 * 1000); // Run every 10 seconds for faster cleanup
 
 export async function execute(
     client: PVCClient,
@@ -130,17 +138,20 @@ export async function execute(
 
     if (!pvcState && !teamState) return;
 
-    // Prevent concurrent reverts
-    if (revertInProgress.has(channelId)) {
-        console.log(`[ChannelUpdate] Skipping - revert already in progress for ${channelId}`);
-        return;
-    }
-
-    // Debounce: ignore if we recently reverted this channel (prevents duplicate notifications)
-    const lastRevert = recentReverts.get(channelId);
-    if (lastRevert && Date.now() - lastRevert < REVERT_DEBOUNCE) {
-        console.log(`[ChannelUpdate] Skipping - debounce active for ${channelId}`);
-        return;
+    // Check if revert is in progress - but allow if it's been too long (stuck)
+    const revertStartTime = revertInProgress.get(channelId);
+    if (revertStartTime) {
+        const elapsed = Date.now() - revertStartTime;
+        if (elapsed < MAX_REVERT_TIME) {
+            // Queue this change to be processed after current revert
+            console.log(`[ChannelUpdate] Revert in progress for ${channelId}, will retry after current revert (${elapsed}ms elapsed)`);
+            // Wait a bit and let the event re-fire naturally from Discord
+            return;
+        } else {
+            // Stuck revert, clear it and continue
+            console.log(`[ChannelUpdate] Clearing stuck revert for ${channelId} (${elapsed}ms elapsed)`);
+            revertInProgress.delete(channelId);
+        }
     }
 
     const isTeamChannel = Boolean(teamState);
@@ -249,9 +260,6 @@ export async function execute(
         updateChannelSnapshot(channelId, newChannel);
         return;
     }
-
-    // Mark revert in progress to prevent race conditions
-    revertInProgress.add(channelId);
 
     // Fetch audit logs FIRST to identify who made the change
     // Try multiple audit log types since Discord uses different ones
@@ -390,22 +398,25 @@ export async function execute(
     // If authorized, allow the change
     if (isAuthorized) {
         console.log(`[ChannelUpdate] Change authorized - updating snapshot for ${channelId}`);
-        revertInProgress.delete(channelId);
         updateChannelSnapshot(channelId, newChannel);
         return;
     }
 
-    // UNAUTHORIZED - REVERT IMMEDIATELY
+    // UNAUTHORIZED - REVERT IMMEDIATELY (UNLIMITED TIMES)
     console.log(`[ChannelUpdate] Reverting unauthorized changes to ${channelId} by ${editorId || 'unknown'}: ${changes.join(', ')}`);
 
-    // Set debounce to prevent duplicate notifications from multiple Discord events
-    recentReverts.set(channelId, Date.now());
+    // Mark revert as in progress with timestamp
+    revertInProgress.set(channelId, Date.now());
     
     // Mark channel as protected - anyone joining during this window will be kicked
     protectedChannels.set(channelId, {
         ownerId: ownerId!,
         until: Date.now() + PROTECTION_WINDOW,
     });
+
+    // Check if we should send notification (debounce only notifications, not reverts)
+    const lastNotification = recentNotifications.get(channelId);
+    const shouldNotify = !lastNotification || (Date.now() - lastNotification) > NOTIFICATION_DEBOUNCE;
 
     try {
         // Record bot edit ONCE before all reverts to prevent self-triggering
@@ -434,13 +445,16 @@ export async function execute(
             await kickUnauthorizedUsers(newVc, ownerId!, client, editorId);
         }
 
-        // Send warning to VC text chat - always send even if editor is unknown
-        if (ownerId) {
+        // Send warning to VC text chat - only if not recently notified (prevents spam)
+        if (ownerId && shouldNotify) {
+            recentNotifications.set(channelId, Date.now());
             await sendWarningToVcChat(newVc, ownerId, editorId || null, changes);
         }
 
-        // Log action
-        await sendUnauthorizedChangeLog(newVc, editorId, changes, isTeamChannel, teamState?.teamType);
+        // Log action - only if not recently logged (prevents spam)
+        if (shouldNotify) {
+            await sendUnauthorizedChangeLog(newVc, editorId, changes, isTeamChannel, teamState?.teamType);
+        }
 
     } catch (err) {
         console.error('[ChannelUpdate] Failed to revert changes:', err);
