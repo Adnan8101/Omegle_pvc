@@ -6,6 +6,7 @@ import { getChannelByOwner, getTeamChannelByOwner } from '../utils/voiceManager'
 import { getGuildSettings, batchUpsertPermissions, batchUpsertOwnerPermissions, batchDeleteOwnerPermissions, invalidateChannelPermissions, invalidateOwnerPermissions } from '../utils/cache';
 import { executeParallel, Priority } from '../utils/rateLimit';
 import { isPvcPaused } from '../utils/pauseManager';
+import { trackCommandUsage, clearCommandTracking } from '../utils/commandTracker';
 
 export const name = Events.MessageCreate;
 export const once = false;
@@ -221,6 +222,9 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
         return;
     }
 
+    // Check if user is adding users one-by-one (for hint)
+    const shouldShowHint = !isSecretCommand && trackCommandUsage('au', message.author.id, guild.id, userIdsToAdd.length);
+
     const channel = guild.channels.cache.get(channelId);
 
     const permissionsToAdd = userIdsToAdd.map(userId => ({
@@ -272,6 +276,23 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
             const count = Math.min(userIdsToAdd.length, 30);
             for (let i = 0; i < count; i++) {
                 await message.react(NUMBER_EMOJIS[i]).catch(() => { });
+            }
+            
+            // Show hint if user is adding one-by-one
+            if (shouldShowHint) {
+                clearCommandTracking('au', message.author.id, guild.id);
+                const hintEmbed = new EmbedBuilder()
+                    .setColor(0x5865F2)
+                    .setTitle('💡 Tip: Add Multiple Users at Once')
+                    .setDescription(
+                        'I noticed you\'re adding users one by one.\n' +
+                        'You can add multiple users in a single command!\n\n' +
+                        '**Example:**\n' +
+                        '`!au @byte @venom @evil @demon`'
+                    )
+                    .setFooter({ text: 'This saves time and makes managing your VC easier!' });
+                
+                await message.reply({ embeds: [hintEmbed] }).catch(() => { });
             }
         }
     } catch { }
@@ -355,6 +376,9 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
         return;
     }
 
+    // Check if user is removing users one-by-one (for hint)
+    const shouldShowHint = !isSecretCommand && trackCommandUsage('ru', message.author.id, guild.id, userIdsToRemove.length);
+
     const channel = guild.channels.cache.get(channelId);
 
     try {
@@ -399,6 +423,23 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
             const count = Math.min(userIdsToRemove.length, 30);
             for (let i = 0; i < count; i++) {
                 await message.react(NUMBER_EMOJIS[i]).catch(() => { });
+            }
+            
+            // Show hint if user is removing one-by-one
+            if (shouldShowHint) {
+                clearCommandTracking('ru', message.author.id, guild.id);
+                const hintEmbed = new EmbedBuilder()
+                    .setColor(0x5865F2)
+                    .setTitle('Tip: Remove Multiple Users at Once')
+                    .setDescription(
+                        'I noticed you\'re removing users one by one.\n' +
+                        'You can remove multiple users in a single command!\n\n' +
+                        '**Example:**\n' +
+                        '`!ru @byte @venom @evil @demon`'
+                    )
+                    .setFooter({ text: 'This saves time and makes managing your VC easier!' });
+                
+                await message.reply({ embeds: [hintEmbed] }).catch(() => { });
             }
         }
     } catch { }

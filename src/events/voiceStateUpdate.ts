@@ -369,8 +369,30 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
                 });
 
                 await deletePrivateChannel(channelId, guild.id);
-            } else if (member && member.id === channelState.ownerId) {
-                await transferChannelOwnership(client, channelId, guild, channel);
+            } else {
+                // Check if only bots remain in the channel
+                const allBots = channel.members.every(m => m.user.bot);
+                if (allBots && channel.members.size > 0) {
+                    console.log(`[HandleLeave] Only bots remain in PVC ${channelId}, kicking them`);
+                    
+                    // Kick all bots
+                    for (const [, botMember] of channel.members) {
+                        await botMember.voice.disconnect().catch(() => { });
+                    }
+                    
+                    // Channel will be auto-deleted when empty
+                    await logAction({
+                        action: LogAction.CHANNEL_DELETED,
+                        guild: guild,
+                        channelName: channel.name,
+                        channelId: channelId,
+                        details: `Channel deleted (only bots remained)`,
+                    });
+
+                    await deletePrivateChannel(channelId, guild.id);
+                } else if (member && member.id === channelState.ownerId) {
+                    await transferChannelOwnership(client, channelId, guild, channel);
+                }
             }
         }
         return;
@@ -413,8 +435,32 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
                 });
 
                 await deleteTeamChannel(channelId, guild.id);
-            } else if (member && member.id === teamChannelState.ownerId) {
-                await transferTeamChannelOwnership(client, channelId, guild, channel);
+            } else {
+                // Check if only bots remain in the channel
+                const allBots = channel.members.every(m => m.user.bot);
+                if (allBots && channel.members.size > 0) {
+                    console.log(`[HandleLeave] Only bots remain in Team channel ${channelId}, kicking them`);
+                    
+                    // Kick all bots
+                    for (const [, botMember] of channel.members) {
+                        await botMember.voice.disconnect().catch(() => { });
+                    }
+                    
+                    // Channel will be auto-deleted when empty
+                    await logAction({
+                        action: LogAction.TEAM_CHANNEL_DELETED,
+                        guild: guild,
+                        channelName: channel.name,
+                        channelId: channelId,
+                        details: `Team channel deleted (only bots remained)`,
+                        isTeamChannel: true,
+                        teamType: teamChannelState.teamType,
+                    });
+
+                    await deleteTeamChannel(channelId, guild.id);
+                } else if (member && member.id === teamChannelState.ownerId) {
+                    await transferTeamChannelOwnership(client, channelId, guild, channel);
+                }
             }
         }
     }
