@@ -8,7 +8,10 @@ export const name = Events.ChannelUpdate;
 export const once = false;
 
 interface ChannelSnapshot {
+    name: string;
     userLimit: number;
+    bitrate: number;
+    rtcRegion: string | null;
     locked: boolean;
     hidden: boolean;
     timestamp: number;
@@ -27,11 +30,14 @@ export function recordBotEdit(channelId: string): void {
 export function updateChannelSnapshot(channelId: string, channel: GuildChannel): void {
     if (channel.type !== ChannelType.GuildVoice) return;
     
-    const voiceChannel = channel as import('discord.js').VoiceChannel;
-    const everyonePerms = voiceChannel.permissionOverwrites.cache.get(voiceChannel.guild.id);
+    const vc = channel as import('discord.js').VoiceChannel;
+    const everyonePerms = vc.permissionOverwrites.cache.get(vc.guild.id);
     
     channelSnapshots.set(channelId, {
-        userLimit: voiceChannel.userLimit,
+        name: vc.name,
+        userLimit: vc.userLimit,
+        bitrate: vc.bitrate,
+        rtcRegion: vc.rtcRegion,
         locked: everyonePerms?.deny.has(PermissionFlagsBits.Connect) ?? false,
         hidden: everyonePerms?.deny.has(PermissionFlagsBits.ViewChannel) ?? false,
         timestamp: Date.now(),
@@ -71,11 +77,18 @@ export async function execute(
     const isTeamChannel = Boolean(teamState);
     const ownerId = pvcState?.ownerId || teamState?.ownerId;
 
-    const oldVoice = oldChannel as import('discord.js').VoiceChannel;
-    const newVoice = newChannel as import('discord.js').VoiceChannel;
+    const oldVc = oldChannel as import('discord.js').VoiceChannel;
+    const newVc = newChannel as import('discord.js').VoiceChannel;
 
-    const oldEveryonePerms = oldVoice.permissionOverwrites.cache.get(oldVoice.guild.id);
-    const newEveryonePerms = newVoice.permissionOverwrites.cache.get(newVoice.guild.id);
+    // Check if this was a bot edit
+    const botEditTime = recentBotEdits.get(channelId);
+    if (botEditTime && Date.now() - botEditTime < BOT_EDIT_WINDOW) {
+        updateChannelSnapshot(channelId, newChannel);
+        return;
+    }
+
+    const oldEveryonePerms = oldVc.permissionOverwrites.cache.get(oldVc.guild.id);
+    const newEveryonePerms = newVc.permissionOverwrites.cache.get(newVc.guild.id);
 
     const oldLocked = oldEveryonePerms?.deny.has(PermissionFlagsBits.Connect) ?? false;
     const newLocked = newEveryonePerms?.deny.has(PermissionFlagsBits.Connect) ?? false;
@@ -83,57 +96,70 @@ export async function execute(
     const oldHidden = oldEveryonePerms?.deny.has(PermissionFlagsBits.ViewChannel) ?? false;
     const newHidden = newEveryonePerms?.deny.has(PermissionFlagsBits.ViewChannel) ?? false;
 
-    const oldLimit = oldVoice.userLimit;
-    const newLimit = newVoice.userLimit;
-
-    const limitIncreased = newLimit > oldLimit || (oldLimit > 0 && newLimit === 0);
-    const wasUnlocked = oldLocked && !newLocked;
-    const wasUnhidden = oldHidden && !newHidden;
-
-    if (!limitIncreased && !wasUnlocked && !wasUnhidden) {
-        updateChannelSnapshot(channelId, newChannel);
-        return;
-    }
-
-    // Check if this was a bot edit (instant check, no delay)
-    const botEditTime = recentBotEdits.get(channelId);
-    if (botEditTime && Date.now() - botEditTime < BOT_EDIT_WINDOW) {
-        updateChannelSnapshot(channelId, newChannel);
-        return;
-    }
-
-    // INSTANT REVERT - Don't wait for audit logs, revert immediately
-    recordBotEdit(channelId);
+    // Detect ALL changes
     const changes: string[] = [];
-    
-    const revertPromises: Promise<any>[] = [];
-    
-    if (wasUnlocked) {
-        revertPromises.push(
-            newVoice.permissionOverwrites.edit(newVoice.guild.id, { Connect: false })
-        );
-        changes.push('Unlock reverted');
+    const revertActions: (() => Promise<any>)[] = [];
+
+    // Name change
+    if (oldVc.name !== newVc.name) {
+        changes.push(`Name: "${newVc.name}" → "${oldVc.name}"`);
+        revertActions.push(() => newVc.setName(oldVc.name));
     }
 
-    if (wasUnhidden) {
-        revertPromises.push(
-            newVoice.permissionOverwrites.edit(newVoice.guild.id, { ViewChannel: false })
-        );
-        changes.push('Unhide reverted');
+    // User limit change
+    if (oldVc.userLimit !== newVc.userLimit) {
+        changes.push(`Limit: ${newVc.userLimit || 'unlimited'} → ${oldVc.userLimit || 'unlimited'}`);
+        revertActions.push(() => newVc.setUserLimit(oldVc.userLimit));
     }
 
-    if (limitIncreased) {
-        revertPromises.push(newVoice.setUserLimit(oldLimit));
-        changes.push(`Limit reverted (${newLimit} → ${oldLimit})`);
+    // Bitrate change
+    if (oldVc.bitrate !== newVc.bitrate) {
+        changes.push(`Bitrate: ${newVc.bitrate / 1000}kbps → ${oldVc.bitrate / 1000}kbps`);
+        revertActions.push(() => newVc.setBitrate(oldVc.bitrate));
     }
 
-    // Execute all reverts in parallel for maximum speed
-    await Promise.allSettled(revertPromises);
+    // Region change
+    if (oldVc.rtcRegion !== newVc.rtcRegion) {
+        changes.push(`Region: ${newVc.rtcRegion || 'auto'} → ${oldVc.rtcRegion || 'auto'}`);
+        revertActions.push(() => newVc.setRTCRegion(oldVc.rtcRegion));
+    }
 
-    // Now fetch audit logs to identify the editor (non-blocking for revert)
+    // Lock/Unlock
+    if (oldLocked !== newLocked) {
+        if (newLocked) {
+            changes.push('Locked');
+            revertActions.push(() => newVc.permissionOverwrites.edit(newVc.guild.id, { Connect: null }));
+        } else {
+            changes.push('Unlocked');
+            revertActions.push(() => newVc.permissionOverwrites.edit(newVc.guild.id, { Connect: false }));
+        }
+    }
+
+    // Hide/Unhide
+    if (oldHidden !== newHidden) {
+        if (newHidden) {
+            changes.push('Hidden');
+            revertActions.push(() => newVc.permissionOverwrites.edit(newVc.guild.id, { ViewChannel: null }));
+        } else {
+            changes.push('Unhidden');
+            revertActions.push(() => newVc.permissionOverwrites.edit(newVc.guild.id, { ViewChannel: false }));
+        }
+    }
+
+    // No changes detected
+    if (changes.length === 0) {
+        updateChannelSnapshot(channelId, newChannel);
+        return;
+    }
+
+    // INSTANT REVERT first
+    recordBotEdit(channelId);
+    await Promise.allSettled(revertActions.map(action => action()));
+
+    // Now fetch audit logs to identify who made the change
     let editorId: string | null = null;
     try {
-        const auditLogs = await newVoice.guild.fetchAuditLogs({
+        const auditLogs = await newVc.guild.fetchAuditLogs({
             type: AuditLogEvent.ChannelUpdate,
             limit: 5,
         });
@@ -149,35 +175,34 @@ export async function execute(
         }
     } catch { }
 
-    // Check if the editor was actually authorized (if so, we reverted wrongly - undo)
+    // Check if editor was authorized - if so, undo the revert
     if (editorId) {
-        // Bot itself
         if (editorId === client.user?.id) {
-            // Undo the revert - bot made the change
             return;
         }
 
-        // Channel owner
+        // Channel owner - undo revert
         if (editorId === ownerId) {
-            // Owner made the change - undo revert
-            const undoPromises: Promise<any>[] = [];
-            if (wasUnlocked) {
-                undoPromises.push(newVoice.permissionOverwrites.edit(newVoice.guild.id, { Connect: null }));
+            recordBotEdit(channelId);
+            const undoActions: Promise<any>[] = [];
+            if (oldVc.name !== newVc.name) undoActions.push(newVc.setName(newVc.name));
+            if (oldVc.userLimit !== newVc.userLimit) undoActions.push(newVc.setUserLimit(newVc.userLimit));
+            if (oldVc.bitrate !== newVc.bitrate) undoActions.push(newVc.setBitrate(newVc.bitrate));
+            if (oldVc.rtcRegion !== newVc.rtcRegion) undoActions.push(newVc.setRTCRegion(newVc.rtcRegion));
+            if (oldLocked !== newLocked) {
+                undoActions.push(newVc.permissionOverwrites.edit(newVc.guild.id, { Connect: newLocked ? false : null }));
             }
-            if (wasUnhidden) {
-                undoPromises.push(newVoice.permissionOverwrites.edit(newVoice.guild.id, { ViewChannel: null }));
+            if (oldHidden !== newHidden) {
+                undoActions.push(newVc.permissionOverwrites.edit(newVc.guild.id, { ViewChannel: newHidden ? false : null }));
             }
-            if (limitIncreased) {
-                undoPromises.push(newVoice.setUserLimit(newLimit));
-            }
-            await Promise.allSettled(undoPromises);
+            await Promise.allSettled(undoActions);
             updateChannelSnapshot(channelId, newChannel);
             return;
         }
 
         // Check whitelist
         const whitelist = await getWhitelist(guildId);
-        const editor = newVoice.guild.members.cache.get(editorId);
+        const editor = newVc.guild.members.cache.get(editorId);
         const editorRoleIds = editor?.roles.cache.map(r => r.id) || [];
 
         const isWhitelisted = whitelist.some(
@@ -185,26 +210,29 @@ export async function execute(
         );
         
         if (isWhitelisted) {
-            // Whitelisted user - undo revert
-            const undoPromises: Promise<any>[] = [];
-            if (wasUnlocked) {
-                undoPromises.push(newVoice.permissionOverwrites.edit(newVoice.guild.id, { Connect: null }));
+            recordBotEdit(channelId);
+            const undoActions: Promise<any>[] = [];
+            if (oldVc.name !== newVc.name) undoActions.push(newVc.setName(newVc.name));
+            if (oldVc.userLimit !== newVc.userLimit) undoActions.push(newVc.setUserLimit(newVc.userLimit));
+            if (oldVc.bitrate !== newVc.bitrate) undoActions.push(newVc.setBitrate(newVc.bitrate));
+            if (oldVc.rtcRegion !== newVc.rtcRegion) undoActions.push(newVc.setRTCRegion(newVc.rtcRegion));
+            if (oldLocked !== newLocked) {
+                undoActions.push(newVc.permissionOverwrites.edit(newVc.guild.id, { Connect: newLocked ? false : null }));
             }
-            if (wasUnhidden) {
-                undoPromises.push(newVoice.permissionOverwrites.edit(newVoice.guild.id, { ViewChannel: null }));
+            if (oldHidden !== newHidden) {
+                undoActions.push(newVc.permissionOverwrites.edit(newVc.guild.id, { ViewChannel: newHidden ? false : null }));
             }
-            if (limitIncreased) {
-                undoPromises.push(newVoice.setUserLimit(newLimit));
-            }
-            await Promise.allSettled(undoPromises);
+            await Promise.allSettled(undoActions);
             updateChannelSnapshot(channelId, newChannel);
             return;
         }
     }
 
-    // If we reach here, the change was unauthorized - revert stands
-    
-    // Kick unauthorized users who may have joined during exploit
+    // Unauthorized - kick intruders if security was compromised
+    const wasUnlocked = oldLocked && !newLocked;
+    const wasUnhidden = oldHidden && !newHidden;
+    const limitIncreased = newVc.userLimit > oldVc.userLimit || (oldVc.userLimit > 0 && newVc.userLimit === 0);
+
     if (wasUnlocked || wasUnhidden || limitIncreased) {
         const channelPerms = await getChannelPermissions(channelId);
         const permittedUserIds = new Set(
@@ -215,7 +243,7 @@ export async function execute(
         permittedUserIds.add(ownerId!);
 
         const kickPromises: Promise<any>[] = [];
-        for (const [memberId, member] of newVoice.members) {
+        for (const [memberId, member] of newVc.members) {
             if (!permittedUserIds.has(memberId) && memberId !== client.user?.id) {
                 kickPromises.push(member.voice.disconnect().catch(() => {}));
             }
@@ -235,19 +263,19 @@ export async function execute(
             )
             .setTimestamp();
 
-        newVoice.send({
+        newVc.send({
             content: `<@${ownerId}>`,
             embeds: [warningEmbed],
         }).catch(() => {});
     }
 
     // Log action
-    const editor = editorId ? newVoice.guild.members.cache.get(editorId) : null;
+    const editor = editorId ? newVc.guild.members.cache.get(editorId) : null;
     logAction({
         action: LogAction.UNAUTHORIZED_CHANGE_REVERTED,
-        guild: newVoice.guild,
+        guild: newVc.guild,
         user: editor?.user,
-        channelName: newVoice.name,
+        channelName: newVc.name,
         channelId: channelId,
         details: editorId 
             ? `Changes attempted by <@${editorId}>:\n${changes.map(c => `• ${c}`).join('\n')}`
