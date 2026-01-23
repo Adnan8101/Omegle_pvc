@@ -1,3 +1,5 @@
+import prisma from './database';
+
 interface CommandUsage {
     command: string;
     userId: string;
@@ -9,6 +11,7 @@ interface CommandUsage {
 const recentCommands = new Map<string, CommandUsage[]>();
 const TRACKING_TIMEOUT = 10000;
 const CLEANUP_INTERVAL = 5 * 60 * 1000;
+const ACCESS_GRANT_THRESHOLD = 3;
 
 setInterval(() => {
     const now = Date.now();
@@ -45,4 +48,65 @@ export function trackCommandUsage(
 
 export function clearCommandTracking(command: string, userId: string, guildId: string): void {
     recentCommands.delete(`${guildId}:${userId}:${command}`);
+}
+
+export interface FrequentAccessUser {
+    targetId: string;
+    grantCount: number;
+}
+
+export async function trackAccessGrant(
+    guildId: string,
+    ownerId: string,
+    targetIds: string[]
+): Promise<FrequentAccessUser[]> {
+    const frequentUsers: FrequentAccessUser[] = [];
+
+    for (const targetId of targetIds) {
+        const grant = await prisma.userAccessGrant.upsert({
+            where: {
+                guildId_ownerId_targetId: { guildId, ownerId, targetId }
+            },
+            create: {
+                guildId,
+                ownerId,
+                targetId,
+                grantCount: 1,
+                suggested: false,
+            },
+            update: {
+                grantCount: { increment: 1 },
+                lastGrantAt: new Date(),
+            },
+        });
+
+        if (grant.grantCount >= ACCESS_GRANT_THRESHOLD && !grant.suggested) {
+            frequentUsers.push({ targetId, grantCount: grant.grantCount });
+        }
+    }
+
+    return frequentUsers;
+}
+
+export async function markAccessSuggested(
+    guildId: string,
+    ownerId: string,
+    targetId: string
+): Promise<void> {
+    await prisma.userAccessGrant.update({
+        where: {
+            guildId_ownerId_targetId: { guildId, ownerId, targetId }
+        },
+        data: { suggested: true },
+    });
+}
+
+export async function resetAccessGrant(
+    guildId: string,
+    ownerId: string,
+    targetId: string
+): Promise<void> {
+    await prisma.userAccessGrant.deleteMany({
+        where: { guildId, ownerId, targetId },
+    });
 }

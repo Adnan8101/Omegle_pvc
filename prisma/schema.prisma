@@ -158,3 +158,19 @@ model TeamVoicePermission {
   @@index([channelId])
   @@index([channelId, permission])
 }
+
+model UserAccessGrant {
+  id          String   @id @default(uuid())
+  guildId     String
+  ownerId     String
+  targetId    String
+  grantCount  Int      @default(1)
+  lastGrantAt DateTime @default(now())
+  suggested   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([guildId, ownerId, targetId])
+  @@index([guildId, ownerId])
+  @@index([guildId, ownerId, suggested])
+}

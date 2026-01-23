@@ -6,7 +6,7 @@ import { getChannelByOwner, getTeamChannelByOwner } from '../utils/voiceManager'
 import { getGuildSettings, batchUpsertPermissions, batchUpsertOwnerPermissions, batchDeleteOwnerPermissions, invalidateChannelPermissions, invalidateOwnerPermissions } from '../utils/cache';
 import { executeParallel, Priority } from '../utils/rateLimit';
 import { isPvcPaused } from '../utils/pauseManager';
-import { trackCommandUsage, clearCommandTracking } from '../utils/commandTracker';
+import { trackCommandUsage, clearCommandTracking, trackAccessGrant, markAccessSuggested } from '../utils/commandTracker';
 
 export const name = Events.MessageCreate;
 export const once = false;
@@ -278,6 +278,22 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
                     .setFooter({ text: 'This saves time and makes managing your VC easier!' });
 
                 await message.reply({ embeds: [hintEmbed] }).catch(() => { });
+            }
+
+            const frequentUsers = await trackAccessGrant(guild.id, message.author.id, userIdsToAdd);
+            if (frequentUsers.length > 0) {
+                for (const freq of frequentUsers) {
+                    await markAccessSuggested(guild.id, message.author.id, freq.targetId);
+                    
+                    const permanentAccessEmbed = new EmbedBuilder()
+                        .setColor(0x5865F2)
+                        .setDescription(
+                            `I have noticed that <@${freq.targetId}> is getting access to your PVC frequently.\n\n` +
+                            `You can use \`/permanent_access add user:@\` and select <@${freq.targetId}> to give them automatic access to your future VCs.`
+                        );
+
+                    await message.reply({ embeds: [permanentAccessEmbed] }).catch(() => { });
+                }
             }
         }
     } catch { }
