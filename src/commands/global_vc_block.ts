@@ -198,15 +198,15 @@ async function handleShow(interaction: ChatInputCommandInteraction): Promise<voi
     const embed = new EmbedBuilder()
         .setColor(0xff0000)
         .setTitle('🚫 Globally Blocked Users')
-        .setDescription(`Total: ${blocks.length} user${blocks.length !== 1 ? 's' : ''}`)
+        .setDescription(`**Total:** ${blocks.length} user${blocks.length !== 1 ? 's' : ''}`)
         .setTimestamp();
 
     for (const block of blocks.slice(0, 25)) { // Discord limit: 25 fields
-        const reason = block.reason || 'No reason';
+        const reason = block.reason || 'No reason provided';
         const timestamp = `<t:${Math.floor(block.createdAt.getTime() / 1000)}:R>`;
         embed.addFields({
-            name: `<@${block.userId}>`,
-            value: `**Reason:** ${reason}\n**Blocked:** ${timestamp}\n**By:** <@${block.blockedBy}>`,
+            name: `User: <@${block.userId}>`,
+            value: `• **Reason:** ${reason}\n• **Blocked:** ${timestamp}\n• **By:** <@${block.blockedBy}>`,
             inline: false,
         });
     }
