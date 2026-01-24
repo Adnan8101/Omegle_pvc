@@ -10,6 +10,7 @@ import {
     type Message,
     AttachmentBuilder,
     EmbedBuilder,
+    OverwriteType,
 } from 'discord.js';
 import prisma from '../utils/database';
 import type { Command } from '../client';
@@ -498,12 +499,14 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                         continue;
                     }
 
-                    // If it's a role, skip (unless handled later, but usually VoicePermission handles users)
-                    if (overwrite.type === 0 && !allAllowedIds.has(targetId)) { // Type 0 = Role? No, Type 1 = Member? Discord JS types...
-                        // Overwrite types: 0 = Role, 1 = Member. We mainly care about Member overwrites here.
-                        if (overwrite.type === 1) { // 1 is Member
-                            await channel.permissionOverwrites.delete(targetId).catch(() => { });
-                        }
+                    // If it's a role, skip
+                    if (overwrite.type === OverwriteType.Role) {
+                        continue;
+                    }
+
+                    // If it's a member and not in allowed list, delete
+                    if (overwrite.type === OverwriteType.Member && !allAllowedIds.has(targetId)) {
+                        await channel.permissionOverwrites.delete(targetId).catch(() => { });
                     }
                 }
 
@@ -576,7 +579,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                         continue;
                     }
 
-                    if (overwrite.type === 1) { // Member
+                    if (overwrite.type === OverwriteType.Member) { // Member
                         await channel.permissionOverwrites.delete(targetId).catch(() => { });
                     }
                 }
