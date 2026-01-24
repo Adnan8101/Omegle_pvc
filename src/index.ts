@@ -19,6 +19,7 @@ import { command as pvcOsTransfer } from './commands/pvc_os_transfer';
 import { command as pvcPause } from './commands/pvc_pause';
 import { command as pvcResume } from './commands/pvc_resume';
 import { command as globalVcBlock } from './commands/global_vc_block';
+import { command as wvAllowedRoles } from './commands/wv_allowed_roles';
 import * as readyEvent from './events/ready';
 import * as voiceStateUpdateEvent from './events/voiceStateUpdate';
 import * as interactionCreateEvent from './events/interactionCreate';
@@ -49,6 +50,7 @@ client.commands.set(pvcOsTransfer.data.name, pvcOsTransfer);
 client.commands.set(pvcPause.data.name, pvcPause);
 client.commands.set(pvcResume.data.name, pvcResume);
 client.commands.set(globalVcBlock.data.name, globalVcBlock);
+client.commands.set(wvAllowedRoles.data.name, wvAllowedRoles);
 
 client.once(readyEvent.name, () => {
     readyEvent.execute(client);

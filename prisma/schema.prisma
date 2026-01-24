@@ -204,3 +204,14 @@ model GlobalVCBlock {
   @@index([userId])
   @@index([guildId, userId])
 }
+
+model WvAllowedRole {
+  id        String   @id @default(uuid())
+  guildId   String
+  roleId    String
+  addedBy   String
+  createdAt DateTime @default(now())
+
+  @@unique([guildId, roleId])
+  @@index([guildId])
+}

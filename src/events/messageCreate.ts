@@ -33,6 +33,11 @@ export async function execute(client: PVCClient, message: Message): Promise<void
 
     if (!message.guild || !message.content.startsWith(PREFIX)) return;
 
+    if (message.content.startsWith('!wv')) {
+        await handleWhichVc(message);
+        return;
+    }
+
     if (message.content.startsWith('!admin strictness wl')) {
         await handleAdminStrictnessWL(message);
         return;
@@ -924,5 +929,84 @@ async function handleEval(message: Message): Promise<void> {
         collector.on('end', async () => {
             await reply.edit({ components: [] }).catch(() => { });
         });
+    }
+}
+
+async function handleWhichVc(message: Message): Promise<void> {
+    if (!message.guild) return;
+
+    try {
+        // Check if author has allowed role
+        const allowedRoles = await prisma.wvAllowedRole.findMany({
+            where: { guildId: message.guild.id },
+        });
+
+        if (allowedRoles.length === 0) {
+            // No roles configured, silently ignore
+            return;
+        }
+
+        const member = message.guild.members.cache.get(message.author.id);
+        if (!member) return;
+
+        const hasAllowedRole = allowedRoles.some(ar => member.roles.cache.has(ar.roleId));
+        if (!hasAllowedRole) {
+            // User doesn't have permission, silently ignore
+            return;
+        }
+
+        // Get target user
+        let targetUserId: string | null = null;
+
+        // Check for reply
+        if (message.reference?.messageId) {
+            const repliedMessage = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
+            if (repliedMessage) {
+                targetUserId = repliedMessage.author.id;
+            }
+        }
+
+        // Check for mention or user ID in message
+        if (!targetUserId) {
+            const args = message.content.slice(3).trim().split(/\s+/);
+            if (args.length > 0 && args[0]) {
+                // Check mention
+                const mention = message.mentions.users.first();
+                if (mention) {
+                    targetUserId = mention.id;
+                } else {
+                    // Check if it's a user ID
+                    const possibleId = args[0].replace(/[<@!>]/g, '');
+                    if (/^\d{17,19}$/.test(possibleId)) {
+                        targetUserId = possibleId;
+                    }
+                }
+            }
+        }
+
+        if (!targetUserId) {
+            // No target specified, silently ignore
+            return;
+        }
+
+        // Check if target is in any voice channel
+        const targetMember = await message.guild.members.fetch(targetUserId).catch(() => null);
+        if (!targetMember) {
+            // User not found, react with speaker off
+            await message.react('🔇').catch(() => {});
+            return;
+        }
+
+        if (!targetMember.voice.channelId) {
+            // User not in VC, react with speaker off
+            await message.react('🔇').catch(() => {});
+            return;
+        }
+
+        // User is in VC, send channel mention
+        await message.reply(`<#${targetMember.voice.channelId}>`);
+    } catch (error) {
+        console.error('[WhichVC] Error:', error);
+        // Silently fail
     }
 }
