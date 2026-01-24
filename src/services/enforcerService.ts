@@ -26,6 +26,15 @@ class EnforcerService {
     // Track channels we're currently enforcing to prevent loops
     private enforcingChannels = new Set<string>();
 
+    // Track recently enforced channels to prevent notification spam
+    // Key: channelId, Value: timestamp of last enforcement
+    private recentlyEnforced = new Map<string, number>();
+    private ENFORCEMENT_COOLDOWN = 30000; // 30 seconds cooldown for notifications
+
+    // Rate limit retry queue - channels that need enforcement after rate limit clears
+    private retryQueue = new Map<string, { notify: boolean; retryAt: number }>();
+    private retryTimerActive = false;
+
     /**
      * IMMEDIATE enforcement - no delays, no debounce
      * Called when ANY external change is detected
@@ -38,13 +47,97 @@ class EnforcerService {
             return;
         }
 
+        // Check if we recently enforced this channel (prevent notification spam)
+        const lastEnforced = this.recentlyEnforced.get(channelId);
+        if (lastEnforced && Date.now() - lastEnforced < this.ENFORCEMENT_COOLDOWN) {
+            // Still enforce but don't notify (to revert any changes)
+            notify = false;
+        }
+
         this.pendingEnforcements.add(channelId);
         
         try {
             await this.executeEnforcement(channelId, notify);
+            // Record successful enforcement
+            this.recentlyEnforced.set(channelId, Date.now());
+        } catch (error: any) {
+            // Check if rate limited
+            if (error?.status === 429 || error?.code === 429) {
+                const retryAfter = (error.retry_after || 5) * 1000;
+                console.log(`[Enforcer] Rate limited on ${channelId}. Queuing retry in ${retryAfter}ms`);
+                this.queueRetry(channelId, notify, retryAfter);
+            } else {
+                throw error;
+            }
         } finally {
             this.pendingEnforcements.delete(channelId);
         }
+    }
+
+    /**
+     * Queue a channel for retry after rate limit expires
+     */
+    private queueRetry(channelId: string, notify: boolean, delayMs: number): void {
+        const retryAt = Date.now() + delayMs;
+        
+        // Only queue if not already queued or if new retry is sooner
+        const existing = this.retryQueue.get(channelId);
+        if (!existing || retryAt < existing.retryAt) {
+            this.retryQueue.set(channelId, { notify: false, retryAt }); // Never notify on retries
+        }
+
+        // Start retry timer if not already running
+        if (!this.retryTimerActive) {
+            this.startRetryTimer();
+        }
+    }
+
+    /**
+     * Process the retry queue
+     */
+    private startRetryTimer(): void {
+        if (this.retryTimerActive) return;
+        this.retryTimerActive = true;
+
+        const processQueue = async () => {
+            const now = Date.now();
+            const toRetry: string[] = [];
+
+            // Find channels ready for retry
+            for (const [channelId, data] of this.retryQueue.entries()) {
+                if (now >= data.retryAt) {
+                    toRetry.push(channelId);
+                }
+            }
+
+            // Process retries
+            for (const channelId of toRetry) {
+                this.retryQueue.delete(channelId);
+                console.log(`[Enforcer] Retrying enforcement for ${channelId}`);
+                // Use enforceQuietly for retries (no notifications)
+                this.enforceQuietly(channelId).catch(err => {
+                    console.error(`[Enforcer] Retry failed for ${channelId}:`, err);
+                });
+            }
+
+            // Continue timer if queue not empty
+            if (this.retryQueue.size > 0) {
+                setTimeout(processQueue, 1000); // Check every second
+            } else {
+                this.retryTimerActive = false;
+            }
+        };
+
+        setTimeout(processQueue, 1000);
+    }
+
+    /**
+     * Check if a channel was recently enforced
+     */
+    public wasRecentlyEnforced(channelId: string): boolean {
+        const lastEnforced = this.recentlyEnforced.get(channelId);
+        if (!lastEnforced) return false;
+        return Date.now() - lastEnforced < this.ENFORCEMENT_COOLDOWN;
     }
 
     /**

@@ -56,8 +56,9 @@ function isBotEdit(channelId: string): boolean {
  * 
  * RULES:
  * 1. If bot made the change -> IGNORE (prevent loops)
- * 2. If whitelisted admin made the change (strictness ON) -> ALLOW
- * 3. ALL OTHER CHANGES -> INSTANT REVERT
+ * 2. If channel was recently enforced -> SILENT enforcement only (no notifications)
+ * 3. If whitelisted admin made the change (strictness ON) -> ALLOW
+ * 4. ALL OTHER CHANGES -> INSTANT REVERT
  * 
  * NO DEBOUNCE. NO DELAYS. IMMEDIATE ENFORCEMENT.
  */
@@ -73,10 +74,21 @@ export async function execute(
     const channelId = newChannel.id;
     const guildId = newChannel.guild.id;
 
-    // FAST PATH: Check memory cache first (sub-millisecond)
+    // FAST PATH #1: Check memory cache first (sub-millisecond)
     // This is the PRIMARY defense against self-punishment
     if (isBotEdit(channelId)) {
         console.log(`[ChannelUpdate] Bot edit detected (memory cache). Ignoring.`);
+        return;
+    }
+
+    // FAST PATH #2: Check if we recently enforced this channel
+    // This catches any edits that are a result of our own enforcement
+    if (enforcer.wasRecentlyEnforced(channelId)) {
+        console.log(`[ChannelUpdate] Recently enforced channel. Silently re-enforcing just in case.`);
+        // Still enforce but silently (in case there's drift)
+        await enforcer.enforceQuietly(channelId).catch(err => {
+            console.error(`[ChannelUpdate] Silent re-enforcement failed:`, err);
+        });
         return;
     }
 
@@ -96,12 +108,12 @@ export async function execute(
     try {
         const auditLogs = await newChannel.guild.fetchAuditLogs({
             type: AuditLogEvent.ChannelUpdate,
-            limit: 3, // Check last 3 entries in case of batched updates
+            limit: 5, // Check more entries in case of batched updates
         });
         
         // Find the most recent log for this channel
         for (const [, log] of auditLogs.entries) {
-            if (log.targetId === channelId && Date.now() - log.createdTimestamp < 10000) {
+            if (log.targetId === channelId && Date.now() - log.createdTimestamp < 15000) {
                 editorId = log.executor?.id || null;
                 break;
             }
