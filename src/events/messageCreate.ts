@@ -1047,29 +1047,17 @@ async function handleMoveUser(message: Message): Promise<void> {
         const guild = message.guild;
         const author = message.member;
 
+        // Check if author has Move Members permission
+        if (!author.permissions.has('MoveMembers')) {
+            return; // Silently ignore if no permission
+        }
+
         // Check if author is in a VC
         if (!author.voice.channelId) {
             return; // Silently ignore
         }
 
         const authorVcId = author.voice.channelId;
-
-        // Check if author owns this VC (PVC or Team)
-        const pvcData = await prisma.privateVoiceChannel.findUnique({
-            where: { channelId: authorVcId },
-        });
-        const teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({
-            where: { channelId: authorVcId },
-        }) : null;
-
-        const channelData = pvcData || teamData;
-        if (!channelData || channelData.ownerId !== author.id) {
-            // Author doesn't own this VC
-            await message.reply('I cannot drag this user. Ask PVC owner to do.').catch(() => {});
-            return;
-        }
-
-        const isTeamChannel = Boolean(teamData);
 
         // Get target user
         let targetUserId: string | null = null;
@@ -1099,6 +1087,13 @@ async function handleMoveUser(message: Message): Promise<void> {
         }
 
         if (!targetUserId) {
+            // No user specified, react with sound off
+            await message.react('🔇').catch(() => {});
+            return;
+        }
+
+        // Cannot drag yourself
+        if (targetUserId === author.id) {
             return; // Silently ignore
         }
 
@@ -1108,58 +1103,82 @@ async function handleMoveUser(message: Message): Promise<void> {
             return;
         }
 
-        // Check if target is in a different VC
+        // Check if target is in a VC
+        if (!targetMember.voice.channelId) {
+            return; // Not in VC
+        }
+
+        // Check if target is already in the same VC
         if (targetMember.voice.channelId === authorVcId) {
             return; // Already in the same VC
+        }
+
+        // Check if author's VC is PVC or Team VC
+        const pvcData = await prisma.privateVoiceChannel.findUnique({
+            where: { channelId: authorVcId },
+        });
+        const teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({
+            where: { channelId: authorVcId },
+        }) : null;
+
+        const channelData = pvcData || teamData;
+        const isTeamChannel = Boolean(teamData);
+
+        // If it's a PVC/Team VC but author doesn't own it, deny
+        if (channelData && channelData.ownerId !== author.id) {
+            await message.reply('I cannot drag this user. Ask PVC owner to do.').catch(() => {});
+            return;
         }
 
         // Move the user
         await targetMember.voice.setChannel(authorVcId).catch(() => {});
 
-        // Grant temporary permit in DB
-        if (isTeamChannel) {
-            await prisma.teamVoicePermission.upsert({
-                where: {
-                    channelId_targetId: {
+        // If it's a PVC/Team VC owned by author, grant temporary permit
+        if (channelData && channelData.ownerId === author.id) {
+            if (isTeamChannel) {
+                await prisma.teamVoicePermission.upsert({
+                    where: {
+                        channelId_targetId: {
+                            channelId: authorVcId,
+                            targetId: targetUserId,
+                        },
+                    },
+                    create: {
                         channelId: authorVcId,
                         targetId: targetUserId,
+                        targetType: 'user',
+                        permission: 'permit',
                     },
-                },
-                create: {
-                    channelId: authorVcId,
-                    targetId: targetUserId,
-                    targetType: 'user',
-                    permission: 'permit',
-                },
-                update: {
-                    permission: 'permit',
-                },
-            }).catch(() => {});
-        } else {
-            await prisma.voicePermission.upsert({
-                where: {
-                    channelId_targetId: {
+                    update: {
+                        permission: 'permit',
+                    },
+                }).catch(() => {});
+            } else {
+                await prisma.voicePermission.upsert({
+                    where: {
+                        channelId_targetId: {
+                            channelId: authorVcId,
+                            targetId: targetUserId,
+                        },
+                    },
+                    create: {
                         channelId: authorVcId,
                         targetId: targetUserId,
+                        targetType: 'user',
+                        permission: 'permit',
                     },
-                },
-                create: {
-                    channelId: authorVcId,
-                    targetId: targetUserId,
-                    targetType: 'user',
-                    permission: 'permit',
-                },
-                update: {
-                    permission: 'permit',
-                },
-            }).catch(() => {});
+                    update: {
+                        permission: 'permit',
+                    },
+                }).catch(() => {});
+            }
+
+            // Track as temporary drag permission
+            addTempDragPermission(authorVcId, targetUserId);
+
+            // Invalidate cache
+            invalidateChannelPermissions(authorVcId);
         }
-
-        // Track as temporary drag permission
-        addTempDragPermission(authorVcId, targetUserId);
-
-        // Invalidate cache
-        invalidateChannelPermissions(authorVcId);
 
         // Reply with "Done."
         await message.reply('Done.').catch(() => {});
