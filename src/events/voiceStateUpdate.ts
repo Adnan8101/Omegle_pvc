@@ -192,7 +192,32 @@ async function handleAccessProtection(
         return true;
     }
 
-    // 5. Check lock/hidden/capacity restrictions
+    // 5. Check admin strictness whitelist FIRST (before any restrictions)
+    // Get strictness settings and whitelist
+    const isTeamChannel = 'teamType' in dbState;
+    const [pvcSettings, teamSettings, whitelist] = await Promise.all([
+        getGuildSettings(guild.id),
+        prisma.teamVoiceSettings.findUnique({ where: { guildId: guild.id } }),
+        getWhitelist(guild.id),
+    ]);
+
+    const hasAdminPerm = member.permissions.has('Administrator') || member.permissions.has('ManageChannels');
+    const strictnessEnabled = isTeamChannel ? teamSettings?.adminStrictness : pvcSettings?.adminStrictness;
+
+    // Check if user is whitelisted admin (can bypass ALL restrictions)
+    const isWhitelisted = whitelist.some(
+        w => w.targetId === member.id || memberRoleIds.includes(w.targetId)
+    );
+
+    // If strictness is ON and user is whitelisted admin, they can bypass EVERYTHING
+    if (strictnessEnabled && isWhitelisted && hasAdminPerm) {
+        return false; // Allow access regardless of lock/hidden/capacity
+    }
+
+    // If strictness is OFF and user is admin, they can bypass lock/hidden (but NOT capacity)
+    // If strictness is ON and NOT whitelisted, apply all restrictions
+
+    // Now check actual restrictions
     const isLocked = dbState.isLocked;
     const isHidden = dbState.isHidden;
     
@@ -223,23 +248,14 @@ async function handleAccessProtection(
     );
     if (isRolePermitted) return false;
 
-    // Check strictness settings based on channel type
-    const [pvcSettings, teamSettings, whitelist] = await Promise.all([
-        getGuildSettings(guild.id),
-        prisma.teamVoiceSettings.findUnique({ where: { guildId: guild.id } }),
-        getWhitelist(guild.id),
-    ]);
-
-    const hasAdminPerm = member.permissions.has('Administrator') || member.permissions.has('ManageChannels');
-
-    // Determine strictness based on channel type
-    const isTeamChannel = 'teamType' in dbState;
-    const strictnessEnabled = isTeamChannel ? teamSettings?.adminStrictness : pvcSettings?.adminStrictness;
-
-    // IMPORTANT: Capacity limits apply to EVERYONE (even admins)
-    // Strictness only applies to lock/hidden states
+    // Handle capacity limits
     if (isFull) {
-        // Channel is full - kick regardless of admin status
+        // If strictness OFF, admins can bypass capacity
+        if (!strictnessEnabled && hasAdminPerm) {
+            return false;
+        }
+
+        // Channel is full - kick
         const reason = 'at capacity';
         const channelTypeName = isTeamChannel ? 'team voice channel' : 'voice channel';
 
@@ -279,16 +295,13 @@ async function handleAccessProtection(
     // For lock/hidden states, check strictness
     if (!isLocked && !isHidden) return false;
 
-    if (!strictnessEnabled) {
-        // Strictness OFF - admins can bypass lock/hidden
-        if (hasAdminPerm) return false;
-    } else {
-        // Strictness ON - only whitelisted admins can bypass lock/hidden
-        const isWhitelisted = whitelist.some(
-            w => w.targetId === member.id || memberRoleIds.includes(w.targetId)
-        );
-        if (isWhitelisted && hasAdminPerm) return false;
+    // If strictness OFF, admins can bypass lock/hidden
+    if (!strictnessEnabled && hasAdminPerm) {
+        return false;
     }
+
+    // If strictness ON, only whitelisted admins can bypass (already checked at top)
+    // If we reached here, user doesn't have permission
 
     const reason = isLocked ? 'locked' : 'hidden';
     const channelTypeName = isTeamChannel ? 'team voice channel' : 'voice channel';
