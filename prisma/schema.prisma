@@ -190,3 +190,17 @@ model UserAccessGrant {
   @@index([guildId, ownerId])
   @@index([guildId, ownerId, suggested])
 }
+
+model GlobalVCBlock {
+  id        String   @id @default(uuid())
+  guildId   String
+  userId    String
+  blockedBy String
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@unique([guildId, userId])
+  @@index([guildId])
+  @@index([userId])
+  @@index([guildId, userId])
+}

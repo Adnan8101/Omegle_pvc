@@ -79,6 +79,54 @@ async function handleAccessProtection(
     const { channelId: newChannelId, guild, member } = newState;
     if (!newChannelId || !member) return false;
 
+    // 1. GLOBAL VC BLOCK CHECK - HIGHEST PRIORITY
+    // Check if user is globally blocked from ALL voice channels
+    const globalBlock = await prisma.globalVCBlock.findUnique({
+        where: {
+            guildId_userId: {
+                guildId: guild.id,
+                userId: member.id,
+            },
+        },
+    });
+
+    if (globalBlock) {
+        // INSTANT KICK - Use IMMEDIATE priority like admin strictness
+        await executeWithRateLimit(
+            `kick:${member.id}`,
+            () => member.voice.disconnect('Globally blocked from all voice channels'),
+            Priority.IMMEDIATE
+        ).catch(err => {
+            console.error(`[GlobalVCBlock] Failed to kick ${member.id}:`, err);
+        });
+
+        // Send notification
+        const embed = new EmbedBuilder()
+            .setColor(0xFF0000)
+            .setTitle('🚫 Global Voice Block')
+            .setDescription(
+                `You are **GLOBALLY BLOCKED** from joining any voice channel in **${guild.name}**.\n\n` +
+                `**Reason:** ${globalBlock.reason || 'No reason provided'}\n\n` +
+                `Contact server administrators for assistance.`
+            )
+            .setTimestamp();
+        
+        member.send({ embeds: [embed] }).catch(() => { });
+
+        logAction({
+            action: LogAction.USER_REMOVED,
+            guild: guild,
+            user: member.user,
+            channelName: `Channel ${newChannelId}`,
+            channelId: newChannelId,
+            details: `Globally blocked user attempted to join`,
+            isTeamChannel: false,
+        }).catch(() => { });
+
+        return true;
+    }
+
+    // 2. Bot protection (non-whitelisted bots)
     if (member.user.bot && !WHITELISTED_BOT_IDS.has(member.user.id)) {
 
         try {
@@ -87,6 +135,7 @@ async function handleAccessProtection(
         return true;
     }
 
+    // 3. Check if this is a managed channel (PVC or Team VC)
     const dbState = await VoiceStateService.getVCState(newChannelId);
 
     if (!dbState) return false;
@@ -100,6 +149,7 @@ async function handleAccessProtection(
     const dbPermissions = dbState.permissions || [];
     const memberRoleIds = member.roles.cache.map(r => r.id);
 
+    // 4. Check channel-specific blocks
     const isUserBanned = dbPermissions.some(
         (p: any) => p.targetId === member.id && p.permission === 'ban'
     );
@@ -108,29 +158,26 @@ async function handleAccessProtection(
     );
 
     if (isUserBanned || isRoleBanned) {
-
-        fireAndForget(
+        // INSTANT KICK - Use IMMEDIATE priority
+        await executeWithRateLimit(
             `kick:${member.id}`,
-            async () => {
-                try {
-                    await member.voice.disconnect();
-                    const owner = guild.members.cache.get(ownerId);
-                    const ownerName = owner?.displayName || 'the owner';
-                    const embed = new EmbedBuilder()
-                        .setColor(0xFF0000)
-                        .setTitle('🚫 Blocked')
-                        .setDescription(
-                            `You are **BLOCKED** from **${channel.name}** by ${ownerName}.\n\n` +
-                            `You cannot join this channel until you are unblocked.`
-                        )
-                        .setTimestamp();
-                    member.send({ embeds: [embed] }).catch(() => { });
-                } catch (err) {
+            () => member.voice.disconnect('Blocked from this channel'),
+            Priority.IMMEDIATE
+        ).catch(err => {
+            console.error(`[ChannelBlock] Failed to kick ${member.id}:`, err);
+        });
 
-                }
-            },
-            Priority.HIGH
-        );
+        const owner = guild.members.cache.get(ownerId);
+        const ownerName = owner?.displayName || 'the owner';
+        const embed = new EmbedBuilder()
+            .setColor(0xFF0000)
+            .setTitle('🚫 Blocked')
+            .setDescription(
+                `You are **BLOCKED** from **${channel.name}** by ${ownerName}.\n\n` +
+                `You cannot join this channel until you are unblocked.`
+            )
+            .setTimestamp();
+        member.send({ embeds: [embed] }).catch(() => { });
 
         logAction({
             action: LogAction.USER_REMOVED,
@@ -145,6 +192,7 @@ async function handleAccessProtection(
         return true;
     }
 
+    // 5. Check lock/hidden/capacity restrictions
     const isLocked = dbState.isLocked;
     const isHidden = dbState.isHidden;
     const isFull = dbState.userLimit > 0 && channel.members.size > dbState.userLimit;
@@ -182,28 +230,26 @@ async function handleAccessProtection(
     const reason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
     const channelTypeName = 'voice channel'; // Generic name
 
-    fireAndForget(
+    // INSTANT KICK - Use IMMEDIATE priority
+    await executeWithRateLimit(
         `kick:${member.id}`,
-        async () => {
-            try {
-                await member.voice.disconnect();
-                const owner = guild.members.cache.get(ownerId);
-                const ownerName = owner?.displayName || 'the owner';
-                const embed = new EmbedBuilder()
-                    .setColor(0xFF6B6B)
-                    .setTitle('🚫 Access Denied')
-                    .setDescription(
-                        `You were removed from **${channel.name}** because the ${channelTypeName} is **${reason}**.\n\n` +
-                        `Ask **${ownerName}** to give you access to join.`
-                    )
-                    .setTimestamp();
-                member.send({ embeds: [embed] }).catch(() => { });
-            } catch (err) {
+        () => member.voice.disconnect('Unauthorized access'),
+        Priority.IMMEDIATE
+    ).catch(err => {
+        console.error(`[AccessProtection] Failed to kick ${member.id}:`, err);
+    });
 
-            }
-        },
-        Priority.LOW
-    );
+    const owner = guild.members.cache.get(ownerId);
+    const ownerName = owner?.displayName || 'the owner';
+    const embed = new EmbedBuilder()
+        .setColor(0xFF6B6B)
+        .setTitle('🚫 Access Denied')
+        .setDescription(
+            `You were removed from **${channel.name}** because the ${channelTypeName} is **${reason}**.\n\n` +
+            `Ask **${ownerName}** to give you access to join.`
+        )
+        .setTimestamp();
+    member.send({ embeds: [embed] }).catch(() => { });
 
     logAction({
         action: LogAction.USER_REMOVED,

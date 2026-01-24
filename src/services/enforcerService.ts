@@ -350,7 +350,13 @@ class EnforcerService {
         const isHidden = dbState.isHidden;
         const isFull = dbState.userLimit > 0 && channel.members.size > dbState.userLimit;
 
-        // If channel is open, no need to kick anyone (except banned users)
+        // Get all global blocks for this guild (batch check)
+        const globalBlocks = await prisma.globalVCBlock.findMany({
+            where: { guildId: guild.id },
+        });
+        const globallyBlockedUserIds = new Set(globalBlocks.map(b => b.userId));
+
+        // If channel is open, no need to kick anyone (except banned users and global blocks)
         const permissions = dbState.permissions || [];
         const bannedUserIds = new Set(
             permissions.filter((p: any) => p.permission === 'ban' && p.targetType === 'user').map((p: any) => p.targetId)
@@ -369,17 +375,23 @@ class EnforcerService {
             // Skip bots (they have their own protection in voiceStateUpdate)
             if (member.user.bot) continue;
 
-            // Owner is always allowed
-            if (memberId === dbState.ownerId) continue;
+            // Owner is always allowed (unless globally blocked)
+            if (memberId === dbState.ownerId && !globallyBlockedUserIds.has(memberId)) continue;
+
+            // Check GLOBAL BLOCK - HIGHEST PRIORITY (kicks even owners)
+            if (globallyBlockedUserIds.has(memberId)) {
+                await this.kickMemberInstantly(member, channel.name, dbState.ownerId, 'globally blocked');
+                continue;
+            }
 
             const memberRoleIds = member.roles.cache.map(r => r.id);
 
-            // Check if BANNED - always kick
+            // Check if BANNED - always kick instantly
             const isBanned = bannedUserIds.has(memberId) || 
                 memberRoleIds.some(roleId => bannedRoleIds.has(roleId));
             
             if (isBanned) {
-                await this.kickMember(member, channel.name, dbState.ownerId, 'blocked');
+                await this.kickMemberInstantly(member, channel.name, dbState.ownerId, 'blocked');
                 continue;
             }
 
@@ -406,36 +418,66 @@ class EnforcerService {
                 if (isWhitelisted && hasAdminPerm) continue;
             }
 
-            // User is NOT authorized - KICK
+            // User is NOT authorized - KICK INSTANTLY
             const reason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
-            await this.kickMember(member, channel.name, dbState.ownerId, reason);
+            await this.kickMemberInstantly(member, channel.name, dbState.ownerId, reason);
         }
     }
 
     /**
-     * Kick a member and send them a DM
+     * Kick a member INSTANTLY (IMMEDIATE priority like admin strictness)
+     * Used for blocked users and unauthorized access
      */
-    private async kickMember(member: any, channelName: string, ownerId: string, reason: string): Promise<void> {
+    private async kickMemberInstantly(member: any, channelName: string, ownerId: string, reason: string): Promise<void> {
+        // Use IMMEDIATE priority - same as admin strictness enforcement
+        await executeWithRateLimit(
+            `kick:${member.id}`,
+            () => member.voice.disconnect(reason === 'globally blocked' ? 'Globally blocked' : reason === 'blocked' ? 'Blocked from channel' : 'Unauthorized access'),
+            Priority.IMMEDIATE
+        ).catch(err => {
+            console.error(`[Enforcer] Failed to kick member instantly:`, err);
+        });
+
+        // Send DM notification
         try {
-            await member.voice.disconnect();
-            
             const owner = member.guild.members.cache.get(ownerId);
             const ownerName = owner?.displayName || 'the owner';
 
-            const embed = new EmbedBuilder()
-                .setColor(reason === 'blocked' ? 0xFF0000 : 0xFF6B6B)
-                .setTitle(reason === 'blocked' ? '🚫 Blocked' : '🚫 Access Denied')
-                .setDescription(
-                    reason === 'blocked'
-                        ? `You are **BLOCKED** from **${channelName}** by ${ownerName}.\n\nYou cannot join this channel until you are unblocked.`
-                        : `You were removed from **${channelName}** because the channel is **${reason}**.\n\nAsk **${ownerName}** to give you access to join.`
-                )
-                .setTimestamp();
+            let embed: EmbedBuilder;
+            
+            if (reason === 'globally blocked') {
+                embed = new EmbedBuilder()
+                    .setColor(0xFF0000)
+                    .setTitle('🚫 Global Voice Block')
+                    .setDescription(
+                        `You are **GLOBALLY BLOCKED** from joining any voice channel in **${member.guild.name}**.\n\n` +
+                        `Contact server administrators for assistance.`
+                    )
+                    .setTimestamp();
+            } else if (reason === 'blocked') {
+                embed = new EmbedBuilder()
+                    .setColor(0xFF0000)
+                    .setTitle('🚫 Blocked')
+                    .setDescription(
+                        `You are **BLOCKED** from **${channelName}** by ${ownerName}.\n\n` +
+                        `You cannot join this channel until you are unblocked.`
+                    )
+                    .setTimestamp();
+            } else {
+                embed = new EmbedBuilder()
+                    .setColor(0xFF6B6B)
+                    .setTitle('🚫 Access Denied')
+                    .setDescription(
+                        `You were removed from **${channelName}** because the channel is **${reason}**.\n\n` +
+                        `Ask **${ownerName}** to give you access to join.`
+                    )
+                    .setTimestamp();
+            }
 
             await member.send({ embeds: [embed] }).catch(() => {});
-            console.log(`[Enforcer] Kicked ${member.user.tag} from channel (${reason})`);
+            console.log(`[Enforcer] Kicked ${member.user.tag} from channel INSTANTLY (${reason})`);
         } catch (err) {
-            console.error(`[Enforcer] Failed to kick member:`, err);
+            console.error(`[Enforcer] Failed to send kick notification:`, err);
         }
     }
 
