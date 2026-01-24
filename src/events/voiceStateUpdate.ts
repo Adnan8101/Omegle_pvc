@@ -37,6 +37,7 @@ import {
     getChannelPermissions,
     getWhitelist,
     batchUpsertPermissions,
+    invalidateChannelPermissions,
 } from '../utils/cache';
 import { logAction, LogAction } from '../utils/logger';
 import { generateVcInterfaceEmbed, generateInterfaceImage, createInterfaceComponents } from '../utils/canvasGenerator';
@@ -44,6 +45,7 @@ import { isPvcPaused } from '../utils/pauseManager';
 
 import { recordBotEdit } from './channelUpdate';
 import { VoiceStateService } from '../services/voiceStateService';
+import { hasTempDragPermission, removeTempDragPermission } from './messageCreate';
 
 export const name = Events.VoiceStateUpdate;
 export const once = false;
@@ -469,6 +471,35 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
 async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> {
     const { channelId, guild, member } = state;
     if (!channelId) return;
+
+    // Check and remove temporary drag permission if user leaves
+    if (member && hasTempDragPermission(channelId, member.id)) {
+        // Remove the temporary permit from DB
+        const pvcData = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+        const teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
+
+        if (pvcData) {
+            await prisma.voicePermission.deleteMany({
+                where: {
+                    channelId,
+                    targetId: member.id,
+                    permission: 'permit',
+                },
+            }).catch(() => {});
+        } else if (teamData) {
+            await prisma.teamVoicePermission.deleteMany({
+                where: {
+                    channelId,
+                    targetId: member.id,
+                    permission: 'permit',
+                },
+            }).catch(() => {});
+        }
+
+        // Remove from tracking and invalidate cache
+        removeTempDragPermission(channelId, member.id);
+        invalidateChannelPermissions(channelId);
+    }
 
     const channelState = getChannelState(channelId);
     if (channelState) {

@@ -23,6 +23,30 @@ const NUMBER_EMOJIS = [
     '㉑', '㉒', '㉓', '㉔', '㉕', '㉖', '㉗', '㉘', '㉙', '㉚'
 ];
 
+// Track temporary drag permissions: channelId -> Set<userId>
+const tempDragPermissions = new Map<string, Set<string>>();
+
+export function addTempDragPermission(channelId: string, userId: string): void {
+    if (!tempDragPermissions.has(channelId)) {
+        tempDragPermissions.set(channelId, new Set());
+    }
+    tempDragPermissions.get(channelId)!.add(userId);
+}
+
+export function removeTempDragPermission(channelId: string, userId: string): void {
+    const perms = tempDragPermissions.get(channelId);
+    if (perms) {
+        perms.delete(userId);
+        if (perms.size === 0) {
+            tempDragPermissions.delete(channelId);
+        }
+    }
+}
+
+export function hasTempDragPermission(channelId: string, userId: string): boolean {
+    return tempDragPermissions.get(channelId)?.has(userId) || false;
+}
+
 export async function execute(client: PVCClient, message: Message): Promise<void> {
     if (message.author.bot) return;
 
@@ -35,6 +59,11 @@ export async function execute(client: PVCClient, message: Message): Promise<void
 
     if (message.content.startsWith('!wv')) {
         await handleWhichVc(message);
+        return;
+    }
+
+    if (message.content.startsWith('!mv')) {
+        await handleMoveUser(message);
         return;
     }
 
@@ -1008,5 +1037,133 @@ async function handleWhichVc(message: Message): Promise<void> {
     } catch (error) {
         console.error('[WhichVC] Error:', error);
         // Silently fail
+    }
+}
+
+async function handleMoveUser(message: Message): Promise<void> {
+    if (!message.guild || !message.member) return;
+
+    try {
+        const guild = message.guild;
+        const author = message.member;
+
+        // Check if author is in a VC
+        if (!author.voice.channelId) {
+            return; // Silently ignore
+        }
+
+        const authorVcId = author.voice.channelId;
+
+        // Check if author owns this VC (PVC or Team)
+        const pvcData = await prisma.privateVoiceChannel.findUnique({
+            where: { channelId: authorVcId },
+        });
+        const teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({
+            where: { channelId: authorVcId },
+        }) : null;
+
+        const channelData = pvcData || teamData;
+        if (!channelData || channelData.ownerId !== author.id) {
+            // Author doesn't own this VC
+            await message.reply('I cannot drag this user. Ask PVC owner to do.').catch(() => {});
+            return;
+        }
+
+        const isTeamChannel = Boolean(teamData);
+
+        // Get target user
+        let targetUserId: string | null = null;
+
+        // Check for reply
+        if (message.reference?.messageId) {
+            const repliedMessage = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
+            if (repliedMessage) {
+                targetUserId = repliedMessage.author.id;
+            }
+        }
+
+        // Check for mention or user ID in message
+        if (!targetUserId) {
+            const args = message.content.slice(3).trim().split(/\s+/);
+            if (args.length > 0 && args[0]) {
+                const mention = message.mentions.users.first();
+                if (mention) {
+                    targetUserId = mention.id;
+                } else {
+                    const possibleId = args[0].replace(/[<@!>]/g, '');
+                    if (/^\d{17,19}$/.test(possibleId)) {
+                        targetUserId = possibleId;
+                    }
+                }
+            }
+        }
+
+        if (!targetUserId) {
+            return; // Silently ignore
+        }
+
+        // Fetch target member
+        const targetMember = await guild.members.fetch(targetUserId).catch(() => null);
+        if (!targetMember) {
+            return;
+        }
+
+        // Check if target is in a different VC
+        if (targetMember.voice.channelId === authorVcId) {
+            return; // Already in the same VC
+        }
+
+        // Move the user
+        await targetMember.voice.setChannel(authorVcId).catch(() => {});
+
+        // Grant temporary permit in DB
+        if (isTeamChannel) {
+            await prisma.teamVoicePermission.upsert({
+                where: {
+                    channelId_targetId: {
+                        channelId: authorVcId,
+                        targetId: targetUserId,
+                    },
+                },
+                create: {
+                    channelId: authorVcId,
+                    targetId: targetUserId,
+                    targetType: 'user',
+                    permission: 'permit',
+                },
+                update: {
+                    permission: 'permit',
+                },
+            }).catch(() => {});
+        } else {
+            await prisma.voicePermission.upsert({
+                where: {
+                    channelId_targetId: {
+                        channelId: authorVcId,
+                        targetId: targetUserId,
+                    },
+                },
+                create: {
+                    channelId: authorVcId,
+                    targetId: targetUserId,
+                    targetType: 'user',
+                    permission: 'permit',
+                },
+                update: {
+                    permission: 'permit',
+                },
+            }).catch(() => {});
+        }
+
+        // Track as temporary drag permission
+        addTempDragPermission(authorVcId, targetUserId);
+
+        // Invalidate cache
+        invalidateChannelPermissions(authorVcId);
+
+        // Reply with "Done."
+        await message.reply('Done.').catch(() => {});
+    } catch (error) {
+        console.error('[MoveUser] Error:', error);
     }
 }
