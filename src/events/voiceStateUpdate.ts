@@ -200,8 +200,12 @@ async function handleAccessProtection(
     let isFull = false;
     if ('teamType' in dbState && dbState.teamType) {
         // Team VC - use TEAM_USER_LIMITS (exact capacity, use >=)
-        const teamLimit = TEAM_USER_LIMITS[dbState.teamType as keyof typeof TEAM_USER_LIMITS];
-        isFull = channel.members.size >= teamLimit;
+        // Note: DB stores UPPERCASE (DUO, TRIO, SQUAD), convert to lowercase for lookup
+        const teamTypeLower = (dbState.teamType as string).toLowerCase() as keyof typeof TEAM_USER_LIMITS;
+        const teamLimit = TEAM_USER_LIMITS[teamTypeLower];
+        if (teamLimit) {
+            isFull = channel.members.size >= teamLimit;
+        }
     } else {
         // PVC - use userLimit from DB
         isFull = dbState.userLimit > 0 && channel.members.size > dbState.userLimit;

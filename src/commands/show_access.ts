@@ -39,42 +39,35 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
     try {
-        // Get all PVC permissions (filter by guild after fetching)
+        // Get all PVCs in this guild first
+        const guildPVCs = await prisma.privateVoiceChannel.findMany({
+            where: { guildId: interaction.guild.id },
+            select: { channelId: true, ownerId: true },
+        });
+        const pvcChannelIds = guildPVCs.map(p => p.channelId);
+
+        // Get all Team VCs in this guild
+        const guildTeamVCs = await prisma.teamVoiceChannel.findMany({
+            where: { guildId: interaction.guild.id },
+            select: { channelId: true, ownerId: true, teamType: true },
+        });
+        const teamChannelIds = guildTeamVCs.map(t => t.channelId);
+
+        // Get PVC permissions for this user in guild channels
         const pvcPermissions = await prisma.voicePermission.findMany({
             where: {
                 targetId: targetUser.id,
                 targetType: 'user',
-                channel: {
-                    guildId: interaction.guild.id,
-                },
-            },
-            include: {
-                channel: {
-                    select: {
-                        channelId: true,
-                        ownerId: true,
-                    },
-                },
+                channelId: { in: pvcChannelIds },
             },
         });
 
-        // Get all Team VC permissions (filter by guild after fetching)
+        // Get Team VC permissions for this user in guild channels
         const teamPermissions = await prisma.teamVoicePermission.findMany({
             where: {
                 targetId: targetUser.id,
                 targetType: 'user',
-                channel: {
-                    guildId: interaction.guild.id,
-                },
-            },
-            include: {
-                channel: {
-                    select: {
-                        channelId: true,
-                        ownerId: true,
-                        teamType: true,
-                    },
-                },
+                channelId: { in: teamChannelIds },
             },
         });
 

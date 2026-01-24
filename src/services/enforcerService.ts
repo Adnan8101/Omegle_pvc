@@ -380,10 +380,14 @@ class EnforcerService {
         // For Team VCs, use teamType-based limits. For PVCs, use userLimit
         let isFull = false;
         if ('teamType' in dbState && dbState.teamType) {
-            // Team VC - use TEAM_USER_LIMITS (imported from voiceManager)
+            // Team VC - use TEAM_USER_LIMITS
+            // Note: DB stores UPPERCASE (DUO, TRIO, SQUAD), convert to lowercase for lookup
             const TEAM_USER_LIMITS = { duo: 2, trio: 3, squad: 4 };
-            const teamLimit = TEAM_USER_LIMITS[dbState.teamType as keyof typeof TEAM_USER_LIMITS];
-            isFull = channel.members.size > teamLimit;
+            const teamTypeLower = (dbState.teamType as string).toLowerCase() as keyof typeof TEAM_USER_LIMITS;
+            const teamLimit = TEAM_USER_LIMITS[teamTypeLower];
+            if (teamLimit) {
+                isFull = channel.members.size >= teamLimit;
+            }
         } else {
             // PVC - use userLimit from DB
             isFull = dbState.userLimit > 0 && channel.members.size > dbState.userLimit;
