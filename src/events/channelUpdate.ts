@@ -8,11 +8,11 @@ export const once = false;
 
 /**
  * Track bot's own edits to prevent self-punishment loops.
- * Uses timestamps with short TTL for memory efficiency.
+ * Uses timestamps with longer TTL to ensure we catch all self-edits.
  */
 export const recentBotEdits = new Map<string, number>();
 
-const BOT_EDIT_TTL = 5000; // 5 seconds - very short to catch only immediate self-edits
+const BOT_EDIT_TTL = 15000; // 15 seconds - longer to account for API delays
 
 /**
  * Record that the bot is about to make an edit.
@@ -20,6 +20,7 @@ const BOT_EDIT_TTL = 5000; // 5 seconds - very short to catch only immediate sel
  */
 export function recordBotEdit(channelId: string): void {
     recentBotEdits.set(channelId, Date.now());
+    console.log(`[ChannelUpdate] Recorded bot edit for ${channelId}`);
     
     // Clean up old entries periodically
     if (recentBotEdits.size > 50) {
@@ -73,18 +74,19 @@ export async function execute(
     const guildId = newChannel.guild.id;
 
     // FAST PATH: Check memory cache first (sub-millisecond)
+    // This is the PRIMARY defense against self-punishment
     if (isBotEdit(channelId)) {
-        console.log(`[ChannelUpdate] Bot edit (memory). Ignoring.`);
+        console.log(`[ChannelUpdate] Bot edit detected (memory cache). Ignoring.`);
         return;
     }
 
-    // Check if this is a managed channel
+    // Check if this is a managed channel BEFORE doing anything else
     const [pvcChannel, teamChannel] = await Promise.all([
         prisma.privateVoiceChannel.findUnique({ where: { channelId } }),
         prisma.teamVoiceChannel.findUnique({ where: { channelId } }),
     ]);
 
-    // Not a managed channel - ignore
+    // Not a managed channel - ignore completely
     if (!pvcChannel && !teamChannel) {
         return;
     }
@@ -94,31 +96,38 @@ export async function execute(
     try {
         const auditLogs = await newChannel.guild.fetchAuditLogs({
             type: AuditLogEvent.ChannelUpdate,
-            limit: 1,
+            limit: 3, // Check last 3 entries in case of batched updates
         });
-        const log = auditLogs.entries.first();
-
-        // Verify the log is recent and for this channel
-        if (log && log.targetId === channelId && Date.now() - log.createdTimestamp < 5000) {
-            editorId = log.executor?.id || null;
+        
+        // Find the most recent log for this channel
+        for (const [, log] of auditLogs.entries) {
+            if (log.targetId === channelId && Date.now() - log.createdTimestamp < 10000) {
+                editorId = log.executor?.id || null;
+                break;
+            }
         }
     } catch (err) {
         console.error('[ChannelUpdate] Failed to fetch audit logs:', err);
+        // If we can't fetch audit logs, check memory cache again and be cautious
+        if (isBotEdit(channelId)) {
+            console.log(`[ChannelUpdate] Audit log fetch failed, but bot edit in cache. Ignoring.`);
+            return;
+        }
     }
 
-    // If bot made the change (audit log confirms), ignore
+    // CRITICAL: If bot made the change (audit log confirms), ignore IMMEDIATELY
     if (editorId === client.user?.id) {
-        console.log(`[ChannelUpdate] Bot edit (audit log). Ignoring.`);
+        console.log(`[ChannelUpdate] Bot edit confirmed (audit log). Ignoring.`);
+        // Also record in memory to prevent any follow-up events
+        recordBotEdit(channelId);
         return;
     }
 
-    // Check if the editor is authorized
+    // Check if the editor is authorized (whitelisted admin)
     if (editorId) {
         const isAuthorized = await enforcer.isAuthorizedEditor(guildId, editorId);
         if (isAuthorized) {
-            console.log(`[ChannelUpdate] Authorized editor (whitelisted admin). Allowing.`);
-            // NOTE: Even whitelisted admins' changes are NOT persisted to DB
-            // They can fix things temporarily but DB remains the source of truth
+            console.log(`[ChannelUpdate] Authorized editor (whitelisted admin: ${editorId}). Allowing.`);
             return;
         }
     }

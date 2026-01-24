@@ -29,8 +29,10 @@ class EnforcerService {
     /**
      * IMMEDIATE enforcement - no delays, no debounce
      * Called when ANY external change is detected
+     * @param channelId - The channel to enforce
+     * @param notify - Whether to send notifications (default: true for external changes)
      */
-    public async enforce(channelId: string): Promise<void> {
+    public async enforce(channelId: string, notify: boolean = true): Promise<void> {
         // Prevent duplicate enforcement calls for the same channel
         if (this.pendingEnforcements.has(channelId) || this.enforcingChannels.has(channelId)) {
             return;
@@ -39,10 +41,18 @@ class EnforcerService {
         this.pendingEnforcements.add(channelId);
         
         try {
-            await this.executeEnforcement(channelId);
+            await this.executeEnforcement(channelId, notify);
         } finally {
             this.pendingEnforcements.delete(channelId);
         }
+    }
+
+    /**
+     * Silent enforcement - used by VoiceStateService when owner makes changes via bot
+     * Does NOT send "unauthorized change" notifications
+     */
+    public async enforceQuietly(channelId: string): Promise<void> {
+        return this.enforce(channelId, false);
     }
 
     /**
@@ -89,8 +99,10 @@ class EnforcerService {
 
     /**
      * The core enforcement logic - forces Discord to match DB state EXACTLY
+     * @param channelId - The channel to enforce
+     * @param notify - Whether to send notifications about the enforcement
      */
-    private async executeEnforcement(channelId: string): Promise<void> {
+    private async executeEnforcement(channelId: string, notify: boolean = true): Promise<void> {
         this.enforcingChannels.add(channelId);
 
         try {
@@ -216,8 +228,10 @@ class EnforcerService {
             // 6. Kick any unauthorized users currently in the channel
             await this.kickUnauthorizedMembers(channel, dbState);
 
-            // 7. Log and notify
-            await this.notifyEnforcement(channel, isTeamChannel, dbState);
+            // 7. Log and notify ONLY if this was an external unauthorized change
+            if (notify) {
+                await this.notifyEnforcement(channel, isTeamChannel, dbState);
+            }
 
         } catch (error) {
             console.error(`[Enforcer] ❌ Failed to enforce state on ${channelId}:`, error);

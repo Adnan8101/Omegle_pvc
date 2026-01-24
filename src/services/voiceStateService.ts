@@ -75,7 +75,7 @@ export class VoiceStateService {
         }
 
         // Enforce the new state immediately
-        await enforcer.enforce(channelId);
+        await enforcer.enforceQuietly(channelId);
     }
 
     // ==================== HIDE/UNHIDE ====================
@@ -101,7 +101,7 @@ export class VoiceStateService {
             }
         }
 
-        await enforcer.enforce(channelId);
+        await enforcer.enforceQuietly(channelId);
     }
 
     // ==================== USER LIMIT ====================
@@ -127,7 +127,7 @@ export class VoiceStateService {
             }
         }
 
-        await enforcer.enforce(channelId);
+        await enforcer.enforceQuietly(channelId);
     }
 
     // ==================== BITRATE ====================
@@ -153,7 +153,7 @@ export class VoiceStateService {
             }
         }
 
-        await enforcer.enforce(channelId);
+        await enforcer.enforceQuietly(channelId);
     }
 
     // ==================== REGION ====================
@@ -179,7 +179,7 @@ export class VoiceStateService {
             }
         }
 
-        await enforcer.enforce(channelId);
+        await enforcer.enforceQuietly(channelId);
     }
 
     // ==================== PERMISSIONS ====================
@@ -208,7 +208,7 @@ export class VoiceStateService {
         }
 
         invalidateChannelPermissions(channelId);
-        await enforcer.enforce(channelId);
+        await enforcer.enforceQuietly(channelId);
     }
 
     /**
@@ -228,7 +228,7 @@ export class VoiceStateService {
         }
 
         invalidateChannelPermissions(channelId);
-        await enforcer.enforce(channelId);
+        await enforcer.enforceQuietly(channelId);
     }
 
     /**
@@ -255,7 +255,7 @@ export class VoiceStateService {
         }
 
         invalidateChannelPermissions(channelId);
-        await enforcer.enforce(channelId);
+        await enforcer.enforceQuietly(channelId);
     }
 
     /**
@@ -275,7 +275,7 @@ export class VoiceStateService {
         }
 
         invalidateChannelPermissions(channelId);
-        await enforcer.enforce(channelId);
+        await enforcer.enforceQuietly(channelId);
     }
 
     // ==================== OWNERSHIP ====================
@@ -301,7 +301,7 @@ export class VoiceStateService {
             }
         }
 
-        await enforcer.enforce(channelId);
+        await enforcer.enforceQuietly(channelId);
     }
 
     // ==================== BATCH OPERATIONS ====================
@@ -336,6 +336,6 @@ export class VoiceStateService {
             }
         }
 
-        await enforcer.enforce(channelId);
+        await enforcer.enforceQuietly(channelId);
     }
 }
