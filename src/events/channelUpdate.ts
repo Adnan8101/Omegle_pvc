@@ -10,6 +10,16 @@ export const recentBotEdits = new Map<string, number>();
 
 export function recordBotEdit(channelId: string): void {
     recentBotEdits.set(channelId, Date.now());
+    
+    // Clean up old entries to prevent memory leaks (entries older than 30 seconds)
+    if (recentBotEdits.size > 100) {
+        const now = Date.now();
+        for (const [id, timestamp] of recentBotEdits.entries()) {
+            if (now - timestamp > 30000) {
+                recentBotEdits.delete(id);
+            }
+        }
+    }
 }
 
 export async function execute(

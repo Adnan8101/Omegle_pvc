@@ -102,22 +102,69 @@ async function handleAccessProtection(
     const ownerId = dbState.ownerId;
     if (member.id === ownerId) return false;
 
-    // 2. Check Locks & Limits from DB
+    // 2. PRIORITY CHECK: Blocked Users (ALWAYS blocked regardless of channel state)
+    const dbPermissions = dbState.permissions || [];
+    const memberRoleIds = member.roles.cache.map(r => r.id);
+
+    // Check if user is BANNED - if yes, kick immediately without any other checks
+    const isUserBanned = dbPermissions.some(
+        (p: any) => p.targetId === member.id && p.permission === 'ban'
+    );
+    const isRoleBanned = dbPermissions.some(
+        (p: any) => memberRoleIds.includes(p.targetId) && p.targetType === 'role' && p.permission === 'ban'
+    );
+
+    if (isUserBanned || isRoleBanned) {
+        // BLOCKED USER - kick immediately
+        fireAndForget(
+            `kick:${member.id}`,
+            async () => {
+                try {
+                    await member.voice.disconnect();
+                    const owner = guild.members.cache.get(ownerId);
+                    const ownerName = owner?.displayName || 'the owner';
+                    const embed = new EmbedBuilder()
+                        .setColor(0xFF0000)
+                        .setTitle('🚫 Blocked')
+                        .setDescription(
+                            `You are **BLOCKED** from **${channel.name}** by ${ownerName}.\n\n` +
+                            `You cannot join this channel until you are unblocked.`
+                        )
+                        .setTimestamp();
+                    member.send({ embeds: [embed] }).catch(() => { });
+                } catch (err) {
+                    console.error(`[AccessProtection] Failed to kick blocked user ${member.id}:`, err);
+                }
+            },
+            Priority.HIGH
+        );
+
+        logAction({
+            action: LogAction.USER_REMOVED,
+            guild: guild,
+            user: member.user,
+            channelName: channel.name,
+            channelId: newChannelId,
+            details: `Blocked user attempted to join`,
+            isTeamChannel: false,
+        }).catch(() => { });
+
+        return true;
+    }
+
+    // 3. Check Locks & Limits from DB (only for non-blocked users)
     const isLocked = dbState.isLocked;
     const isHidden = dbState.isHidden;
     const isFull = dbState.userLimit > 0 && channel.members.size > dbState.userLimit;
 
+    // If channel is open (not locked/hidden/full), allow entry
     if (!isLocked && !isHidden && !isFull) return false;
 
-    // 3. Check Permissions (DB Authority)
+    // 4. Channel has restrictions - Check if user has permissions to bypass
     // We allow:
     // - Owner (checked above)
     // - Explicitly Permitted Users/Roles in DB
     // - Admins (If strictness is OFF) or Whitelisted Users (If strictness is ON)
-
-    // Check DB Permissions
-    const dbPermissions = dbState.permissions || [];
-    const memberRoleIds = member.roles.cache.map(r => r.id);
 
     // Check specific user permit
     const isUserPermitted = dbPermissions.some(
@@ -140,7 +187,7 @@ async function handleAccessProtection(
     const hasAdminPerm = member.permissions.has('Administrator') || member.permissions.has('ManageChannels');
 
     if (!settings?.adminStrictness) {
-        // Strictness OFF: Admins can bypass
+        // Strictness OFF: Admins can bypass lock/hide/limit
         if (hasAdminPerm) return false;
     } else {
         // Strictness ON: Only Whitelisted Admins can bypass
@@ -150,7 +197,7 @@ async function handleAccessProtection(
         if (isWhitelisted) return false;
     }
 
-    // 4. KICK THE INTRUDER
+    // 5. KICK THE INTRUDER (not blocked, but doesn't have permission for locked/hidden/full VC)
     const reason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
     const channelTypeName = 'voice channel'; // Generic name
 
@@ -578,6 +625,9 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
             Priority.IMMEDIATE
         );
 
+        // CRITICAL: Record bot edit IMMEDIATELY after creation to prevent self-punishment
+        recordBotEdit(newChannel.id);
+
         registerChannel(newChannel.id, guild.id, member.id);
 
         // Create initial snapshot for the new channel
@@ -943,6 +993,9 @@ async function createTeamChannel(client: PVCClient, state: VoiceState, teamType:
             }),
             Priority.IMMEDIATE
         );
+
+        // CRITICAL: Record bot edit IMMEDIATELY after creation to prevent self-punishment
+        recordBotEdit(newChannel.id);
 
         registerTeamChannel(newChannel.id, guild.id, member.id, teamType);
 
