@@ -139,14 +139,7 @@ async function handleAccessProtection(
 
     const hasAdminPerm = member.permissions.has('Administrator') || member.permissions.has('ManageChannels');
 
-    // For team channels, check team-specific strictness settings too
-    const teamSettings = dbState.teamType ? await prisma.teamVoiceSettings.findUnique({
-        where: { guildId: guild.id }
-    }) : null;
-    
-    const strictnessEnabled = settings?.adminStrictness || teamSettings?.adminStrictness;
-
-    if (!strictnessEnabled) {
+    if (!settings?.adminStrictness) {
         // Strictness OFF: Admins can bypass
         if (hasAdminPerm) return false;
     } else {
