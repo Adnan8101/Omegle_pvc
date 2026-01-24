@@ -19,6 +19,7 @@ import { command as pvcPause } from './commands/pvc_pause';
 import { command as pvcResume } from './commands/pvc_resume';
 import { command as globalVcBlock } from './commands/global_vc_block';
 import { command as wvAllowedRoles } from './commands/wv_allowed_roles';
+import { command as showAccess } from './commands/show_access';
 import { command as deployCommandsCmd } from './commands/deploy_commands';
 import prisma from './utils/database';
 
@@ -42,6 +43,7 @@ const commands = [
     pvcResume.data.toJSON(),
     globalVcBlock.data.toJSON(),
     wvAllowedRoles.data.toJSON(),
+    showAccess.data.toJSON(),
     deployCommandsCmd.data.toJSON(),
 ];
 

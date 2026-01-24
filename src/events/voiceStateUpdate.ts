@@ -232,19 +232,62 @@ async function handleAccessProtection(
     const isTeamChannel = 'teamType' in dbState;
     const strictnessEnabled = isTeamChannel ? teamSettings?.adminStrictness : pvcSettings?.adminStrictness;
 
+    // IMPORTANT: Capacity limits apply to EVERYONE (even admins)
+    // Strictness only applies to lock/hidden states
+    if (isFull) {
+        // Channel is full - kick regardless of admin status
+        const reason = 'at capacity';
+        const channelTypeName = isTeamChannel ? 'team voice channel' : 'voice channel';
+
+        await executeWithRateLimit(
+            `kick:${member.id}`,
+            () => member.voice.disconnect('Channel at capacity'),
+            Priority.IMMEDIATE
+        ).catch(err => {
+            console.error(`[AccessProtection] Failed to kick ${member.id}:`, err);
+        });
+
+        const owner = guild.members.cache.get(ownerId);
+        const ownerName = owner?.displayName || 'the owner';
+        const embed = new EmbedBuilder()
+            .setColor(0xFF6B6B)
+            .setTitle('🚫 Access Denied')
+            .setDescription(
+                `You were removed from **${channel.name}** because the ${channelTypeName} is **${reason}**.\n\n` +
+                `Ask **${ownerName}** to give you access to join.`
+            )
+            .setTimestamp();
+        member.send({ embeds: [embed] }).catch(() => { });
+
+        logAction({
+            action: LogAction.USER_REMOVED,
+            guild: guild,
+            user: member.user,
+            channelName: channel.name,
+            channelId: newChannelId,
+            details: `Unauthorized access attempt blocked (${channelTypeName} is ${reason})`,
+            isTeamChannel: isTeamChannel,
+        }).catch(() => { });
+
+        return true;
+    }
+
+    // For lock/hidden states, check strictness
+    if (!isLocked && !isHidden) return false;
+
     if (!strictnessEnabled) {
-        // Strictness OFF - admins can bypass
+        // Strictness OFF - admins can bypass lock/hidden
         if (hasAdminPerm) return false;
     } else {
-        // Strictness ON - only whitelisted admins can bypass
+        // Strictness ON - only whitelisted admins can bypass lock/hidden
         const isWhitelisted = whitelist.some(
             w => w.targetId === member.id || memberRoleIds.includes(w.targetId)
         );
         if (isWhitelisted && hasAdminPerm) return false;
     }
 
-    const reason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
-    const channelTypeName = 'voice channel'; // Generic name
+    const reason = isLocked ? 'locked' : 'hidden';
+    const channelTypeName = isTeamChannel ? 'team voice channel' : 'voice channel';
 
     // INSTANT KICK - Use IMMEDIATE priority
     await executeWithRateLimit(

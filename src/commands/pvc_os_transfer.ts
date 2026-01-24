@@ -8,15 +8,17 @@ import {
 } from 'discord.js';
 import type { Command } from '../client';
 import { transferChannelOwnership } from '../utils/channelActions';
-import { isChannelOwner, getChannelState } from '../utils/voiceManager';
+import { isChannelOwner, getChannelState, getTeamChannelState } from '../utils/voiceManager';
 import { logAction, LogAction } from '../utils/logger';
+import prisma from '../utils/database';
+import { enforcer } from '../services/enforcerService';
 
 const DEVELOPER_IDS = ['929297205796417597', '1267528540707098779', '1305006992510947328'];
 
 export const command: Command = {
     data: new SlashCommandBuilder()
         .setName('pvc_os_transfer')
-        .setDescription('Force transfer ownership of a PVC (Admin/Dev only)')
+        .setDescription('Force transfer ownership of a PVC or Team VC (Admin/Dev only)')
         .addChannelOption(option =>
             option
                 .setName('vc')
@@ -54,16 +56,22 @@ export const command: Command = {
             return;
         }
 
-        const channelState = getChannelState(targetChannel.id);
-        if (!channelState) {
+        // Check if it's a PVC or Team VC
+        const pvcState = getChannelState(targetChannel.id);
+        const teamState = getTeamChannelState(targetChannel.id);
+        
+        if (!pvcState && !teamState) {
             await interaction.reply({
-                content: '❌ This channel is not a registered Private Voice Channel.',
+                content: '❌ This channel is not a registered Private Voice Channel or Team Voice Channel.',
                 flags: [MessageFlags.Ephemeral],
             });
             return;
         }
 
-        if (channelState.ownerId === newOwnerUser.id) {
+        const currentOwnerId = pvcState?.ownerId || teamState?.ownerId;
+        const isTeam = !!teamState;
+
+        if (currentOwnerId === newOwnerUser.id) {
             await interaction.reply({
                 content: '❌ That user is already the owner of this channel.',
                 flags: [MessageFlags.Ephemeral],
@@ -74,20 +82,44 @@ export const command: Command = {
         await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
         try {
-            await transferChannelOwnership(
-                interaction.guild,
-                targetChannel.id,
-                channelState.ownerId,
-                newOwnerUser.id,
-                guildMember,
-                targetChannel.name || 'Voice Channel'
-            );
+            if (isTeam) {
+                // Transfer Team VC ownership
+                await prisma.teamVoiceChannel.update({
+                    where: { channelId: targetChannel.id },
+                    data: { ownerId: newOwnerUser.id },
+                });
+
+                // Enforce the new ownership permissions
+                await enforcer.enforceQuietly(targetChannel.id);
+
+                // Log the transfer
+                await logAction({
+                    action: LogAction.CHANNEL_CREATED,
+                    guild: interaction.guild,
+                    user: newOwnerUser,
+                    channelName: targetChannel.name,
+                    channelId: targetChannel.id,
+                    details: `Team VC ownership transferred by ${guildMember.displayName}`,
+                    isTeamChannel: true,
+                });
+            } else {
+                // Transfer PVC ownership (existing logic)
+                await transferChannelOwnership(
+                    interaction.guild,
+                    targetChannel.id,
+                    currentOwnerId!,
+                    newOwnerUser.id,
+                    guildMember,
+                    targetChannel.name || 'Voice Channel'
+                );
+            }
 
             await interaction.editReply({
                 content: `✅ Successfully force-transferred **${targetChannel.name}** to **${newOwnerUser.username}**.`,
             });
 
         } catch (error) {
+            console.error('[PvcOsTransfer] Error:', error);
             await interaction.editReply({
                 content: '❌ An error occurred while transferring the channel.',
             });
