@@ -152,9 +152,9 @@ class EnforcerService {
      * Check if a user is authorized to edit a managed channel
      * ONLY returns true for:
      * - Bot itself
-     * - Strictness-whitelisted admins (when strictness is ON)
+     * - Strictness-whitelisted admins (when strictness is ON for that channel type)
      */
-    public async isAuthorizedEditor(guildId: string, userId: string): Promise<boolean> {
+    public async isAuthorizedEditor(guildId: string, userId: string, channelId?: string): Promise<boolean> {
         // Bot itself is always authorized
         if (userId === client.user?.id) {
             return true;
@@ -163,15 +163,38 @@ class EnforcerService {
         const guild = client.guilds.cache.get(guildId);
         if (!guild) return false;
 
+        // Determine if this is a PVC or Team channel
+        let isPvc = false;
+        let isTeam = false;
+        
+        if (channelId) {
+            const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+            const team = await prisma.teamVoiceChannel.findUnique({ where: { channelId } });
+            isPvc = !!pvc;
+            isTeam = !!team;
+        }
+
         // Get settings and whitelist
-        const [settings, whitelist] = await Promise.all([
+        const [pvcSettings, teamSettings, whitelist] = await Promise.all([
             getGuildSettings(guildId),
+            prisma.teamVoiceSettings.findUnique({ where: { guildId } }),
             getWhitelist(guildId),
         ]);
 
+        // Check strictness based on channel type
+        let strictnessEnabled = false;
+        if (isTeam && teamSettings) {
+            strictnessEnabled = teamSettings.adminStrictness;
+        } else if (isPvc && pvcSettings) {
+            strictnessEnabled = pvcSettings.adminStrictness;
+        } else if (pvcSettings) {
+            // Fallback to PVC settings if channel type unknown
+            strictnessEnabled = pvcSettings.adminStrictness;
+        }
+
         // If strictness is OFF, no one except bot is authorized to edit via Discord UI
         // Channel owners must use bot interactions
-        if (!settings?.adminStrictness) {
+        if (!strictnessEnabled) {
             return false;
         }
 
@@ -341,14 +364,30 @@ class EnforcerService {
         const guild = channel.guild;
         
         // Get settings and whitelist for strictness check
-        const [settings, whitelist] = await Promise.all([
+        const [pvcSettings, teamSettings, whitelist] = await Promise.all([
             getGuildSettings(guild.id),
+            prisma.teamVoiceSettings.findUnique({ where: { guildId: guild.id } }),
             getWhitelist(guild.id),
         ]);
 
+        // Determine strictness based on channel type
+        const isTeamChannel = 'teamType' in dbState;
+        const strictnessEnabled = isTeamChannel ? teamSettings?.adminStrictness : pvcSettings?.adminStrictness;
+
         const isLocked = dbState.isLocked;
         const isHidden = dbState.isHidden;
-        const isFull = dbState.userLimit > 0 && channel.members.size > dbState.userLimit;
+        
+        // For Team VCs, use teamType-based limits. For PVCs, use userLimit
+        let isFull = false;
+        if ('teamType' in dbState && dbState.teamType) {
+            // Team VC - use TEAM_USER_LIMITS (imported from voiceManager)
+            const TEAM_USER_LIMITS = { duo: 2, trio: 3, squad: 4 };
+            const teamLimit = TEAM_USER_LIMITS[dbState.teamType as keyof typeof TEAM_USER_LIMITS];
+            isFull = channel.members.size > teamLimit;
+        } else {
+            // PVC - use userLimit from DB
+            isFull = dbState.userLimit > 0 && channel.members.size > dbState.userLimit;
+        }
 
         // Get all global blocks for this guild (batch check)
         const globalBlocks = await prisma.globalVCBlock.findMany({
@@ -407,7 +446,7 @@ class EnforcerService {
             // Check admin/whitelist permissions
             const hasAdminPerm = member.permissions.has('Administrator') || member.permissions.has('ManageChannels');
 
-            if (!settings?.adminStrictness) {
+            if (!strictnessEnabled) {
                 // Strictness OFF - admins can bypass
                 if (hasAdminPerm) continue;
             } else {

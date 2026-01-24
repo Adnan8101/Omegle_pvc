@@ -137,7 +137,7 @@ export async function execute(
 
     // Check if the editor is authorized (whitelisted admin)
     if (editorId) {
-        const isAuthorized = await enforcer.isAuthorizedEditor(guildId, editorId);
+        const isAuthorized = await enforcer.isAuthorizedEditor(guildId, editorId, channelId);
         if (isAuthorized) {
             console.log(`[ChannelUpdate] Authorized editor (whitelisted admin: ${editorId}). Allowing.`);
             return;

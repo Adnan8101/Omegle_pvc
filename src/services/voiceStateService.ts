@@ -2,6 +2,7 @@ import { ChannelType, type VoiceChannel, PermissionFlagsBits } from 'discord.js'
 import prisma from '../utils/database';
 import { enforcer } from './enforcerService';
 import { invalidateChannelPermissions } from '../utils/cache';
+import { client } from '../client';
 
 /**
  * VOICE STATE SERVICE
@@ -53,8 +54,65 @@ export class VoiceStateService {
 
     /**
      * Lock a PVC - DB first, then enforce
+     * When locking, automatically grant temporary access to all current members
      */
     static async setLock(channelId: string, isLocked: boolean): Promise<void> {
+        // If locking, grant temporary access to all current members first
+        if (isLocked) {
+            const channel = client.channels.cache.get(channelId) as VoiceChannel | undefined;
+            if (channel && channel.type === ChannelType.GuildVoice) {
+                // Get all current members (except owner and bots)
+                const state = await this.getVCState(channelId);
+                if (state) {
+                    const ownerId = state.ownerId;
+                    const currentMembers = Array.from(channel.members.values())
+                        .filter(m => !m.user.bot && m.id !== ownerId);
+
+                    // Grant temporary permit to each current member
+                    for (const member of currentMembers) {
+                        // Check if already has explicit permission
+                        const existingPerm = await prisma.voicePermission.findUnique({
+                            where: {
+                                channelId_targetId: {
+                                    channelId,
+                                    targetId: member.id,
+                                },
+                            },
+                        }).catch(() => null);
+
+                        if (!existingPerm) {
+                            // Try PVC first
+                            const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+                            
+                            if (pvc) {
+                                await prisma.voicePermission.create({
+                                    data: {
+                                        channelId,
+                                        targetId: member.id,
+                                        targetType: 'user',
+                                        permission: 'permit',
+                                    },
+                                }).catch(() => {}); // Ignore duplicates
+                            } else {
+                                // Try Team channel
+                                await prisma.teamVoicePermission.create({
+                                    data: {
+                                        channelId,
+                                        targetId: member.id,
+                                        targetType: 'user',
+                                        permission: 'permit',
+                                    },
+                                }).catch(() => {}); // Ignore duplicates
+                            }
+                        }
+                    }
+
+                    // Invalidate cache
+                    invalidateChannelPermissions(channelId);
+                }
+            }
+        }
+
         // Try PVC first
         const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
         

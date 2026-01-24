@@ -122,6 +122,7 @@ model TeamVoiceSettings {
   logsChannelId   String?
   logsWebhookUrl  String?
   commandChannelId String?
+  adminStrictness Boolean  @default(false)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

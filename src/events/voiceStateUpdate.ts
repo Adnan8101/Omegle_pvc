@@ -195,7 +195,17 @@ async function handleAccessProtection(
     // 5. Check lock/hidden/capacity restrictions
     const isLocked = dbState.isLocked;
     const isHidden = dbState.isHidden;
-    const isFull = dbState.userLimit > 0 && channel.members.size > dbState.userLimit;
+    
+    // For Team VCs, use teamType-based limits. For PVCs, use userLimit
+    let isFull = false;
+    if ('teamType' in dbState && dbState.teamType) {
+        // Team VC - use TEAM_USER_LIMITS
+        const teamLimit = TEAM_USER_LIMITS[dbState.teamType as keyof typeof TEAM_USER_LIMITS];
+        isFull = channel.members.size > teamLimit;
+    } else {
+        // PVC - use userLimit from DB
+        isFull = dbState.userLimit > 0 && channel.members.size > dbState.userLimit;
+    }
 
     if (!isLocked && !isHidden && !isFull) return false;
 
@@ -209,22 +219,28 @@ async function handleAccessProtection(
     );
     if (isRolePermitted) return false;
 
-    const [settings, whitelist] = await Promise.all([
+    // Check strictness settings based on channel type
+    const [pvcSettings, teamSettings, whitelist] = await Promise.all([
         getGuildSettings(guild.id),
+        prisma.teamVoiceSettings.findUnique({ where: { guildId: guild.id } }),
         getWhitelist(guild.id),
     ]);
 
     const hasAdminPerm = member.permissions.has('Administrator') || member.permissions.has('ManageChannels');
 
-    if (!settings?.adminStrictness) {
+    // Determine strictness based on channel type
+    const isTeamChannel = 'teamType' in dbState;
+    const strictnessEnabled = isTeamChannel ? teamSettings?.adminStrictness : pvcSettings?.adminStrictness;
 
+    if (!strictnessEnabled) {
+        // Strictness OFF - admins can bypass
         if (hasAdminPerm) return false;
     } else {
-
+        // Strictness ON - only whitelisted admins can bypass
         const isWhitelisted = whitelist.some(
             w => w.targetId === member.id || memberRoleIds.includes(w.targetId)
         );
-        if (isWhitelisted) return false;
+        if (isWhitelisted && hasAdminPerm) return false;
     }
 
     const reason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
