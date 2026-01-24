@@ -255,6 +255,9 @@ async function handleRemoveUserSelect(
 
     const targetIds = Array.from(users.keys());
 
+    // Record bot edit before modifying permissions
+    recordBotEdit(channel.id);
+
     const discordTasks = targetIds.map(id => ({
         route: `perms:${channel.id}:${id}`,
         task: () => channel.permissionOverwrites.delete(id).catch(() => { }),

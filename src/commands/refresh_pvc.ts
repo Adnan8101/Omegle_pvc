@@ -292,6 +292,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                                 data: { ownerId: nextOwner.id },
                             });
 
+                            // Record bot edit BEFORE modifying channel
+                            const { recordBotEdit } = await import('../events/channelUpdate');
+                            recordBotEdit(pvc.channelId);
+
                             const ownerPerms = getOwnerPermissions();
                             await channel.permissionOverwrites.edit(nextOwner.id, {
                                 ViewChannel: true, Connect: true, Speak: true, Stream: true,
@@ -368,6 +372,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                                 where: { channelId: tc.channelId },
                                 data: { ownerId: nextOwner.id },
                             });
+
+                            // Record bot edit BEFORE modifying channel
+                            const { recordBotEdit } = await import('../events/channelUpdate');
+                            recordBotEdit(tc.channelId);
 
                             await channel.permissionOverwrites.edit(nextOwner.id, {
                                 ViewChannel: true, Connect: true, Speak: true, Stream: true,
@@ -472,6 +480,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
 
             try {
                 // 5. Update Discord Overwrites
+                // Record bot edit BEFORE modifying permissions
+                const { recordBotEdit } = await import('../events/channelUpdate');
+                recordBotEdit(pvc.channelId);
+                
                 // Ensure Owner has full access
                 await channel.permissionOverwrites.edit(pvc.ownerId, {
                     ViewChannel: true, Connect: true, Speak: true, Stream: true,
@@ -556,6 +568,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
 
             try {
                 // 5. Discord Overwrites
+                // Record bot edit BEFORE modifying permissions
+                const { recordBotEdit } = await import('../events/channelUpdate');
+                recordBotEdit(tc.channelId);
+                
                 await channel.permissionOverwrites.edit(tc.ownerId, {
                     ViewChannel: true, Connect: true, Speak: true, Stream: true,
                     SendMessages: true, EmbedLinks: true, AttachFiles: true,
