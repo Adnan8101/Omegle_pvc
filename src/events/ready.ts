@@ -3,7 +3,7 @@ import type { PVCClient } from '../client';
 import prisma from '../utils/database';
 import { registerInterfaceChannel, registerChannel, loadAllTeamInterfaces, registerTeamChannel, type TeamType } from '../utils/voiceManager';
 import { setRecordBotEditFn } from '../utils/discordApi';
-import { recordBotEdit, updateChannelSnapshot } from './channelUpdate';
+import { recordBotEdit } from './channelUpdate';
 
 export const name = Events.ClientReady;
 export const once = true;
@@ -32,8 +32,7 @@ export async function execute(client: PVCClient): Promise<void> {
                 const channel = guild.channels.cache.get(pvc.channelId);
                 if (channel && channel.type === ChannelType.GuildVoice) {
                     registerChannel(pvc.channelId, pvc.guildId, pvc.ownerId);
-                    // Create initial snapshot for existing PVC
-                    updateChannelSnapshot(pvc.channelId, channel);
+
                 } else {
                     await prisma.privateVoiceChannel.delete({
                         where: { channelId: pvc.channelId },
@@ -51,15 +50,14 @@ export async function execute(client: PVCClient): Promise<void> {
             const channel = guild.channels.cache.get(tc.channelId);
             if (channel && channel.type === ChannelType.GuildVoice) {
                 registerTeamChannel(tc.channelId, tc.guildId, tc.ownerId, tc.teamType.toLowerCase() as TeamType);
-                // Create initial snapshot for existing team channel
-                updateChannelSnapshot(tc.channelId, channel);
+
             } else {
                 await prisma.teamVoiceChannel.delete({
                     where: { channelId: tc.channelId },
                 }).catch(() => { });
             }
         }
-        
+
         console.log(`[Ready] Bot is ready! Loaded ${guildSettings.length} guild settings and ${teamChannels.length} team channels.`);
     } catch (error) {
         console.error('[Ready] Error loading guild settings:', error);

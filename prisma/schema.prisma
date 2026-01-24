@@ -49,6 +49,14 @@ model PrivateVoiceChannel {
   ownerId     String
   createdAt   DateTime @default(now())
 
+  // -- STATE PERSISTENCE --
+  isLocked         Boolean  @default(false)
+  isHidden         Boolean  @default(false)
+  userLimit        Int      @default(0)
+  bitrate          Int      @default(64000)
+  rtcRegion        String?
+  videoQualityMode Int      @default(1)
+
   guild       GuildSettings @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
   permissions VoicePermission[]
 
@@ -135,6 +143,14 @@ model TeamVoiceChannel {
   ownerId     String
   teamType    TeamType
   createdAt   DateTime @default(now())
+
+  // -- STATE PERSISTENCE --
+  isLocked         Boolean  @default(false)
+  isHidden         Boolean  @default(false)
+  userLimit        Int      @default(0)
+  bitrate          Int      @default(64000)
+  rtcRegion        String?
+  videoQualityMode Int      @default(1)
 
   guild       TeamVoiceSettings @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
   permissions TeamVoicePermission[]

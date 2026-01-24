@@ -16,7 +16,7 @@ import type { Command } from '../client';
 import { generateInterfaceEmbed, generateInterfaceImage, generateVcInterfaceEmbed, createInterfaceComponents, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
 import { canRunAdminCommand, getOwnerPermissions } from '../utils/permissions';
 import { logAction, LogAction } from '../utils/logger';
-import { invalidateGuildSettings, clearAllCaches as invalidateAllCaches, invalidateChannelPermissions } from '../utils/cache';
+import { invalidateGuildSettings, clearAllCaches as invalidateAllCaches, invalidateChannelPermissions, getOwnerPermissions as getPermanentPermissionsAndCache } from '../utils/cache';
 import { clearGuildState, registerInterfaceChannel, registerChannel, registerTeamChannel, registerTeamInterfaceChannel, transferOwnership, transferTeamOwnership, addUserToJoinOrder, type TeamType } from '../utils/voiceManager';
 
 const MAIN_BUTTONS = [
@@ -276,7 +276,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
 
                         try {
                             await channel.delete('Refresh: Empty channel cleanup');
-                            await prisma.privateVoiceChannel.delete({ where: { channelId: pvc.channelId } }).catch(() => {});
+                            await prisma.privateVoiceChannel.delete({ where: { channelId: pvc.channelId } }).catch(() => { });
                             channelsDeleted++;
                         } catch { }
                     } else {
@@ -296,9 +296,9 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                                 ViewChannel: true, Connect: true, Speak: true, Stream: true,
                                 SendMessages: true, EmbedLinks: true, AttachFiles: true,
                                 MuteMembers: true, DeafenMembers: true, ManageChannels: true,
-                            }).catch(() => {});
+                            }).catch(() => { });
 
-                            await channel.setName(nextOwner.displayName).catch(() => {});
+                            await channel.setName(nextOwner.displayName).catch(() => { });
 
                             registerChannel(pvc.channelId, pvc.guildId, nextOwner.id);
 
@@ -353,7 +353,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
 
                         try {
                             await channel.delete('Refresh: Empty team channel cleanup');
-                            await prisma.teamVoiceChannel.delete({ where: { channelId: tc.channelId } }).catch(() => {});
+                            await prisma.teamVoiceChannel.delete({ where: { channelId: tc.channelId } }).catch(() => { });
                             channelsDeleted++;
                         } catch { }
                     } else {
@@ -372,10 +372,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                                 ViewChannel: true, Connect: true, Speak: true, Stream: true,
                                 SendMessages: true, EmbedLinks: true, AttachFiles: true,
                                 MuteMembers: true, DeafenMembers: true, ManageChannels: true,
-                            }).catch(() => {});
+                            }).catch(() => { });
 
                             const teamTypeName = tc.teamType.charAt(0) + tc.teamType.slice(1).toLowerCase();
-                            await channel.setName(`${nextOwner.displayName}'s ${teamTypeName}`).catch(() => {});
+                            await channel.setName(`${nextOwner.displayName}'s ${teamTypeName}`).catch(() => { });
 
                             registerTeamChannel(tc.channelId, tc.guildId, nextOwner.id, tc.teamType.toLowerCase() as 'duo' | 'trio' | 'squad');
 
@@ -434,19 +434,31 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         const channel = guild.channels.cache.get(pvc.channelId);
         if (channel && channel.type === ChannelType.GuildVoice) {
 
+            // 1. Get Permanent Access Users (OwnerPermission)
+            // cache.ts: getOwnerPermissions(guildId, ownerId) returns [{ targetId, targetType, permission: 'permit' }]
+            const permanentPerms = await getPermanentPermissionsAndCache(guild.id, pvc.ownerId);
+            const permanentUserIds = new Set(permanentPerms.map(p => p.targetId));
+
+            // 2. Get Current Members (Temporary Access)
             const currentMemberIds = channel.members
                 .filter(m => m.id !== pvc.ownerId && !m.user.bot)
                 .map(m => m.id);
 
+            // 3. Combine: Active Members + Permanent Access = The Allowed List
+            const allAllowedIds = new Set([...permanentUserIds, ...currentMemberIds]);
+
+            // 4. Update Database (VoicePermission)
+            // Wipe old permissions for this channel
             await prisma.voicePermission.deleteMany({
                 where: { channelId: pvc.channelId, permission: 'permit' },
             });
 
             invalidateChannelPermissions(pvc.channelId);
 
-            if (currentMemberIds.length > 0) {
+            // Insert new permissions (both permanent AND active temps)
+            if (allAllowedIds.size > 0) {
                 await prisma.voicePermission.createMany({
-                    data: currentMemberIds.map(userId => ({
+                    data: Array.from(allAllowedIds).map(userId => ({
                         channelId: pvc.channelId,
                         targetId: userId,
                         targetType: 'user',
@@ -454,23 +466,47 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     })),
                     skipDuplicates: true,
                 }).catch(() => { });
-                permsSynced += currentMemberIds.length;
+                permsSynced += allAllowedIds.size;
             }
 
             try {
-
+                // 5. Update Discord Overwrites
+                // Ensure Owner has full access
                 await channel.permissionOverwrites.edit(pvc.ownerId, {
                     ViewChannel: true, Connect: true, Speak: true, Stream: true,
                     SendMessages: true, EmbedLinks: true, AttachFiles: true,
                     MuteMembers: true, DeafenMembers: true, ManageChannels: true,
                 });
 
-                for (const memberId of currentMemberIds) {
+                // Grant access to Active + Permanent users
+                for (const memberId of allAllowedIds) {
                     await channel.permissionOverwrites.edit(memberId, {
                         ViewChannel: true, Connect: true,
                         SendMessages: true, EmbedLinks: true, AttachFiles: true,
                     });
                 }
+
+                // 6. Cleanup Ghost Permissions
+                // Remove overwrites for users who are NEITHER in the channel NOR on the permanent list
+                // (And excluding bots/owner)
+                const existingOverwrites = channel.permissionOverwrites.cache;
+                for (const [targetId, overwrite] of existingOverwrites) {
+                    const member = guild.members.cache.get(targetId);
+                    const isBot = member?.user.bot ?? false; // Best effort check if member cached
+                    // If member not cached, we check if it's the owner or in our allowed list
+                    if (targetId === pvc.ownerId || allAllowedIds.has(targetId) || isBot || targetId === guild.id) {
+                        continue;
+                    }
+
+                    // If it's a role, skip (unless handled later, but usually VoicePermission handles users)
+                    if (overwrite.type === 0 && !allAllowedIds.has(targetId)) { // Type 0 = Role? No, Type 1 = Member? Discord JS types...
+                        // Overwrite types: 0 = Role, 1 = Member. We mainly care about Member overwrites here.
+                        if (overwrite.type === 1) { // 1 is Member
+                            await channel.permissionOverwrites.delete(targetId).catch(() => { });
+                        }
+                    }
+                }
+
             } catch { }
         }
     }
@@ -479,19 +515,32 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         const channel = guild.channels.cache.get(tc.channelId);
         if (channel && channel.type === ChannelType.GuildVoice) {
 
+            // 1. Get Permanent Access (Though Team channels might not use OwnerPermission strictly, 
+            // the user might expect it if they own the team channel. 
+            // Current code does NOT use OwnerPermission for Teams usually?
+            // "teamData = !pvcData ? await prisma.teamVoiceChannel..." in permanent_access.ts suggests it DOES.
+            // So we fetch permanent perms for the team owner too.
+            const permanentPerms = await getPermanentPermissionsAndCache(guild.id, tc.ownerId);
+            const permanentUserIds = new Set(permanentPerms.map(p => p.targetId));
+
+            // 2. Current Members
             const currentMemberIds = channel.members
                 .filter(m => m.id !== tc.ownerId && !m.user.bot)
                 .map(m => m.id);
 
+            // 3. Allow List
+            const allAllowedIds = new Set([...permanentUserIds, ...currentMemberIds]);
+
+            // 4. Update DB
             await prisma.teamVoicePermission.deleteMany({
                 where: { channelId: tc.channelId, permission: 'permit' },
             });
 
             invalidateChannelPermissions(tc.channelId);
 
-            if (currentMemberIds.length > 0) {
+            if (allAllowedIds.size > 0) {
                 await prisma.teamVoicePermission.createMany({
-                    data: currentMemberIds.map(userId => ({
+                    data: Array.from(allAllowedIds).map(userId => ({
                         channelId: tc.channelId,
                         targetId: userId,
                         targetType: 'user',
@@ -499,22 +548,37 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     })),
                     skipDuplicates: true,
                 }).catch(() => { });
-                teamPermsSynced += currentMemberIds.length;
+                teamPermsSynced += allAllowedIds.size;
             }
 
             try {
-
+                // 5. Discord Overwrites
                 await channel.permissionOverwrites.edit(tc.ownerId, {
                     ViewChannel: true, Connect: true, Speak: true, Stream: true,
                     SendMessages: true, EmbedLinks: true, AttachFiles: true,
                     MuteMembers: true, DeafenMembers: true, ManageChannels: true,
                 });
 
-                for (const memberId of currentMemberIds) {
+                for (const memberId of allAllowedIds) {
                     await channel.permissionOverwrites.edit(memberId, {
                         ViewChannel: true, Connect: true,
                         SendMessages: true, EmbedLinks: true, AttachFiles: true,
                     });
+                }
+
+                // 6. Cleanup Ghosts
+                const existingOverwrites = channel.permissionOverwrites.cache;
+                for (const [targetId, overwrite] of existingOverwrites) {
+                    const member = guild.members.cache.get(targetId);
+                    const isBot = member?.user.bot ?? false;
+
+                    if (targetId === tc.ownerId || allAllowedIds.has(targetId) || isBot || targetId === guild.id) {
+                        continue;
+                    }
+
+                    if (overwrite.type === 1) { // Member
+                        await channel.permissionOverwrites.delete(targetId).catch(() => { });
+                    }
                 }
             } catch { }
         }
@@ -558,7 +622,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                             files: [attachment],
                             components,
                         });
-                        await newMsg.pin().catch(() => {});
+                        await newMsg.pin().catch(() => { });
                         interfacesUpdated++;
 
                     } catch (sendErr) {
@@ -612,7 +676,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                             files: [attachment],
                             components,
                         });
-                        await newMsg.pin().catch(() => {});
+                        await newMsg.pin().catch(() => { });
                         interfacesUpdated++;
 
                     } catch (sendErr) {
@@ -717,7 +781,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         guild: guild,
         user: interaction.user,
         details: `System refreshed - Ownership transfers: ${ownershipTransfers}, Deleted: ${channelsDeleted}${pvcLogsChannel ? `, PVC logs: ${pvcLogsChannel}` : ''}${teamLogsChannel ? `, Team logs: ${teamLogsChannel}` : ''}${commandChannel ? `, PVC commands: ${commandChannel}` : ''}${teamCommandChannel ? `, Team commands: ${teamCommandChannel}` : ''}`,
-    }).catch(() => {});
+    }).catch(() => { });
 
     let response = '✅ **PVC & Team System Refreshed**\n\n';
     response += '**State Reloaded:**\n';

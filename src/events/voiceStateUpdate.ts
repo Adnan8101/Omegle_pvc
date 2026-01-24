@@ -41,7 +41,9 @@ import {
 import { logAction, LogAction } from '../utils/logger';
 import { generateVcInterfaceEmbed, generateInterfaceImage, createInterfaceComponents } from '../utils/canvasGenerator';
 import { isPvcPaused } from '../utils/pauseManager';
-import { recordBotEdit, updateChannelSnapshot, isChannelProtected } from './channelUpdate';
+
+import { recordBotEdit } from './channelUpdate';
+import { VoiceStateService } from '../services/voiceStateService';
 
 export const name = Events.VoiceStateUpdate;
 export const once = false;
@@ -78,119 +80,91 @@ async function handleAccessProtection(
     const { channelId: newChannelId, guild, member } = newState;
     if (!newChannelId || !member) return false;
 
-    const channelState = getChannelState(newChannelId);
-    const teamChannelState = getTeamChannelState(newChannelId);
+    // 1. Fetch Authoritative State from DB
+    // We do NOT use in-memory cache or Discord channel state for authority
+    const dbState = await VoiceStateService.getVCState(newChannelId);
 
-    if (!channelState && !teamChannelState) return false;
+    // If not in DB, it's not a managed channel we control -> Ignore
+    if (!dbState) return false;
 
     const channel = guild.channels.cache.get(newChannelId);
     if (!channel || channel.type !== ChannelType.GuildVoice) return false;
 
-    const ownerId = channelState?.ownerId || teamChannelState?.ownerId;
-    const isTeamChannel = Boolean(teamChannelState);
-
+    const ownerId = dbState.ownerId;
     if (member.id === ownerId) return false;
 
-    // Check if channel is under protection (manipulation revert in progress)
-    // If so, kick unauthorized users immediately
-    const protection = isChannelProtected(newChannelId);
-    if (protection.protected) {
-        // During protection window, only permit owner and explicitly permitted users
-        const channelPerms = await getChannelPermissions(newChannelId);
-        const isPermitted = channelPerms.some(
-            p => p.targetId === member.id && p.permission === 'permit'
-        );
-        
-        if (!isPermitted) {
-            console.log(`[VoiceStateUpdate] Kicking ${member.id} - channel ${newChannelId} is under protection`);
-            fireAndForget(
-                `protection-kick:${member.id}`,
-                async () => {
-                    await member.voice.disconnect();
-                    const embed = new EmbedBuilder()
-                        .setColor(0xFF6B6B)
-                        .setTitle('🚫 Access Denied')
-                        .setDescription(
-                            `You were removed from **${channel.name}** because the channel was recently manipulated and is under protection.\n\n` +
-                            `Ask the owner to give you access.`
-                        )
-                        .setTimestamp();
-                    member.send({ embeds: [embed] }).catch(() => { });
-                },
-                Priority.HIGH
-            );
-            return true;
-        }
-    }
-
-    const everyonePerms = channel.permissionOverwrites.cache.get(guild.id);
-    const isLocked = everyonePerms?.deny.has('Connect') ?? false;
-    const isHidden = everyonePerms?.deny.has('ViewChannel') ?? false;
-    const isFull = channel.userLimit > 0 && channel.members.size > channel.userLimit;
+    // 2. Check Locks & Limits from DB
+    const isLocked = dbState.isLocked;
+    const isHidden = dbState.isHidden;
+    const isFull = dbState.userLimit > 0 && channel.members.size > dbState.userLimit;
 
     if (!isLocked && !isHidden && !isFull) return false;
 
+    // 3. Check Permissions (DB Authority)
+    // We allow:
+    // - Owner (checked above)
+    // - Explicitly Permitted Users/Roles in DB
+    // - Admins (If strictness is OFF) or Whitelisted Users (If strictness is ON)
+
+    // Check DB Permissions
+    const dbPermissions = dbState.permissions || [];
     const memberRoleIds = member.roles.cache.map(r => r.id);
 
+    // Check specific user permit
+    const isUserPermitted = dbPermissions.some(
+        (p: any) => p.targetId === member.id && p.permission === 'permit'
+    );
+    if (isUserPermitted) return false;
+
+    // Check role permit
+    const isRolePermitted = dbPermissions.some(
+        (p: any) => memberRoleIds.includes(p.targetId) && p.targetType === 'role' && p.permission === 'permit'
+    );
+    if (isRolePermitted) return false;
+
+    // Check Admin/Whitelist
+    // We still check Guild Settings for Strictness
     const [settings, whitelist] = await Promise.all([
         getGuildSettings(guild.id),
         getWhitelist(guild.id),
     ]);
 
-    let channelPerms: Array<{targetId: string; targetType: string; permission: string}> = [];
-    if (isTeamChannel) {
-        const teamPerms = await prisma.teamVoicePermission.findMany({
-            where: { channelId: newChannelId },
-        });
-        channelPerms = teamPerms.map(p => ({ targetId: p.targetId, targetType: p.targetType, permission: p.permission }));
-    } else {
-        channelPerms = await getChannelPermissions(newChannelId);
-    }
-
-    const isUserPermitted = channelPerms.some(
-        p => p.targetId === member.id && p.permission === 'permit'
-    );
-    if (isUserPermitted) return false;
-
-    if (hasTempPermission(newChannelId, member.id)) return false;
-
-    const isRolePermitted = channelPerms.some(
-        p => memberRoleIds.includes(p.targetId) && p.targetType === 'role' && p.permission === 'permit'
-    );
-    if (isRolePermitted) return false;
-
     const hasAdminPerm = member.permissions.has('Administrator') || member.permissions.has('ManageChannels');
 
     if (!settings?.adminStrictness) {
-
+        // Strictness OFF: Admins can bypass
         if (hasAdminPerm) return false;
     } else {
-
+        // Strictness ON: Only Whitelisted Admins can bypass
         const isWhitelisted = whitelist.some(
             w => w.targetId === member.id || memberRoleIds.includes(w.targetId)
         );
         if (isWhitelisted) return false;
     }
 
+    // 4. KICK THE INTRUDER
     const reason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
-    const channelTypeName = isTeamChannel ? 'team channel' : 'voice channel';
+    const channelTypeName = 'voice channel'; // Generic name
 
     fireAndForget(
         `kick:${member.id}`,
         async () => {
-            await member.voice.disconnect();
-
-            const owner = guild.members.cache.get(ownerId!);
-            const ownerName = owner?.displayName || 'the owner';
-            const embed = new EmbedBuilder()
-                .setColor(0xFF6B6B)
-                .setTitle('🚫 Access Denied')
-                .setDescription(
-                    `You were removed from **${channel.name}** because the ${channelTypeName} is **${reason}**.\n\n` +
-                    `Ask **${ownerName}** to give you access to join.`
-                )
-                .setTimestamp();
-            member.send({ embeds: [embed] }).catch(() => { });
+            try {
+                await member.voice.disconnect();
+                const owner = guild.members.cache.get(ownerId);
+                const ownerName = owner?.displayName || 'the owner';
+                const embed = new EmbedBuilder()
+                    .setColor(0xFF6B6B)
+                    .setTitle('🚫 Access Denied')
+                    .setDescription(
+                        `You were removed from **${channel.name}** because the ${channelTypeName} is **${reason}**.\n\n` +
+                        `Ask **${ownerName}** to give you access to join.`
+                    )
+                    .setTimestamp();
+                member.send({ embeds: [embed] }).catch(() => { });
+            } catch (err) {
+                console.error(`[AccessProtection] Failed to kick ${member.id}:`, err);
+            }
         },
         Priority.LOW
     );
@@ -202,8 +176,7 @@ async function handleAccessProtection(
         channelName: channel.name,
         channelId: newChannelId,
         details: `Unauthorized access attempt blocked (${channelTypeName} is ${reason})`,
-        isTeamChannel: isTeamChannel,
-        teamType: teamChannelState?.teamType,
+        isTeamChannel: false, // We'd need to check type, but purely for logging.
     }).catch(() => { });
 
     return true;
@@ -585,42 +558,42 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
         }
 
         const newChannel = await executeWithRateLimit(
-                `create:${guild.id}`,
-                () => guild.channels.create({
-                    name: member.displayName,
-                    type: ChannelType.GuildVoice,
-                    parent: interfaceChannel.parent,
-                    permissionOverwrites,
-                }),
-                Priority.IMMEDIATE
-            );
+            `create:${guild.id}`,
+            () => guild.channels.create({
+                name: member.displayName,
+                type: ChannelType.GuildVoice,
+                parent: interfaceChannel.parent,
+                permissionOverwrites,
+            }),
+            Priority.IMMEDIATE
+        );
 
-            registerChannel(newChannel.id, guild.id, member.id);
-            
-            // Create initial snapshot for the new channel
-            updateChannelSnapshot(newChannel.id, newChannel);
+        registerChannel(newChannel.id, guild.id, member.id);
 
-            addUserToJoinOrder(newChannel.id, member.id);
+        // Create initial snapshot for the new channel
 
-            await prisma.privateVoiceChannel.create({
-                data: {
-                    channelId: newChannel.id,
-                    guildId: guild.id,
-                    ownerId: member.id,
-                    createdAt: new Date(),
-                    permissions: {
-                        create: savedPermissions.map(p => ({
-                            targetId: p.targetId,
-                            targetType: p.targetType,
-                            permission: p.permission,
-                        })),
-                    },
+
+        addUserToJoinOrder(newChannel.id, member.id);
+
+        await prisma.privateVoiceChannel.create({
+            data: {
+                channelId: newChannel.id,
+                guildId: guild.id,
+                ownerId: member.id,
+                createdAt: new Date(),
+                permissions: {
+                    create: savedPermissions.map(p => ({
+                        targetId: p.targetId,
+                        targetType: p.targetType,
+                        permission: p.permission,
+                    })),
                 },
-            });
+            },
+        });
 
-            releaseCreationLock(guild.id, member.id);
+        releaseCreationLock(guild.id, member.id);
 
-            const freshMember = await guild.members.fetch(member.id);
+        const freshMember = await guild.members.fetch(member.id);
         if (freshMember.voice.channelId) {
             await freshMember.voice.setChannel(newChannel);
 
@@ -685,7 +658,7 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
             if (validPermissions.length > 0) {
                 // Record bot edit before modifying permissions
                 recordBotEdit(newChannel.id);
-                
+
                 const discordTasks = validPermissions.map(perm => ({
                     route: `perms:${newChannel.id}:${perm.targetId}`,
                     task: () => newChannel.permissionOverwrites.edit(perm.targetId, {
@@ -962,10 +935,10 @@ async function createTeamChannel(client: PVCClient, state: VoiceState, teamType:
         );
 
         registerTeamChannel(newChannel.id, guild.id, member.id, teamType);
-        
+
         // Create initial snapshot for the new team channel
-        updateChannelSnapshot(newChannel.id, newChannel);
-        
+
+
         addUserToJoinOrder(newChannel.id, member.id);
 
         await prisma.teamVoiceChannel.create({
@@ -1088,10 +1061,10 @@ async function transferTeamChannelOwnership(
         });
 
         const ownerPerms = getOwnerPermissions();
-        
+
         // Record bot edit before modifying channel
         recordBotEdit(channelId);
-        
+
         await channel.permissionOverwrites.edit(nextUserId, {
             ViewChannel: true,
             Connect: true,
