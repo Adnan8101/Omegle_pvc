@@ -191,31 +191,30 @@ async function handleShow(interaction: ChatInputCommandInteraction): Promise<voi
     });
 
     if (blocks.length === 0) {
-        await interaction.reply({ content: '✅ No users are currently globally blocked.', flags: [MessageFlags.Ephemeral] });
+        await interaction.reply({ content: '✅ No users are currently globally blocked.' });
         return;
+    }
+
+    // Build description with user mentions to ping them
+    let description = `**Total:** ${blocks.length} user${blocks.length !== 1 ? 's' : ''}\n\n`;
+    
+    for (const block of blocks.slice(0, 25)) { // Discord limit: 25 fields
+        const reason = block.reason || 'No reason provided';
+        const timestamp = `<t:${Math.floor(block.createdAt.getTime() / 1000)}:R>`;
+        description += `<@${block.userId}>\n• **Reason:** ${reason}\n• **Blocked:** ${timestamp}\n• **By:** <@${block.blockedBy}>\n\n`;
+    }
+
+    if (blocks.length > 25) {
+        description += `\n*Showing 25 of ${blocks.length} blocked users*`;
     }
 
     const embed = new EmbedBuilder()
         .setColor(0xff0000)
         .setTitle('🚫 Globally Blocked Users')
-        .setDescription(`**Total:** ${blocks.length} user${blocks.length !== 1 ? 's' : ''}`)
+        .setDescription(description)
         .setTimestamp();
 
-    for (const block of blocks.slice(0, 25)) { // Discord limit: 25 fields
-        const reason = block.reason || 'No reason provided';
-        const timestamp = `<t:${Math.floor(block.createdAt.getTime() / 1000)}:R>`;
-        embed.addFields({
-            name: `User: <@${block.userId}>`,
-            value: `• **Reason:** ${reason}\n• **Blocked:** ${timestamp}\n• **By:** <@${block.blockedBy}>`,
-            inline: false,
-        });
-    }
-
-    if (blocks.length > 25) {
-        embed.setFooter({ text: `Showing 25 of ${blocks.length} blocked users` });
-    }
-
-    await interaction.reply({ embeds: [embed], flags: [MessageFlags.Ephemeral] });
+    await interaction.reply({ embeds: [embed] });
 }
 
 export const command: Command = { data: data as any, execute };
