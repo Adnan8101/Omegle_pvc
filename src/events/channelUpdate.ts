@@ -12,7 +12,7 @@ export const once = false;
  */
 export const recentBotEdits = new Map<string, number>();
 
-const BOT_EDIT_TTL = 15000; // 15 seconds - longer to account for API delays
+const BOT_EDIT_TTL = 60000; // 60 seconds - match enforcement cooldown to prevent self-punishment
 
 /**
  * Record that the bot is about to make an edit.

@@ -29,7 +29,7 @@ class EnforcerService {
     // Track recently enforced channels to prevent notification spam
     // Key: channelId, Value: timestamp of last enforcement
     private recentlyEnforced = new Map<string, number>();
-    private ENFORCEMENT_COOLDOWN = 30000; // 30 seconds cooldown for notifications
+    private ENFORCEMENT_COOLDOWN = 60000; // 60 seconds cooldown for notifications (prevent self-punishment)
 
     // Rate limit retry queue - channels that need enforcement after rate limit clears
     private retryQueue = new Map<string, { notify: boolean; retryAt: number }>();
@@ -491,22 +491,12 @@ class EnforcerService {
             await logAction({
                 action: LogAction.UNAUTHORIZED_CHANGE_REVERTED,
                 guild: channel.guild,
-                user: client.user!,
                 channelName: channel.name,
                 channelId: channel.id,
                 details: `Manipulation detected and reverted back to original`,
                 isTeamChannel,
                 teamType: dbState.teamType
             });
-
-            // Send warning to channel
-            const embed = new EmbedBuilder()
-                .setColor(0xFF0000)
-                .setTitle('⚠️ Manipulation Detected')
-                .setDescription('Unauthorized change has been reverted back to original.')
-                .setTimestamp();
-
-            await channel.send({ embeds: [embed] }).catch(() => {});
         } catch (err) {
             console.error('[Enforcer] Notification failed:', err);
         }
