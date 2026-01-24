@@ -45,7 +45,9 @@ export async function execute(client: PVCClient, message: Message): Promise<void
 
     const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: message.author.id } });
 
-    if (isPvcOwner && (message.content.startsWith('!au ') || message.content.startsWith('!ru '))) {
+    // SECURITY: Validate PVC owner has actual permissions in this guild
+    const isGuildMember = message.guild.members.cache.has(message.author.id);
+    if (isPvcOwner && isGuildMember && (message.content.startsWith('!au ') || message.content.startsWith('!ru '))) {
         const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
         const commandName = args.shift()?.toLowerCase();
 
@@ -137,6 +139,7 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
     const guild = message.guild!;
 
     const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: message.author.id } });
+    const isBotOwner = message.author.id === BOT_OWNER_ID;
 
     let userIdsToAdd: string[] = [];
     let argsStartIndex = 0;
@@ -147,9 +150,21 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
         const targetChannel = guild.channels.cache.get(firstArg);
 
         if (targetChannel && targetChannel.type === ChannelType.GuildVoice) {
-            channelId = firstArg;
-            argsStartIndex = 1;
-            isSecretCommand = true;
+            // SECURITY: Only BOT_OWNER can control other channels, PVC owners can only control their own
+            const targetChannelData = await prisma.privateVoiceChannel.findUnique({ where: { channelId: firstArg } })
+                || await prisma.teamVoiceChannel.findUnique({ where: { channelId: firstArg } });
+            
+            if (targetChannelData && (targetChannelData.ownerId === message.author.id || isBotOwner)) {
+                channelId = firstArg;
+                argsStartIndex = 1;
+                isSecretCommand = true;
+            } else if (targetChannelData) {
+                const embed = new EmbedBuilder()
+                    .setDescription('❌ **Security Violation**: You can only control your own channels.')
+                    .setColor(0xFF0000);
+                await message.reply({ embeds: [embed] }).catch(() => { });
+                return;
+            }
         } else if (/^\d{17,19}$/.test(firstArg) && !targetChannel) {
             if (!channelId) {
                 channelId = getChannelByOwner(guild.id, message.author.id);
@@ -182,6 +197,15 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
     const teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
     const isTeamChannel = Boolean(teamData);
     const channelOwnerId = pvcData?.ownerId || teamData?.ownerId;
+
+    // SECURITY: Verify user actually owns this channel or is BOT_OWNER
+    if (channelOwnerId !== message.author.id && message.author.id !== BOT_OWNER_ID) {
+        const embed = new EmbedBuilder()
+            .setDescription('❌ **Access Denied**: You do not own this channel.')
+            .setColor(0xFF0000);
+        await message.reply({ embeds: [embed] }).catch(() => { });
+        return;
+    }
 
     const mentionedUsers = message.mentions.users;
     userIdsToAdd.push(...mentionedUsers.keys());
@@ -307,6 +331,7 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
     const guild = message.guild!;
 
     const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: message.author.id } });
+    const isBotOwner = message.author.id === BOT_OWNER_ID;
 
     let userIdsToRemove: string[] = [];
     let argsStartIndex = 0;
@@ -317,9 +342,21 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
         const targetChannel = guild.channels.cache.get(firstArg);
 
         if (targetChannel && targetChannel.type === ChannelType.GuildVoice) {
-            channelId = firstArg;
-            argsStartIndex = 1;
-            isSecretCommand = true;
+            // SECURITY: Only BOT_OWNER can control other channels, PVC owners can only control their own
+            const targetChannelData = await prisma.privateVoiceChannel.findUnique({ where: { channelId: firstArg } })
+                || await prisma.teamVoiceChannel.findUnique({ where: { channelId: firstArg } });
+            
+            if (targetChannelData && (targetChannelData.ownerId === message.author.id || isBotOwner)) {
+                channelId = firstArg;
+                argsStartIndex = 1;
+                isSecretCommand = true;
+            } else if (targetChannelData) {
+                const embed = new EmbedBuilder()
+                    .setDescription('❌ **Security Violation**: You can only control your own channels.')
+                    .setColor(0xFF0000);
+                await message.reply({ embeds: [embed] }).catch(() => { });
+                return;
+            }
         } else if (/^\d{17,19}$/.test(firstArg) && !targetChannel) {
             if (!channelId) {
                 channelId = getChannelByOwner(guild.id, message.author.id);
@@ -352,6 +389,15 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
     const teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
     const isTeamChannel = Boolean(teamData);
     const channelOwnerId = pvcData?.ownerId || teamData?.ownerId;
+
+    // SECURITY: Verify user actually owns this channel or is BOT_OWNER
+    if (channelOwnerId !== message.author.id && message.author.id !== BOT_OWNER_ID) {
+        const embed = new EmbedBuilder()
+            .setDescription('❌ **Access Denied**: You do not own this channel.')
+            .setColor(0xFF0000);
+        await message.reply({ embeds: [embed] }).catch(() => { });
+        return;
+    }
 
     const mentionedUsers = message.mentions.users;
     userIdsToRemove.push(...mentionedUsers.keys());

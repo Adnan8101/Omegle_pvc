@@ -2,6 +2,7 @@ import { ChannelType, type VoiceChannel, PermissionFlagsBits, OverwriteType, Per
 import { client } from '../client'; // Assuming client export
 import prisma from '../utils/database';
 import { Priority, executeWithRateLimit } from '../utils/rateLimit';
+import { recordBotEdit } from '../events/channelUpdate';
 
 class EnforcerService {
     private debounces = new Map<string, NodeJS.Timeout>();
@@ -51,7 +52,13 @@ class EnforcerService {
 
             // 2. Fetch Discord Channel (The Reality)
             const channel = client.channels.cache.get(channelId) as VoiceChannel;
-            if (!channel || channel.type !== ChannelType.GuildVoice) return;
+            if (!channel || channel.type !== ChannelType.GuildVoice) {
+                console.log(`[Enforcer] Channel ${channelId} not found or not a voice channel. Cleaning up DB...`);
+                // Clean up DB since channel doesn't exist
+                await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => {});
+                await prisma.teamVoiceChannel.delete({ where: { channelId } }).catch(() => {});
+                return;
+            }
 
             // 3. Construct the "Perfect" Payload
             const options: any = {
@@ -148,6 +155,9 @@ class EnforcerService {
             console.log(`[Enforcer] Enforcing state on ${channelId}. Detected changes: ${changes.join(', ') || 'Permissions/Other'}`);
 
             if (needsUpdate) {
+                // Record this as a bot edit BEFORE making changes to prevent self-punishment
+                recordBotEdit(channelId);
+                
                 await executeWithRateLimit(
                     `enforce:${channelId}`,
                     () => channel.edit(options),

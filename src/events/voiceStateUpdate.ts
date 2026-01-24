@@ -80,6 +80,15 @@ async function handleAccessProtection(
     const { channelId: newChannelId, guild, member } = newState;
     if (!newChannelId || !member) return false;
 
+    // SECURITY: Block all bots except whitelisted ones
+    if (member.user.bot && !WHITELISTED_BOT_IDS.has(member.user.id)) {
+        // Kick unauthorized bots
+        try {
+            await member.voice.disconnect();
+        } catch { }
+        return true;
+    }
+
     // 1. Fetch Authoritative State from DB
     // We do NOT use in-memory cache or Discord channel state for authority
     const dbState = await VoiceStateService.getVCState(newChannelId);
@@ -122,8 +131,7 @@ async function handleAccessProtection(
     );
     if (isRolePermitted) return false;
 
-    // Check Admin/Whitelist
-    // We still check Guild Settings for Strictness
+    // Check Admin/Whitelist for BOTH PVC and Team channels
     const [settings, whitelist] = await Promise.all([
         getGuildSettings(guild.id),
         getWhitelist(guild.id),
@@ -131,7 +139,14 @@ async function handleAccessProtection(
 
     const hasAdminPerm = member.permissions.has('Administrator') || member.permissions.has('ManageChannels');
 
-    if (!settings?.adminStrictness) {
+    // For team channels, check team-specific strictness settings too
+    const teamSettings = dbState.teamType ? await prisma.teamVoiceSettings.findUnique({
+        where: { guildId: guild.id }
+    }) : null;
+    
+    const strictnessEnabled = settings?.adminStrictness || teamSettings?.adminStrictness;
+
+    if (!strictnessEnabled) {
         // Strictness OFF: Admins can bypass
         if (hasAdminPerm) return false;
     } else {
@@ -489,7 +504,9 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                         if (freshMember.voice.channelId) {
                             await freshMember.voice.setChannel(channel);
                         }
-                    } catch { }
+                    } catch (err) {
+                        console.error('[VoiceStateUpdate] Failed to move member to existing channel:', err);
+                    }
                     releaseCreationLock(guild.id, member.id);
                     return;
                 } else {

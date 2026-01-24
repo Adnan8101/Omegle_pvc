@@ -286,7 +286,7 @@ async function handleRemoveUserSelect(
         );
     }
 
-    invalidateWhitelist(channel.id);
+    invalidateWhitelist(interaction.guild!.id);
 
     await logAction({
         action: LogAction.USER_REMOVED,

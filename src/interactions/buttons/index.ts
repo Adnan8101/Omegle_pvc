@@ -660,6 +660,7 @@ async function handleClaim(
     const newOwner = await guild.members.fetch(userId);
 
     // Record bot edit before modifying channel
+    // Record bot edit before modifying channel
     recordBotEdit(voiceChannelId);
     
     await executeWithRateLimit(`perms:${voiceChannelId}`, async () => {
