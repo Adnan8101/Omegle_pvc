@@ -199,9 +199,9 @@ async function handleAccessProtection(
     // For Team VCs, use teamType-based limits. For PVCs, use userLimit
     let isFull = false;
     if ('teamType' in dbState && dbState.teamType) {
-        // Team VC - use TEAM_USER_LIMITS
+        // Team VC - use TEAM_USER_LIMITS (exact capacity, use >=)
         const teamLimit = TEAM_USER_LIMITS[dbState.teamType as keyof typeof TEAM_USER_LIMITS];
-        isFull = channel.members.size > teamLimit;
+        isFull = channel.members.size >= teamLimit;
     } else {
         // PVC - use userLimit from DB
         isFull = dbState.userLimit > 0 && channel.members.size > dbState.userLimit;

@@ -39,11 +39,14 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
     try {
-        // Get all PVC permissions
+        // Get all PVC permissions (filter by guild after fetching)
         const pvcPermissions = await prisma.voicePermission.findMany({
             where: {
                 targetId: targetUser.id,
                 targetType: 'user',
+                channel: {
+                    guildId: interaction.guild.id,
+                },
             },
             include: {
                 channel: {
@@ -55,11 +58,14 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             },
         });
 
-        // Get all Team VC permissions
+        // Get all Team VC permissions (filter by guild after fetching)
         const teamPermissions = await prisma.teamVoicePermission.findMany({
             where: {
                 targetId: targetUser.id,
                 targetType: 'user',
+                channel: {
+                    guildId: interaction.guild.id,
+                },
             },
             include: {
                 channel: {

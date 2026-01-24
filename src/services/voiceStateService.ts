@@ -70,21 +70,22 @@ export class VoiceStateService {
 
                     // Grant temporary permit to each current member
                     for (const member of currentMembers) {
-                        // Check if already has explicit permission
-                        const existingPerm = await prisma.voicePermission.findUnique({
-                            where: {
-                                channelId_targetId: {
-                                    channelId,
-                                    targetId: member.id,
+                        // Try PVC first
+                        const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+                        
+                        if (pvc) {
+                            // Check if already has explicit permission (including ban)
+                            const existingPerm = await prisma.voicePermission.findUnique({
+                                where: {
+                                    channelId_targetId: {
+                                        channelId,
+                                        targetId: member.id,
+                                    },
                                 },
-                            },
-                        }).catch(() => null);
+                            }).catch(() => null);
 
-                        if (!existingPerm) {
-                            // Try PVC first
-                            const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
-                            
-                            if (pvc) {
+                            // Only grant if no existing permission (and definitely not if banned)
+                            if (!existingPerm) {
                                 await prisma.voicePermission.create({
                                     data: {
                                         channelId,
@@ -93,8 +94,20 @@ export class VoiceStateService {
                                         permission: 'permit',
                                     },
                                 }).catch(() => {}); // Ignore duplicates
-                            } else {
-                                // Try Team channel
+                            }
+                        } else {
+                            // Try Team channel
+                            const existingPerm = await prisma.teamVoicePermission.findUnique({
+                                where: {
+                                    channelId_targetId: {
+                                        channelId,
+                                        targetId: member.id,
+                                    },
+                                },
+                            }).catch(() => null);
+
+                            // Only grant if no existing permission (and definitely not if banned)
+                            if (!existingPerm) {
                                 await prisma.teamVoicePermission.create({
                                     data: {
                                         channelId,
