@@ -494,7 +494,7 @@ class EnforcerService {
                 user: client.user!,
                 channelName: channel.name,
                 channelId: channel.id,
-                details: `**Auto-Correction Triggered**\n\nUnauthorized channel modification detected and reverted.\n**Action:** Instantly restored DB state.\n\n*Only the channel owner (via bot interface) or whitelisted admins can modify channel settings.*`,
+                details: `Manipulation detected and reverted back to original`,
                 isTeamChannel,
                 teamType: dbState.teamType
             });
@@ -502,14 +502,8 @@ class EnforcerService {
             // Send warning to channel
             const embed = new EmbedBuilder()
                 .setColor(0xFF0000)
-                .setTitle('⚠️ Unauthorized Change Reverted')
-                .setDescription(
-                    `**This channel is protected by the bot.**\n\n` +
-                    `Direct Discord changes (permissions, lock, limit, etc.) are **NOT ALLOWED** and have been **instantly reverted**.\n\n` +
-                    `✅ Use the **Bot Interface** buttons to control your channel.\n` +
-                    `❌ Do NOT use Discord's channel settings.`
-                )
-                .setFooter({ text: 'Security Protocol Active • All changes logged' })
+                .setTitle('⚠️ Manipulation Detected')
+                .setDescription('Unauthorized change has been reverted back to original.')
                 .setTimestamp();
 
             await channel.send({ embeds: [embed] }).catch(() => {});

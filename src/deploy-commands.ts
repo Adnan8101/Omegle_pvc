@@ -17,6 +17,7 @@ import { command as teamVcCommandChannel } from './commands/team_vc_command_chan
 import { command as pvcOsTransfer } from './commands/pvc_os_transfer';
 import { command as pvcPause } from './commands/pvc_pause';
 import { command as pvcResume } from './commands/pvc_resume';
+import { command as globalVcBlock } from './commands/global_vc_block';
 import { command as deployCommandsCmd } from './commands/deploy_commands';
 import prisma from './utils/database';
 
@@ -38,6 +39,7 @@ const commands = [
     pvcOsTransfer.data.toJSON(),
     pvcPause.data.toJSON(),
     pvcResume.data.toJSON(),
+    globalVcBlock.data.toJSON(),
     deployCommandsCmd.data.toJSON(),
 ];
 
