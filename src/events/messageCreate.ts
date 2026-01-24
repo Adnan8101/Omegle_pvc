@@ -1046,31 +1046,21 @@ async function handleMoveUser(message: Message): Promise<void> {
     try {
         const guild = message.guild;
         const author = message.member;
-
-        // Check if author has Move Members permission
         if (!author.permissions.has('MoveMembers')) {
             return; // Silently ignore if no permission
         }
-
-        // Check if author is in a VC
         if (!author.voice.channelId) {
             return; // Silently ignore
         }
 
         const authorVcId = author.voice.channelId;
-
-        // Get target user
         let targetUserId: string | null = null;
-
-        // Check for reply
         if (message.reference?.messageId) {
             const repliedMessage = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
             if (repliedMessage) {
                 targetUserId = repliedMessage.author.id;
             }
         }
-
-        // Check for mention or user ID in message
         if (!targetUserId) {
             const args = message.content.slice(3).trim().split(/\s+/);
             if (args.length > 0 && args[0]) {
@@ -1087,12 +1077,10 @@ async function handleMoveUser(message: Message): Promise<void> {
         }
 
         if (!targetUserId) {
-            // No user specified, react with sound off
             await message.react('🔇').catch(() => {});
             return;
         }
 
-        // Cannot drag yourself
         if (targetUserId === author.id) {
             return; // Silently ignore
         }
@@ -1124,10 +1112,98 @@ async function handleMoveUser(message: Message): Promise<void> {
         const channelData = pvcData || teamData;
         const isTeamChannel = Boolean(teamData);
 
-        // If it's a PVC/Team VC but author doesn't own it, deny
+        // If it's a PVC/Team VC but author doesn't own it, don't allow
         if (channelData && channelData.ownerId !== author.id) {
-            await message.reply('I cannot drag this user. Ask PVC owner to do.').catch(() => {});
-            return;
+            return; // Silently ignore if not owner
+        }
+
+        // Check if target is in a locked VC
+        const targetVcId = targetMember.voice.channelId;
+        const targetPvcData = await prisma.privateVoiceChannel.findUnique({
+            where: { channelId: targetVcId },
+        });
+        const targetTeamData = !targetPvcData ? await prisma.teamVoiceChannel.findUnique({
+            where: { channelId: targetVcId },
+        }) : null;
+
+        const targetChannelData = targetPvcData || targetTeamData;
+        const targetIsLocked = targetChannelData?.isLocked || false;
+
+        // If target is in a locked VC, ask for confirmation
+        if (targetIsLocked && channelData) {
+            // Get appropriate command channel
+            let commandChannelId: string | undefined;
+            
+            if (isTeamChannel) {
+                const teamSettings = await prisma.teamVoiceSettings.findUnique({
+                    where: { guildId: guild.id },
+                });
+                commandChannelId = teamSettings?.commandChannelId || undefined;
+            } else {
+                const settings = await getGuildSettings(guild.id);
+                commandChannelId = settings?.commandChannelId || undefined;
+            }
+
+            if (!commandChannelId) {
+                return; // No command channel set
+            }
+
+            const commandChannel = guild.channels.cache.get(commandChannelId);
+            if (!commandChannel || commandChannel.type !== ChannelType.GuildText) {
+                return;
+            }
+
+            // Send confirmation embed
+            const authorVc = guild.channels.cache.get(authorVcId);
+            const embed = new EmbedBuilder()
+                .setColor(0x5865F2)
+                .setTitle('🔀 Drag Request')
+                .setDescription(
+                    `**${author.displayName}** wants to drag you to **${authorVc?.name || 'their VC'}**.\n\n` +
+                    `React with ✅ to accept or ❌ to decline.`
+                )
+                .setTimestamp();
+
+            const confirmMsg = await commandChannel.send({
+                content: `<@${targetUserId}>`,
+                embeds: [embed],
+            }).catch(() => null);
+
+            if (!confirmMsg) return;
+
+            // Add reactions
+            await confirmMsg.react('✅').catch(() => {});
+            await confirmMsg.react('❌').catch(() => {});
+
+            // Wait for reaction (30 seconds)
+            const filter = (reaction: any, user: any) => {
+                return ['✅', '❌'].includes(reaction.emoji.name) && user.id === targetUserId;
+            };
+
+            const collected = await confirmMsg.awaitReactions({
+                filter,
+                max: 1,
+                time: 30000,
+            }).catch(() => null);
+
+            const reaction = collected?.first();
+
+            if (!reaction || reaction.emoji.name === '❌') {
+                // Declined or timeout
+                const declineEmbed = new EmbedBuilder()
+                    .setColor(0xFF6B6B)
+                    .setDescription('❌ Drag request declined or timed out.')
+                    .setTimestamp();
+                await confirmMsg.edit({ embeds: [declineEmbed], components: [] }).catch(() => {});
+                return;
+            }
+
+            // Accepted - proceed with drag
+            const acceptEmbed = new EmbedBuilder()
+                .setColor(0x57F287)
+                .setDescription('✅ Drag request accepted.')
+                .setTimestamp();
+            await confirmMsg.edit({ embeds: [acceptEmbed], components: [] }).catch(() => {});
         }
 
         // Move the user
