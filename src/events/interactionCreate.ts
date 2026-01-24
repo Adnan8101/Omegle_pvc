@@ -94,9 +94,9 @@ export async function execute(client: PVCClient, interaction: Interaction): Prom
             return;
         }
     } catch (error) {
-        // Don't reply to stale interactions (already expired)
+
         if (!isStaleError(error)) {
-            console.error('[InteractionCreate] Error:', error);
+
             await safeReply(interaction, 'An error occurred while processing this interaction.');
         }
     }

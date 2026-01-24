@@ -75,7 +75,7 @@ client.on(channelDeleteEvent.name, (...args) =>
 );
 
 client.on('error', (error) => {
-    console.error('[Discord Error]:', error);
+
 });
 
 client.on('warn', (warning) => {
@@ -83,11 +83,11 @@ client.on('warn', (warning) => {
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-    console.error('[Unhandled Rejection] at:', promise, 'reason:', reason);
+
 });
 
 process.on('uncaughtException', (error) => {
-    console.error('[Uncaught Exception]:', error);
+
 });
 
 client.login(Config.token).catch(() => {

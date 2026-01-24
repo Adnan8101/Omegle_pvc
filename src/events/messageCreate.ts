@@ -45,7 +45,6 @@ export async function execute(client: PVCClient, message: Message): Promise<void
 
     const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: message.author.id } });
 
-    // SECURITY: Validate PVC owner has actual permissions in this guild
     const isGuildMember = message.guild.members.cache.has(message.author.id);
     if (isPvcOwner && isGuildMember && (message.content.startsWith('!au ') || message.content.startsWith('!ru '))) {
         const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
@@ -150,10 +149,10 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
         const targetChannel = guild.channels.cache.get(firstArg);
 
         if (targetChannel && targetChannel.type === ChannelType.GuildVoice) {
-            // SECURITY: Only BOT_OWNER can control other channels, PVC owners can only control their own
+
             const targetChannelData = await prisma.privateVoiceChannel.findUnique({ where: { channelId: firstArg } })
                 || await prisma.teamVoiceChannel.findUnique({ where: { channelId: firstArg } });
-            
+
             if (targetChannelData && (targetChannelData.ownerId === message.author.id || isBotOwner)) {
                 channelId = firstArg;
                 argsStartIndex = 1;
@@ -198,7 +197,6 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
     const isTeamChannel = Boolean(teamData);
     const channelOwnerId = pvcData?.ownerId || teamData?.ownerId;
 
-    // SECURITY: Verify user actually owns this channel or is BOT_OWNER
     if (channelOwnerId !== message.author.id && message.author.id !== BOT_OWNER_ID) {
         const embed = new EmbedBuilder()
             .setDescription('❌ **Access Denied**: You do not own this channel.')
@@ -247,9 +245,9 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
 
     try {
         if (channel && channel.type === ChannelType.GuildVoice) {
-            // Record bot edit to prevent channelUpdate from treating this as manipulation
+
             recordBotEdit(channelId);
-            
+
             const discordTasks = userIdsToAdd.map(userId => ({
                 route: `perms:${channelId}:${userId}`,
                 task: () => channel.permissionOverwrites.edit(userId, {
@@ -312,7 +310,7 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
             if (frequentUsers.length > 0) {
                 for (const freq of frequentUsers) {
                     await markAccessSuggested(guild.id, message.author.id, freq.targetId);
-                    
+
                     const permanentAccessEmbed = new EmbedBuilder()
                         .setColor(0x5865F2)
                         .setDescription(
@@ -342,10 +340,10 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
         const targetChannel = guild.channels.cache.get(firstArg);
 
         if (targetChannel && targetChannel.type === ChannelType.GuildVoice) {
-            // SECURITY: Only BOT_OWNER can control other channels, PVC owners can only control their own
+
             const targetChannelData = await prisma.privateVoiceChannel.findUnique({ where: { channelId: firstArg } })
                 || await prisma.teamVoiceChannel.findUnique({ where: { channelId: firstArg } });
-            
+
             if (targetChannelData && (targetChannelData.ownerId === message.author.id || isBotOwner)) {
                 channelId = firstArg;
                 argsStartIndex = 1;
@@ -390,7 +388,6 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
     const isTeamChannel = Boolean(teamData);
     const channelOwnerId = pvcData?.ownerId || teamData?.ownerId;
 
-    // SECURITY: Verify user actually owns this channel or is BOT_OWNER
     if (channelOwnerId !== message.author.id && message.author.id !== BOT_OWNER_ID) {
         const embed = new EmbedBuilder()
             .setDescription('❌ **Access Denied**: You do not own this channel.')
@@ -433,9 +430,9 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
 
     try {
         if (channel && channel.type === ChannelType.GuildVoice) {
-            // Record bot edit to prevent channelUpdate from treating this as manipulation
+
             recordBotEdit(channelId);
-            
+
             const discordTasks: Array<{ route: string; task: () => Promise<any>; priority: Priority }> = [];
 
             for (const userId of userIdsToRemove) {
@@ -697,7 +694,7 @@ async function handleAdminStrictnessWL(message: Message): Promise<void> {
                     targetType: targetType,
                 },
             });
-            // Invalidate cache so changes take effect immediately
+
             invalidateWhitelist(message.guild.id);
             await message.react('✅').catch(() => { });
         } else if (action === 'remove') {
@@ -709,7 +706,7 @@ async function handleAdminStrictnessWL(message: Message): Promise<void> {
                     },
                 },
             }).catch(() => { });
-            // Invalidate cache so changes take effect immediately
+
             invalidateWhitelist(message.guild.id);
             await message.react('✅').catch(() => { });
         }

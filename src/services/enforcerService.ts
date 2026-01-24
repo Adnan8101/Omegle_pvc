@@ -1,66 +1,131 @@
-import { ChannelType, type VoiceChannel, PermissionFlagsBits, OverwriteType, PermissionsBitField } from 'discord.js';
-import { client } from '../client'; // Assuming client export
+import { ChannelType, type VoiceChannel, PermissionFlagsBits, OverwriteType, EmbedBuilder } from 'discord.js';
+import { client } from '../client';
 import prisma from '../utils/database';
 import { Priority, executeWithRateLimit } from '../utils/rateLimit';
 import { recordBotEdit } from '../events/channelUpdate';
+import { getWhitelist, getGuildSettings } from '../utils/cache';
 
+/**
+ * ENFORCER SERVICE - THE SHERIFF
+ * 
+ * This service is the SINGLE SOURCE OF TRUTH enforcement mechanism.
+ * 
+ * RULES:
+ * 1. Database is ALWAYS the authority - Discord state is just a "renderer"
+ * 2. NO ONE can edit channels except:
+ *    - The bot itself
+ *    - Strictness-whitelisted admins (if admin strictness is ON)
+ * 3. PVC owners can ONLY edit via bot interactions (buttons/commands)
+ * 4. All external changes are INSTANTLY reverted
+ * 5. Unauthorized users who join locked channels are IMMEDIATELY kicked
+ */
 class EnforcerService {
-    private debounces = new Map<string, NodeJS.Timeout>();
-    private DEBOUNCE_MS = 1000; // 1 second debounce to catch spam
+    // No debounce - we react IMMEDIATELY
+    private pendingEnforcements = new Set<string>();
+    
+    // Track channels we're currently enforcing to prevent loops
+    private enforcingChannels = new Set<string>();
 
     /**
-     * Schedules a state enforcement check for a channel.
-     * Use this when an event detects a mismatch.
+     * IMMEDIATE enforcement - no delays, no debounce
+     * Called when ANY external change is detected
      */
-    public async enforce(channelId: string, immediate = false) {
-        if (this.debounces.has(channelId)) {
-            clearTimeout(this.debounces.get(channelId)!);
+    public async enforce(channelId: string): Promise<void> {
+        // Prevent duplicate enforcement calls for the same channel
+        if (this.pendingEnforcements.has(channelId) || this.enforcingChannels.has(channelId)) {
+            return;
         }
 
-        if (immediate) {
-            this.debounces.delete(channelId);
+        this.pendingEnforcements.add(channelId);
+        
+        try {
             await this.executeEnforcement(channelId);
-        } else {
-            const timeout = setTimeout(() => {
-                this.debounces.delete(channelId);
-                this.executeEnforcement(channelId).catch(console.error);
-            }, this.DEBOUNCE_MS);
-            this.debounces.set(channelId, timeout);
+        } finally {
+            this.pendingEnforcements.delete(channelId);
         }
     }
 
     /**
-     * The Sheriff. Forces the Discord channel to match the DB state exactly.
-     * Uses ONE atomic API call to avoid partial updates and rate limits.
+     * Check if a user is authorized to edit a managed channel
+     * ONLY returns true for:
+     * - Bot itself
+     * - Strictness-whitelisted admins (when strictness is ON)
      */
-    private async executeEnforcement(channelId: string) {
+    public async isAuthorizedEditor(guildId: string, userId: string): Promise<boolean> {
+        // Bot itself is always authorized
+        if (userId === client.user?.id) {
+            return true;
+        }
+
+        const guild = client.guilds.cache.get(guildId);
+        if (!guild) return false;
+
+        // Get settings and whitelist
+        const [settings, whitelist] = await Promise.all([
+            getGuildSettings(guildId),
+            getWhitelist(guildId),
+        ]);
+
+        // If strictness is OFF, no one except bot is authorized to edit via Discord UI
+        // Channel owners must use bot interactions
+        if (!settings?.adminStrictness) {
+            return false;
+        }
+
+        // If strictness is ON, only whitelisted admins can edit via Discord UI
+        const member = await guild.members.fetch(userId).catch(() => null);
+        if (!member) return false;
+
+        const hasAdminPerm = member.permissions.has('Administrator') || member.permissions.has('ManageChannels');
+        if (!hasAdminPerm) return false;
+
+        const memberRoleIds = member.roles.cache.map(r => r.id);
+        const isWhitelisted = whitelist.some(
+            w => w.targetId === userId || memberRoleIds.includes(w.targetId)
+        );
+
+        return isWhitelisted;
+    }
+
+    /**
+     * The core enforcement logic - forces Discord to match DB state EXACTLY
+     */
+    private async executeEnforcement(channelId: string): Promise<void> {
+        this.enforcingChannels.add(channelId);
+
         try {
-            // 1. Fetch DB State (The Truth)
+            // 1. Fetch DB State (THE TRUTH)
             let dbState: any = await prisma.privateVoiceChannel.findUnique({
                 where: { channelId },
                 include: { permissions: true }
             });
 
+            let isTeamChannel = false;
             if (!dbState) {
                 dbState = await prisma.teamVoiceChannel.findUnique({
                     where: { channelId },
                     include: { permissions: true }
                 });
+                isTeamChannel = !!dbState;
             }
 
-            if (!dbState) return; // Not a managed channel
-
-            // 2. Fetch Discord Channel (The Reality)
-            const channel = client.channels.cache.get(channelId) as VoiceChannel;
-            if (!channel || channel.type !== ChannelType.GuildVoice) {
-                console.log(`[Enforcer] Channel ${channelId} not found or not a voice channel. Cleaning up DB...`);
-                // Clean up DB since channel doesn't exist
-                await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => {});
-                await prisma.teamVoiceChannel.delete({ where: { channelId } }).catch(() => {});
+            // Not a managed channel - nothing to enforce
+            if (!dbState) {
+                this.enforcingChannels.delete(channelId);
                 return;
             }
 
-            // 3. Construct the "Perfect" Payload
+            // 2. Fetch Discord Channel (THE REALITY)
+            const channel = client.channels.cache.get(channelId) as VoiceChannel;
+            if (!channel || channel.type !== ChannelType.GuildVoice) {
+                console.log(`[Enforcer] Channel ${channelId} not found. Cleaning up DB...`);
+                await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => {});
+                await prisma.teamVoiceChannel.delete({ where: { channelId } }).catch(() => {});
+                this.enforcingChannels.delete(channelId);
+                return;
+            }
+
+            // 3. Construct the AUTHORITATIVE state
             const options: any = {
                 userLimit: dbState.userLimit,
                 bitrate: dbState.bitrate,
@@ -68,138 +133,298 @@ class EnforcerService {
                 videoQualityMode: dbState.videoQualityMode,
             };
 
-            // 4. Calculate Permissions
-            // Base: Owner gets Full Access
-            const overwrites: any[] = [
-                {
-                    id: dbState.ownerId,
-                    allow: [
-                        PermissionFlagsBits.Connect,
-                        PermissionFlagsBits.ViewChannel,
-                        PermissionFlagsBits.Speak,
-                        PermissionFlagsBits.Stream,
-                        PermissionFlagsBits.UseVAD,
-                        PermissionFlagsBits.PrioritySpeaker,
-                        PermissionFlagsBits.MuteMembers,
-                        PermissionFlagsBits.DeafenMembers,
-                        PermissionFlagsBits.MoveMembers,
-                        PermissionFlagsBits.ManageChannels // Needed for UI access sometimes
-                    ]
-                }
-            ];
+            // 4. Build permission overwrites from DB
+            const overwrites: any[] = [];
 
-            // @everyone role
-            const everyoneAllow = [];
-            const everyoneDeny = [];
+            // Owner gets FULL control
+            overwrites.push({
+                id: dbState.ownerId,
+                type: OverwriteType.Member,
+                allow: [
+                    PermissionFlagsBits.Connect,
+                    PermissionFlagsBits.ViewChannel,
+                    PermissionFlagsBits.Speak,
+                    PermissionFlagsBits.Stream,
+                    PermissionFlagsBits.UseVAD,
+                    PermissionFlagsBits.PrioritySpeaker,
+                    PermissionFlagsBits.MuteMembers,
+                    PermissionFlagsBits.DeafenMembers,
+                    PermissionFlagsBits.MoveMembers,
+                    PermissionFlagsBits.ManageChannels,
+                    PermissionFlagsBits.SendMessages,
+                    PermissionFlagsBits.EmbedLinks,
+                    PermissionFlagsBits.AttachFiles,
+                ],
+            });
 
-            if (dbState.isLocked) everyoneDeny.push(PermissionFlagsBits.Connect);
-            else everyoneAllow.push(PermissionFlagsBits.Connect); // Explicit allow to override denied roles? No, standard is neutral.
-            // Actually, for "Lock", we usually DENY @everyone Connect. 
-            // If NOT locked, we typically leave it neutral (inherit) or Allow if we are strict.
-            // Standard PVC: Locked = Deny Connect. Unlocked = Null (inherit) or Allow.
+            // @everyone role - enforce lock/hide state
+            const everyoneDeny: bigint[] = [];
+            const everyoneAllow: bigint[] = [];
 
-            if (dbState.isHidden) everyoneDeny.push(PermissionFlagsBits.ViewChannel);
+            if (dbState.isLocked) {
+                everyoneDeny.push(PermissionFlagsBits.Connect);
+            } else {
+                // Explicitly allow connect when unlocked to override any role denies
+                everyoneAllow.push(PermissionFlagsBits.Connect);
+            }
+
+            if (dbState.isHidden) {
+                everyoneDeny.push(PermissionFlagsBits.ViewChannel);
+            } else {
+                everyoneAllow.push(PermissionFlagsBits.ViewChannel);
+            }
 
             overwrites.push({
                 id: channel.guild.id,
+                type: OverwriteType.Role,
+                allow: everyoneAllow,
                 deny: everyoneDeny,
-                // We don't forcefully ALLOW connect/view unless we want to override other roles.
-                // But to be "Authoritative", we might need to reset it.
-                // Let's stick to: Locked -> Deny Connect. Unlocked -> Reset Connect (Remove Deny).
             });
 
-            // Trusted/Permitted Users (from DB)
-            for (const perm of dbState.permissions) {
+            // Permitted users/roles from DB
+            for (const perm of dbState.permissions || []) {
                 if (perm.permission === 'permit') {
                     overwrites.push({
                         id: perm.targetId,
                         type: perm.targetType === 'role' ? OverwriteType.Role : OverwriteType.Member,
-                        allow: [PermissionFlagsBits.Connect, PermissionFlagsBits.ViewChannel]
+                        allow: [PermissionFlagsBits.Connect, PermissionFlagsBits.ViewChannel],
                     });
                 } else if (perm.permission === 'ban') {
                     overwrites.push({
                         id: perm.targetId,
                         type: perm.targetType === 'role' ? OverwriteType.Role : OverwriteType.Member,
-                        deny: [PermissionFlagsBits.Connect, PermissionFlagsBits.ViewChannel]
+                        deny: [PermissionFlagsBits.Connect, PermissionFlagsBits.ViewChannel],
                     });
                 }
             }
 
-            // Preservation of EXTERNAL permissions (like muted roles, bot roles)?
-            // The "Golden Rule" says DB is absolute authority. 
-            // If we wipe external roles, we break server setups. 
-            // BUT, if we keep them, admins can add "Bypass" roles.
-            // Compromise: We keep roles that are present in Discord BUT ensure they don't violate Critical State (Lock/Hide).
-            // Actually, the prompt says "Admin permissions must never override VC logic".
-            // So if Locked, NO ONE enters except Permitted list.
-
-            // To be purely authoritative, we strictly enforce OUR list.
-            // However, we must allow Bots (especially self) and maybe Server Staff if configured?
-            // "Admins are NOT trusted" -> So we do NOT implicitly allow admins.
-            // We use the calculated 'overwrites' array as the FULL list.
+            // 5. Apply the AUTHORITATIVE state
             options.permissionOverwrites = overwrites;
 
-            // 5. Compare and Apply (Atomic Edit)
-            // We only apply if there's a difference to save API calls? 
-            // Enforcer is called on "Mismatch Detected", so we assume difference.
-            // But checking is cheap.
+            // Record this as bot edit BEFORE making changes
+            recordBotEdit(channelId);
 
-            // Simple check: userLimit, bitrate, etc.
-            let needsUpdate = true; // Always enforce when called to be safe
+            // Use IMMEDIATE priority - no queue, no delay
+            await executeWithRateLimit(
+                `enforce:${channelId}`,
+                () => channel.edit(options),
+                Priority.IMMEDIATE
+            );
 
-            const changes: string[] = [];
-            if (channel.userLimit !== options.userLimit) changes.push(`Limit changed (DB: ${options.userLimit})`);
-            if (channel.bitrate !== options.bitrate) changes.push(`Bitrate changed (DB: ${options.bitrate})`);
-            if (channel.rtcRegion !== options.rtcRegion) changes.push(`Region changed (DB: ${options.rtcRegion})`);
+            console.log(`[Enforcer] ✅ Enforced DB state on channel ${channelId}`);
 
-            console.log(`[Enforcer] Enforcing state on ${channelId}. Detected changes: ${changes.join(', ') || 'Permissions/Other'}`);
+            // 6. Kick any unauthorized users currently in the channel
+            await this.kickUnauthorizedMembers(channel, dbState);
 
-            if (needsUpdate) {
-                // Record this as a bot edit BEFORE making changes to prevent self-punishment
-                recordBotEdit(channelId);
-                
-                await executeWithRateLimit(
-                    `enforce:${channelId}`,
-                    () => channel.edit(options),
-                    Priority.CRITICAL // High priority
-                );
-
-                // LOGGING & NOTIFICATION
-                try {
-                    // We'll notify generically.
-
-                    const { logAction, LogAction } = await import('../utils/logger');
-                    const { EmbedBuilder } = await import('discord.js');
-
-                    await logAction({
-                        action: LogAction.UNAUTHORIZED_CHANGE_REVERTED,
-                        guild: channel.guild,
-                        user: client.user!, // System action, user is definitely present
-                        channelName: channel.name,
-                        channelId: channelId,
-                        details: `**Auto-Correction Triggered**\n\nSomeone (Admin/Mod) modified channel settings that didn't match the Database.\n**Action:** Reverted immediately to DB state.\n**Changes:** ${changes.join(', ') || 'Permissions/Security Settings'}\n\n*Note: Use Bot Commands to edit VCs.*`,
-                        isTeamChannel: !!dbState.teamType,
-                        teamType: dbState.teamType
-                    });
-
-                    // Send Warning to VC Chat
-                    const embed = new EmbedBuilder()
-                        .setColor(0xFF0000)
-                        .setTitle('⚠️ Settings Reverted')
-                        .setDescription(`**This channel is managed by the Bot.**\n\nDirect changes to Discord Settings (Lock, Limit, Permissions) are **NOT ALLOWED** and have been reverted.\n\nPlease use the Bot Interface or Commands to manage your channel.`)
-                        .setFooter({ text: 'Security Protocol Active' })
-                        .setTimestamp();
-
-                    await channel.send({ embeds: [embed] }).catch(() => { });
-
-                } catch (err) {
-                    console.error('[Enforcer] Logging failed:', err);
-                }
-            }
+            // 7. Log and notify
+            await this.notifyEnforcement(channel, isTeamChannel, dbState);
 
         } catch (error) {
-            console.error(`[Enforcer] Failed to enforce state on ${channelId}:`, error);
+            console.error(`[Enforcer] ❌ Failed to enforce state on ${channelId}:`, error);
+        } finally {
+            this.enforcingChannels.delete(channelId);
         }
+    }
+
+    /**
+     * Kick all unauthorized members from a channel
+     * Called after enforcement to ensure no one bypasses via timing
+     */
+    private async kickUnauthorizedMembers(channel: VoiceChannel, dbState: any): Promise<void> {
+        const guild = channel.guild;
+        
+        // Get settings and whitelist for strictness check
+        const [settings, whitelist] = await Promise.all([
+            getGuildSettings(guild.id),
+            getWhitelist(guild.id),
+        ]);
+
+        const isLocked = dbState.isLocked;
+        const isHidden = dbState.isHidden;
+        const isFull = dbState.userLimit > 0 && channel.members.size > dbState.userLimit;
+
+        // If channel is open, no need to kick anyone (except banned users)
+        const permissions = dbState.permissions || [];
+        const bannedUserIds = new Set(
+            permissions.filter((p: any) => p.permission === 'ban' && p.targetType === 'user').map((p: any) => p.targetId)
+        );
+        const bannedRoleIds = new Set(
+            permissions.filter((p: any) => p.permission === 'ban' && p.targetType === 'role').map((p: any) => p.targetId)
+        );
+        const permittedUserIds = new Set(
+            permissions.filter((p: any) => p.permission === 'permit' && p.targetType === 'user').map((p: any) => p.targetId)
+        );
+        const permittedRoleIds = new Set(
+            permissions.filter((p: any) => p.permission === 'permit' && p.targetType === 'role').map((p: any) => p.targetId)
+        );
+
+        for (const [memberId, member] of channel.members) {
+            // Skip bots (they have their own protection in voiceStateUpdate)
+            if (member.user.bot) continue;
+
+            // Owner is always allowed
+            if (memberId === dbState.ownerId) continue;
+
+            const memberRoleIds = member.roles.cache.map(r => r.id);
+
+            // Check if BANNED - always kick
+            const isBanned = bannedUserIds.has(memberId) || 
+                memberRoleIds.some(roleId => bannedRoleIds.has(roleId));
+            
+            if (isBanned) {
+                await this.kickMember(member, channel.name, dbState.ownerId, 'blocked');
+                continue;
+            }
+
+            // If channel is not locked/hidden/full, allow
+            if (!isLocked && !isHidden && !isFull) continue;
+
+            // Check if explicitly permitted
+            const isPermitted = permittedUserIds.has(memberId) ||
+                memberRoleIds.some(roleId => permittedRoleIds.has(roleId));
+            
+            if (isPermitted) continue;
+
+            // Check admin/whitelist permissions
+            const hasAdminPerm = member.permissions.has('Administrator') || member.permissions.has('ManageChannels');
+
+            if (!settings?.adminStrictness) {
+                // Strictness OFF - admins can bypass
+                if (hasAdminPerm) continue;
+            } else {
+                // Strictness ON - only whitelisted admins can bypass
+                const isWhitelisted = whitelist.some(
+                    w => w.targetId === memberId || memberRoleIds.includes(w.targetId)
+                );
+                if (isWhitelisted && hasAdminPerm) continue;
+            }
+
+            // User is NOT authorized - KICK
+            const reason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
+            await this.kickMember(member, channel.name, dbState.ownerId, reason);
+        }
+    }
+
+    /**
+     * Kick a member and send them a DM
+     */
+    private async kickMember(member: any, channelName: string, ownerId: string, reason: string): Promise<void> {
+        try {
+            await member.voice.disconnect();
+            
+            const owner = member.guild.members.cache.get(ownerId);
+            const ownerName = owner?.displayName || 'the owner';
+
+            const embed = new EmbedBuilder()
+                .setColor(reason === 'blocked' ? 0xFF0000 : 0xFF6B6B)
+                .setTitle(reason === 'blocked' ? '🚫 Blocked' : '🚫 Access Denied')
+                .setDescription(
+                    reason === 'blocked'
+                        ? `You are **BLOCKED** from **${channelName}** by ${ownerName}.\n\nYou cannot join this channel until you are unblocked.`
+                        : `You were removed from **${channelName}** because the channel is **${reason}**.\n\nAsk **${ownerName}** to give you access to join.`
+                )
+                .setTimestamp();
+
+            await member.send({ embeds: [embed] }).catch(() => {});
+            console.log(`[Enforcer] Kicked ${member.user.tag} from channel (${reason})`);
+        } catch (err) {
+            console.error(`[Enforcer] Failed to kick member:`, err);
+        }
+    }
+
+    /**
+     * Send notification about enforcement
+     */
+    private async notifyEnforcement(channel: VoiceChannel, isTeamChannel: boolean, dbState: any): Promise<void> {
+        try {
+            const { logAction, LogAction } = await import('../utils/logger');
+
+            await logAction({
+                action: LogAction.UNAUTHORIZED_CHANGE_REVERTED,
+                guild: channel.guild,
+                user: client.user!,
+                channelName: channel.name,
+                channelId: channel.id,
+                details: `**Auto-Correction Triggered**\n\nUnauthorized channel modification detected and reverted.\n**Action:** Instantly restored DB state.\n\n*Only the channel owner (via bot interface) or whitelisted admins can modify channel settings.*`,
+                isTeamChannel,
+                teamType: dbState.teamType
+            });
+
+            // Send warning to channel
+            const embed = new EmbedBuilder()
+                .setColor(0xFF0000)
+                .setTitle('⚠️ Unauthorized Change Reverted')
+                .setDescription(
+                    `**This channel is protected by the bot.**\n\n` +
+                    `Direct Discord changes (permissions, lock, limit, etc.) are **NOT ALLOWED** and have been **instantly reverted**.\n\n` +
+                    `✅ Use the **Bot Interface** buttons to control your channel.\n` +
+                    `❌ Do NOT use Discord's channel settings.`
+                )
+                .setFooter({ text: 'Security Protocol Active • All changes logged' })
+                .setTimestamp();
+
+            await channel.send({ embeds: [embed] }).catch(() => {});
+        } catch (err) {
+            console.error('[Enforcer] Notification failed:', err);
+        }
+    }
+
+    /**
+     * Validate if a join should be allowed based on DB state
+     * Returns true if the user should be kicked
+     */
+    public async shouldKickUser(channelId: string, memberId: string, memberRoleIds: string[]): Promise<{ shouldKick: boolean; reason: string }> {
+        // Fetch DB state
+        let dbState: any = await prisma.privateVoiceChannel.findUnique({
+            where: { channelId },
+            include: { permissions: true }
+        });
+
+        if (!dbState) {
+            dbState = await prisma.teamVoiceChannel.findUnique({
+                where: { channelId },
+                include: { permissions: true }
+            });
+        }
+
+        if (!dbState) {
+            return { shouldKick: false, reason: '' };
+        }
+
+        // Owner is always allowed
+        if (memberId === dbState.ownerId) {
+            return { shouldKick: false, reason: '' };
+        }
+
+        const permissions = dbState.permissions || [];
+
+        // Check if BANNED
+        const isBanned = permissions.some(
+            (p: any) => (p.targetId === memberId && p.permission === 'ban') ||
+                (memberRoleIds.includes(p.targetId) && p.targetType === 'role' && p.permission === 'ban')
+        );
+
+        if (isBanned) {
+            return { shouldKick: true, reason: 'blocked' };
+        }
+
+        // If not locked/hidden, allow
+        if (!dbState.isLocked && !dbState.isHidden) {
+            return { shouldKick: false, reason: '' };
+        }
+
+        // Check if permitted
+        const isPermitted = permissions.some(
+            (p: any) => (p.targetId === memberId && p.permission === 'permit') ||
+                (memberRoleIds.includes(p.targetId) && p.targetType === 'role' && p.permission === 'permit')
+        );
+
+        if (isPermitted) {
+            return { shouldKick: false, reason: '' };
+        }
+
+        const reason = dbState.isLocked ? 'locked' : 'hidden';
+        return { shouldKick: true, reason };
     }
 }
 

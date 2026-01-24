@@ -292,7 +292,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                                 data: { ownerId: nextOwner.id },
                             });
 
-                            // Record bot edit BEFORE modifying channel
                             const { recordBotEdit } = await import('../events/channelUpdate');
                             recordBotEdit(pvc.channelId);
 
@@ -373,7 +372,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                                 data: { ownerId: nextOwner.id },
                             });
 
-                            // Record bot edit BEFORE modifying channel
                             const { recordBotEdit } = await import('../events/channelUpdate');
                             recordBotEdit(tc.channelId);
 
@@ -443,28 +441,21 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         const channel = guild.channels.cache.get(pvc.channelId);
         if (channel && channel.type === ChannelType.GuildVoice) {
 
-            // 1. Get Permanent Access Users (OwnerPermission)
-            // cache.ts: getOwnerPermissions(guildId, ownerId) returns [{ targetId, targetType, permission: 'permit' }]
             const permanentPerms = await getPermanentPermissionsAndCache(guild.id, pvc.ownerId);
             const permanentUserIds = new Set(permanentPerms.map(p => p.targetId));
 
-            // 2. Get Current Members (Temporary Access)
             const currentMemberIds = channel.members
                 .filter(m => m.id !== pvc.ownerId && !m.user.bot)
                 .map(m => m.id);
 
-            // 3. Combine: Active Members + Permanent Access = The Allowed List
             const allAllowedIds = new Set([...permanentUserIds, ...currentMemberIds]);
 
-            // 4. Update Database (VoicePermission)
-            // Wipe old permissions for this channel
             await prisma.voicePermission.deleteMany({
                 where: { channelId: pvc.channelId, permission: 'permit' },
             });
 
             invalidateChannelPermissions(pvc.channelId);
 
-            // Insert new permissions (both permanent AND active temps)
             if (allAllowedIds.size > 0) {
                 await prisma.voicePermission.createMany({
                     data: Array.from(allAllowedIds).map(userId => ({
@@ -479,19 +470,16 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }
 
             try {
-                // 5. Update Discord Overwrites
-                // Record bot edit BEFORE modifying permissions
+
                 const { recordBotEdit } = await import('../events/channelUpdate');
                 recordBotEdit(pvc.channelId);
-                
-                // Ensure Owner has full access
+
                 await channel.permissionOverwrites.edit(pvc.ownerId, {
                     ViewChannel: true, Connect: true, Speak: true, Stream: true,
                     SendMessages: true, EmbedLinks: true, AttachFiles: true,
                     MuteMembers: true, DeafenMembers: true, ManageChannels: true,
                 });
 
-                // Grant access to Active + Permanent users
                 for (const memberId of allAllowedIds) {
                     await channel.permissionOverwrites.edit(memberId, {
                         ViewChannel: true, Connect: true,
@@ -499,24 +487,19 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     });
                 }
 
-                // 6. Cleanup Ghost Permissions
-                // Remove overwrites for users who are NEITHER in the channel NOR on the permanent list
-                // (And excluding bots/owner)
                 const existingOverwrites = channel.permissionOverwrites.cache;
                 for (const [targetId, overwrite] of existingOverwrites) {
                     const member = guild.members.cache.get(targetId);
                     const isBot = member?.user.bot ?? false; // Best effort check if member cached
-                    // If member not cached, we check if it's the owner or in our allowed list
+
                     if (targetId === pvc.ownerId || allAllowedIds.has(targetId) || isBot || targetId === guild.id) {
                         continue;
                     }
 
-                    // If it's a role, skip
                     if (overwrite.type === OverwriteType.Role) {
                         continue;
                     }
 
-                    // If it's a member and not in allowed list, delete
                     if (overwrite.type === OverwriteType.Member && !allAllowedIds.has(targetId)) {
                         await channel.permissionOverwrites.delete(targetId).catch(() => { });
                     }
@@ -530,23 +513,15 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         const channel = guild.channels.cache.get(tc.channelId);
         if (channel && channel.type === ChannelType.GuildVoice) {
 
-            // 1. Get Permanent Access (Though Team channels might not use OwnerPermission strictly, 
-            // the user might expect it if they own the team channel. 
-            // Current code does NOT use OwnerPermission for Teams usually?
-            // "teamData = !pvcData ? await prisma.teamVoiceChannel..." in permanent_access.ts suggests it DOES.
-            // So we fetch permanent perms for the team owner too.
             const permanentPerms = await getPermanentPermissionsAndCache(guild.id, tc.ownerId);
             const permanentUserIds = new Set(permanentPerms.map(p => p.targetId));
 
-            // 2. Current Members
             const currentMemberIds = channel.members
                 .filter(m => m.id !== tc.ownerId && !m.user.bot)
                 .map(m => m.id);
 
-            // 3. Allow List
             const allAllowedIds = new Set([...permanentUserIds, ...currentMemberIds]);
 
-            // 4. Update DB
             await prisma.teamVoicePermission.deleteMany({
                 where: { channelId: tc.channelId, permission: 'permit' },
             });
@@ -567,11 +542,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }
 
             try {
-                // 5. Discord Overwrites
-                // Record bot edit BEFORE modifying permissions
+
                 const { recordBotEdit } = await import('../events/channelUpdate');
                 recordBotEdit(tc.channelId);
-                
+
                 await channel.permissionOverwrites.edit(tc.ownerId, {
                     ViewChannel: true, Connect: true, Speak: true, Stream: true,
                     SendMessages: true, EmbedLinks: true, AttachFiles: true,
@@ -585,7 +559,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     });
                 }
 
-                // 6. Cleanup Ghosts
                 const existingOverwrites = channel.permissionOverwrites.cache;
                 for (const [targetId, overwrite] of existingOverwrites) {
                     const member = guild.members.cache.get(targetId);

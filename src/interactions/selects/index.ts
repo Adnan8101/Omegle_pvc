@@ -18,6 +18,7 @@ import { batchUpsertPermissions, invalidateWhitelist, batchUpsertOwnerPermission
 import { logAction, LogAction } from '../../utils/logger';
 import { isPvcPaused } from '../../utils/pauseManager';
 import { recordBotEdit } from '../../events/channelUpdate';
+import { VoiceStateService } from '../../services/voiceStateService';
 
 export async function handleSelectMenuInteraction(
     interaction: AnySelectMenuInteraction
@@ -126,68 +127,32 @@ async function updateVoicePermissions(
 ): Promise<void> {
     const targetIds = Array.from(targets.keys());
 
-    // Record bot edit before modifying permissions
-    recordBotEdit(channel.id);
+    // Update DB first via VoiceStateService, then enforce
+    // This ensures DB is always the source of truth
+    for (const id of targetIds) {
+        if (permission === 'permit') {
+            await VoiceStateService.addPermit(channel.id, id, type);
+        } else {
+            await VoiceStateService.addBan(channel.id, id, type);
+        }
+    }
 
-    const discordTasks = targetIds.map(id => ({
-        route: `perms:${channel.id}:${id}`,
-        task: () => channel.permissionOverwrites.edit(id, permissionUpdates),
-        priority: Priority.NORMAL,
-    }));
-    await executeParallel(discordTasks);
-
+    // Kick banned users from the channel
     if (permission === 'ban') {
-        const disconnectTasks: Array<{ route: string; task: () => Promise<any>; priority: Priority }> = [];
-
         for (const id of targetIds) {
             if (type === 'user') {
                 const member = channel.members.get(id);
                 if (member) {
-                    disconnectTasks.push({
-                        route: `disconnect:${id}`,
-                        task: () => member.voice.disconnect(),
-                        priority: Priority.NORMAL,
-                    });
+                    await member.voice.disconnect().catch(() => {});
                 }
             } else {
                 for (const [, member] of channel.members) {
                     if (member.roles.cache.has(id)) {
-                        disconnectTasks.push({
-                            route: `disconnect:${member.id}`,
-                            task: () => member.voice.disconnect(),
-                            priority: Priority.NORMAL,
-                        });
+                        await member.voice.disconnect().catch(() => {});
                     }
                 }
             }
         }
-
-        if (disconnectTasks.length > 0) {
-            await executeParallel(disconnectTasks);
-        }
-    }
-
-    if (isTeamChannel) {
-        for (const id of targetIds) {
-            await prisma.teamVoicePermission.upsert({
-                where: { channelId_targetId: { channelId: channel.id, targetId: id } },
-                create: {
-                    channelId: channel.id,
-                    targetId: id,
-                    targetType: type,
-                    permission: permission,
-                },
-                update: {
-                    permission: permission,
-                    targetType: type,
-                },
-            });
-        }
-    } else {
-        await batchUpsertPermissions(
-            channel.id,
-            targetIds.map(id => ({ targetId: id, targetType: type, permission }))
-        );
     }
 }
 
@@ -255,30 +220,9 @@ async function handleRemoveUserSelect(
 
     const targetIds = Array.from(users.keys());
 
-    // Record bot edit before modifying permissions
-    recordBotEdit(channel.id);
-
-    const discordTasks = targetIds.map(id => ({
-        route: `perms:${channel.id}:${id}`,
-        task: () => channel.permissionOverwrites.delete(id).catch(() => { }),
-        priority: Priority.NORMAL,
-    }));
-    await executeParallel(discordTasks);
-
-    if (isTeamChannel) {
-        await prisma.teamVoicePermission.deleteMany({
-            where: {
-                channelId: channel.id,
-                targetId: { in: targetIds },
-            },
-        });
-    } else {
-        await prisma.voicePermission.deleteMany({
-            where: {
-                channelId: channel.id,
-                targetId: { in: targetIds },
-            },
-        });
+    // Update DB first via VoiceStateService, then enforce
+    for (const id of targetIds) {
+        await VoiceStateService.removePermit(channel.id, id);
     }
 
     if (!isTeamChannel) {
@@ -288,8 +232,6 @@ async function handleRemoveUserSelect(
             targetIds
         );
     }
-
-    invalidateWhitelist(interaction.guild!.id);
 
     await logAction({
         action: LogAction.USER_REMOVED,
@@ -418,35 +360,10 @@ async function handleUnblockSelect(
     const { users } = interaction;
     const targetIds = Array.from(users.keys());
 
-    // Record bot edit before modifying permissions
-    recordBotEdit(channel.id);
-
-    const discordTasks = targetIds.map(id => ({
-        route: `perms:${channel.id}:${id}`,
-        task: () => channel.permissionOverwrites.delete(id).catch(() => { }),
-        priority: Priority.NORMAL,
-    }));
-    await executeParallel(discordTasks);
-
-    if (isTeamChannel) {
-        await prisma.teamVoicePermission.deleteMany({
-            where: {
-                channelId: channel.id,
-                targetId: { in: targetIds },
-                permission: 'ban',
-            },
-        });
-    } else {
-        await prisma.voicePermission.deleteMany({
-            where: {
-                channelId: channel.id,
-                targetId: { in: targetIds },
-                permission: 'ban',
-            },
-        });
+    // Update DB first via VoiceStateService, then enforce
+    for (const id of targetIds) {
+        await VoiceStateService.removeBan(channel.id, id);
     }
-
-    invalidateWhitelist(channel.id);
 
     await interaction.update({
         content: `✅ Unblocked ${users.size} user(s) from your voice channel.`,
@@ -464,14 +381,10 @@ async function handleRegionSelect(
     }
 
     const region = interaction.values[0];
-    
-    // Record bot edit before modifying channel
-    recordBotEdit(channel.id);
-    
-    await executeWithRateLimit(`edit:${channel.id}`, () =>
-        channel.setRTCRegion(region === 'auto' ? null : region),
-        Priority.NORMAL
-    );
+    const regionValue = region === 'auto' ? null : region;
+
+    // Update DB first, then enforce - this is the ONLY valid way to change region
+    await VoiceStateService.setRegion(channel.id, regionValue);
 
     await logAction({
         action: LogAction.CHANNEL_REGION_SET,

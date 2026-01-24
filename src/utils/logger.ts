@@ -82,7 +82,7 @@ const ACTION_COLORS: Record<LogAction, number> = {
 
 export async function logAction(data: LogData): Promise<void> {
     const startTime = Date.now();
-    
+
     try {
         let webhookUrl: string | null = null;
 
@@ -92,7 +92,6 @@ export async function logAction(data: LogData): Promise<void> {
             });
             webhookUrl = teamSettings?.logsWebhookUrl || null;
 
-            // Fallback to PVC settings if team has no webhook
             if (!webhookUrl) {
                 const pvcSettings = await prisma.guildSettings.findUnique({
                     where: { guildId: data.guild.id },
@@ -107,7 +106,7 @@ export async function logAction(data: LogData): Promise<void> {
         }
 
         if (!webhookUrl) {
-            console.log(`[Logger] No webhook configured for guild ${data.guild.id}, skipping log for: ${data.action}`);
+
             return;
         }
 
@@ -164,14 +163,7 @@ export async function logAction(data: LogData): Promise<void> {
 
         if (!response.ok) {
             const errorText = await response.text().catch(() => 'Unknown error');
-            console.error(`[Logger] Webhook failed for guild ${data.guild.id}:`, {
-                status: response.status,
-                statusText: response.statusText,
-                error: errorText,
-                action: data.action,
-            });
-            
-            // If webhook is invalid (deleted), we could optionally clear it from DB
+
             if (response.status === 404 || response.status === 401) {
                 console.warn(`[Logger] Webhook appears to be invalid for guild ${data.guild.id}. Consider clearing it.`);
             }
@@ -179,6 +171,6 @@ export async function logAction(data: LogData): Promise<void> {
             console.log(`[Logger] Successfully sent ${data.action} log for guild ${data.guild.id} in ${Date.now() - startTime}ms`);
         }
     } catch (err) {
-        console.error(`[Logger] Failed to send log for ${data.action} in guild ${data.guild.id}:`, err);
+
     }
 }

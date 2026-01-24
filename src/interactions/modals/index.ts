@@ -4,6 +4,7 @@ import { safeSetChannelName, safeSetUserLimit, safeSetBitrate, validateVoiceChan
 import prisma from '../../utils/database';
 import { logAction, LogAction } from '../../utils/logger';
 import { isPvcPaused } from '../../utils/pauseManager';
+import { VoiceStateService } from '../../services/voiceStateService';
 
 export async function handleModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
     const { customId, guild } = interaction;
@@ -111,11 +112,8 @@ async function handleLimitModal(interaction: ModalSubmitInteraction, channelId: 
 
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
-    const result = await safeSetUserLimit(interaction.guild!, channelId, limit);
-    if (!result.success) {
-        await interaction.editReply({ content: `Failed to set limit: ${result.error}` });
-        return;
-    }
+    // Update DB first, then enforce - this is the ONLY valid way to set user limit
+    await VoiceStateService.setUserLimit(channelId, limit);
 
     const channel = await validateVoiceChannel(interaction.guild!, channelId);
     await logAction({

@@ -16,6 +16,7 @@ import {
 import { getChannelByOwner, getChannelState, transferOwnership, unregisterChannel, getGuildChannels, addTempPermittedUsers, getTeamChannelByOwner, getTeamChannelState } from '../../utils/voiceManager';
 import { executeWithRateLimit, Priority } from '../../utils/rateLimit';
 import { safeEditPermissions, validateVoiceChannel } from '../../utils/discordApi';
+import { VoiceStateService } from '../../services/voiceStateService';
 import prisma from '../../utils/database';
 import { BUTTON_EMOJI_MAP } from '../../utils/canvasGenerator';
 import { logAction, LogAction } from '../../utils/logger';
@@ -391,7 +392,10 @@ async function handleLock(interaction: ButtonInteraction, channel: any): Promise
         addTempPermittedUsers(channel.id, memberIds);
     }
 
-    await updateChannelPermission(interaction, channel, { Connect: false }, '🔒 Your voice channel has been locked.');
+    // Update DB first, then enforce - this is the ONLY valid way to lock a channel
+    await VoiceStateService.setLock(channel.id, true);
+    
+    await interaction.reply({ content: '🔒 Your voice channel has been locked.', ephemeral: true });
     await logAction({
         action: LogAction.CHANNEL_LOCKED,
         guild: interaction.guild!,
@@ -403,7 +407,10 @@ async function handleLock(interaction: ButtonInteraction, channel: any): Promise
 }
 
 async function handleUnlock(interaction: ButtonInteraction, channel: any): Promise<void> {
-    await updateChannelPermission(interaction, channel, { Connect: null }, '🔓 Your voice channel has been unlocked.');
+    // Update DB first, then enforce - this is the ONLY valid way to unlock a channel
+    await VoiceStateService.setLock(channel.id, false);
+    
+    await interaction.reply({ content: '🔓 Your voice channel has been unlocked.', ephemeral: true });
     await logAction({
         action: LogAction.CHANNEL_UNLOCKED,
         guild: interaction.guild!,
@@ -659,10 +666,8 @@ async function handleClaim(
 
     const newOwner = await guild.members.fetch(userId);
 
-    // Record bot edit before modifying channel
-    // Record bot edit before modifying channel
     recordBotEdit(voiceChannelId);
-    
+
     await executeWithRateLimit(`perms:${voiceChannelId}`, async () => {
         await channel.permissionOverwrites.delete(channelState.ownerId).catch(() => { });
         await channel.permissionOverwrites.edit(userId, {

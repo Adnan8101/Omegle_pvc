@@ -58,8 +58,7 @@ export async function execute(client: PVCClient): Promise<void> {
             }
         }
 
-        console.log(`[Ready] Bot is ready! Loaded ${guildSettings.length} guild settings and ${teamChannels.length} team channels.`);
     } catch (error) {
-        console.error('[Ready] Error loading guild settings:', error);
+
     }
 }

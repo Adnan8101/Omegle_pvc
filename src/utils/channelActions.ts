@@ -27,9 +27,8 @@ export async function transferChannelOwnership(
     const channel = guild.channels.cache.get(channelId);
     if (!channel || !channel.isVoiceBased()) return;
 
-    // Record bot edit FIRST before any other operations to prevent self-punishment
     recordBotEdit(channelId);
-    
+
     const oldOwnerFriends = !isTeamChannel ? await getCachedOwnerPerms(guild.id, currentOwnerId) : [];
     const newOwnerFriends = !isTeamChannel ? await getCachedOwnerPerms(guild.id, newOwnerId) : [];
 

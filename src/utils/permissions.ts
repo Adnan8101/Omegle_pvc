@@ -109,7 +109,7 @@ export function getPermitPermissions(): { allow: bigint; deny: bigint } {
 export function getBanPermissions(): { allow: bigint; deny: bigint } {
     return {
         allow: 0n,
-        deny: PermissionsBitField.Flags.ViewChannel | PermissionsBitField.Flags.Connect,
+        deny: PermissionsBitField.Flags.Connect,
     };
 }
 
