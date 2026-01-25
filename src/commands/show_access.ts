@@ -4,23 +4,20 @@ import {
     MessageFlags,
     type ChatInputCommandInteraction,
     EmbedBuilder,
+    ChannelType,
+    ButtonBuilder,
+    ButtonStyle,
+    ActionRowBuilder,
 } from 'discord.js';
 import prisma from '../utils/database';
 import type { Command } from '../client';
-
-const DEVELOPER_IDS = ['929297205796417597', '1267528540707098779', '1305006992510947328'];
+import { getChannelByOwner, getTeamChannelByOwner } from '../utils/voiceManager';
 
 const data = new SlashCommandBuilder()
     .setName('show_access')
-    .setDescription('Show all access permissions for a user (Bot Developer only)')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .setDMPermission(false)
-    .addUserOption(option =>
-        option
-            .setName('user')
-            .setDescription('The user to check')
-            .setRequired(true)
-    );
+    .setDescription('Show information about your voice channel and access permissions')
+    .setDefaultMemberPermissions(PermissionFlagsBits.UseApplicationCommands)
+    .setDMPermission(false);
 
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guild) {
@@ -28,153 +25,147 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         return;
     }
 
-    // Only bot developers can use this
-    if (!DEVELOPER_IDS.includes(interaction.user.id)) {
-        await interaction.reply({ content: '❌ This command is only available to bot developers.', flags: [MessageFlags.Ephemeral] });
+    await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+
+    // Find the user's owned channel (PVC or Team VC)
+    let channelId = getChannelByOwner(interaction.guild.id, interaction.user.id);
+    if (!channelId) {
+        channelId = getTeamChannelByOwner(interaction.guild.id, interaction.user.id);
+    }
+
+    // If no owned channel, show permanent access list
+    if (!channelId) {
+        const permanentAccess = await prisma.ownerPermission.findMany({
+            where: { guildId: interaction.guild.id, ownerId: interaction.user.id },
+            orderBy: { createdAt: 'desc' },
+        });
+
+        if (permanentAccess.length === 0) {
+            const embed = new EmbedBuilder()
+                .setColor(0x5865F2)
+                .setTitle('Permanent Access List')
+                .setDescription('You have no users with permanent access.')
+                .setFooter({ text: 'Use /permanent_access add @user to add someone' })
+                .setTimestamp();
+
+            await interaction.editReply({ embeds: [embed] });
+            return;
+        }
+
+        const userList = permanentAccess.map((p, i) => `${i + 1}. <@${p.targetId}>`).join('\n');
+
+        const embed = new EmbedBuilder()
+            .setColor(0x5865F2)
+            .setTitle('Permanent Access List')
+            .setDescription(userList)
+            .setFooter({ text: `${permanentAccess.length} user(s) • /permanent_access add/remove` })
+            .setTimestamp();
+
+        await interaction.editReply({ embeds: [embed] });
         return;
     }
 
-    const targetUser = interaction.options.getUser('user', true);
+    // Get channel data
+    const channel = interaction.guild.channels.cache.get(channelId);
 
-    await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+    const pvcData = await prisma.privateVoiceChannel.findUnique({
+        where: { channelId },
+        include: { permissions: true },
+    });
 
-    try {
-        // Get all PVCs in this guild first
-        const guildPVCs = await prisma.privateVoiceChannel.findMany({
-            where: { guildId: interaction.guild.id },
-            select: { channelId: true, ownerId: true },
-        });
-        const pvcChannelIds = guildPVCs.map(p => p.channelId);
+    const teamData = await prisma.teamVoiceChannel.findUnique({
+        where: { channelId },
+        include: { permissions: true },
+    });
 
-        // Get all Team VCs in this guild
-        const guildTeamVCs = await prisma.teamVoiceChannel.findMany({
-            where: { guildId: interaction.guild.id },
-            select: { channelId: true, ownerId: true, teamType: true },
-        });
-        const teamChannelIds = guildTeamVCs.map(t => t.channelId);
-
-        // Get PVC permissions for this user in guild channels
-        const pvcPermissions = await prisma.voicePermission.findMany({
-            where: {
-                targetId: targetUser.id,
-                targetType: 'user',
-                channelId: { in: pvcChannelIds },
-            },
-        });
-
-        // Get Team VC permissions for this user in guild channels
-        const teamPermissions = await prisma.teamVoicePermission.findMany({
-            where: {
-                targetId: targetUser.id,
-                targetType: 'user',
-                channelId: { in: teamChannelIds },
-            },
-        });
-
-        // Get permanent access grants
-        const permanentAccess = await prisma.ownerPermission.findMany({
-            where: {
-                guildId: interaction.guild.id,
-                targetId: targetUser.id,
-                targetType: 'user',
-            },
-        });
-
-        // Build embed
+    if (!pvcData && !teamData) {
         const embed = new EmbedBuilder()
-            .setColor(0x5865F2)
-            .setTitle(`🔍 Access Overview for ${targetUser.username}`)
-            .setThumbnail(targetUser.displayAvatarURL())
-            .setTimestamp();
-
-        // PVC Permissions
-        const pvcPermitList: string[] = [];
-        const pvcBanList: string[] = [];
-
-        for (const perm of pvcPermissions) {
-            const channelMention = `<#${perm.channelId}>`;
-            if (perm.permission === 'permit') {
-                pvcPermitList.push(channelMention);
-            } else if (perm.permission === 'ban') {
-                pvcBanList.push(channelMention);
-            }
-        }
-
-        if (pvcPermitList.length > 0) {
-            embed.addFields({
-                name: `✅ PVC Access (${pvcPermitList.length})`,
-                value: pvcPermitList.slice(0, 10).join(', ') + (pvcPermitList.length > 10 ? `\n...and ${pvcPermitList.length - 10} more` : ''),
-                inline: false,
-            });
-        }
-
-        if (pvcBanList.length > 0) {
-            embed.addFields({
-                name: `🚫 PVC Blocked (${pvcBanList.length})`,
-                value: pvcBanList.slice(0, 10).join(', ') + (pvcBanList.length > 10 ? `\n...and ${pvcBanList.length - 10} more` : ''),
-                inline: false,
-            });
-        }
-
-        // Team VC Permissions
-        const teamPermitList: string[] = [];
-        const teamBanList: string[] = [];
-
-        for (const perm of teamPermissions) {
-            const channelMention = `<#${perm.channelId}>`;
-            if (perm.permission === 'permit') {
-                teamPermitList.push(channelMention);
-            } else if (perm.permission === 'ban') {
-                teamBanList.push(channelMention);
-            }
-        }
-
-        if (teamPermitList.length > 0) {
-            embed.addFields({
-                name: `✅ Team VC Access (${teamPermitList.length})`,
-                value: teamPermitList.slice(0, 10).join(', ') + (teamPermitList.length > 10 ? `\n...and ${teamPermitList.length - 10} more` : ''),
-                inline: false,
-            });
-        }
-
-        if (teamBanList.length > 0) {
-            embed.addFields({
-                name: `🚫 Team VC Blocked (${teamBanList.length})`,
-                value: teamBanList.slice(0, 10).join(', ') + (teamBanList.length > 10 ? `\n...and ${teamBanList.length - 10} more` : ''),
-                inline: false,
-            });
-        }
-
-        // Permanent Access
-        if (permanentAccess.length > 0) {
-            const permanentOwners = permanentAccess.map(pa => `<@${pa.ownerId}>`).slice(0, 10);
-            embed.addFields({
-                name: `⭐ Permanent Access (${permanentAccess.length})`,
-                value: `Can access channels owned by:\n${permanentOwners.join(', ')}` + (permanentAccess.length > 10 ? `\n...and ${permanentAccess.length - 10} more` : ''),
-                inline: false,
-            });
-        }
-
-        // Summary
-        const totalAccess = pvcPermitList.length + teamPermitList.length;
-        const totalBlocked = pvcBanList.length + teamBanList.length;
-
-        if (totalAccess === 0 && totalBlocked === 0 && permanentAccess.length === 0) {
-            embed.setDescription('❌ This user has no access permissions, blocks, or permanent access grants.');
-        } else {
-            embed.setDescription(
-                `**Summary:**\n` +
-                `• Access: ${totalAccess} channel${totalAccess !== 1 ? 's' : ''}\n` +
-                `• Blocked: ${totalBlocked} channel${totalBlocked !== 1 ? 's' : ''}\n` +
-                `• Permanent: ${permanentAccess.length} owner${permanentAccess.length !== 1 ? 's' : ''}`
-            );
-        }
-
+            .setDescription('Channel data not found.')
+            .setColor(0xFF0000);
         await interaction.editReply({ embeds: [embed] });
-    } catch (error) {
-        console.error('[ShowAccess] Error:', error);
-        await interaction.editReply({ content: '❌ An error occurred while fetching access information.' });
+        return;
     }
+
+    const channelData = pvcData || teamData;
+    const isTeamChannel = Boolean(teamData);
+    const owner = interaction.guild.members.cache.get(channelData!.ownerId);
+    const permittedUsers = channelData!.permissions.filter(p => p.permission === 'permit' && p.targetType === 'user');
+    const bannedUsers = channelData!.permissions.filter(p => p.permission === 'ban' && p.targetType === 'user');
+
+    const permanentCount = await prisma.ownerPermission.count({
+        where: { guildId: interaction.guild.id, ownerId: interaction.user.id },
+    });
+
+    const channelTypeDisplay = isTeamChannel
+        ? `Team Channel (${teamData!.teamType})`
+        : 'Private Voice Channel';
+
+    const embed = new EmbedBuilder()
+        .setTitle('Voice Channel Information')
+        .setColor(0x5865F2)
+        .addFields(
+            { name: 'Type', value: channelTypeDisplay, inline: true },
+            { name: 'Channel', value: channel?.name || 'Unknown', inline: true },
+            { name: 'Owner', value: owner ? `${owner}` : `<@${channelData!.ownerId}>`, inline: true },
+            { name: 'Members', value: channel && channel.type === ChannelType.GuildVoice ? `${channel.members.size}` : '-', inline: true },
+        );
+
+    if (permittedUsers.length > 0) {
+        const userMentions = permittedUsers.slice(0, 10).map(p => `<@${p.targetId}>`).join(', ');
+        const more = permittedUsers.length > 10 ? ` +${permittedUsers.length - 10} more` : '';
+        embed.addFields({ name: `Permitted (${permittedUsers.length})`, value: userMentions + more, inline: false });
+    }
+
+    if (bannedUsers.length > 0) {
+        const bannedMentions = bannedUsers.slice(0, 5).map(p => `<@${p.targetId}>`).join(', ');
+        const more = bannedUsers.length > 5 ? ` +${bannedUsers.length - 5} more` : '';
+        embed.addFields({ name: `Blocked (${bannedUsers.length})`, value: bannedMentions + more, inline: false });
+    }
+
+    embed.addFields({ name: 'Permanent Access', value: `${permanentCount} user(s)`, inline: true });
+    embed.setFooter({ text: 'Use /permanent_access to manage trusted users' }).setTimestamp();
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`list_permanent_${interaction.user.id}`)
+            .setLabel('View Permanent Access')
+            .setStyle(ButtonStyle.Secondary)
+    );
+
+    const reply = await interaction.editReply({ embeds: [embed], components: [row] });
+
+    // Set up button collector
+    const collector = reply.createMessageComponentCollector({
+        filter: (i) => i.user.id === interaction.user.id && i.customId === `list_permanent_${interaction.user.id}`,
+        time: 60000,
+        max: 1,
+    });
+
+    collector.on('collect', async (buttonInteraction) => {
+        const permanentAccess = await prisma.ownerPermission.findMany({
+            where: { guildId: interaction.guild!.id, ownerId: interaction.user.id },
+            orderBy: { createdAt: 'desc' },
+        });
+
+        const permEmbed = new EmbedBuilder()
+            .setColor(0x5865F2)
+            .setTitle('Permanent Access List');
+
+        if (permanentAccess.length === 0) {
+            permEmbed.setDescription('No users with permanent access.');
+        } else {
+            const userList = permanentAccess.map((p, i) => `${i + 1}. <@${p.targetId}>`).join('\n');
+            permEmbed.setDescription(userList);
+        }
+
+        permEmbed.setFooter({ text: '/permanent_access add/remove' }).setTimestamp();
+
+        await buttonInteraction.update({ embeds: [permEmbed], components: [] }).catch(() => { });
+    });
+
+    collector.on('end', () => {
+        interaction.editReply({ components: [] }).catch(() => { });
+    });
 }
 
 export const command: Command = { data: data as any, execute };
