@@ -60,7 +60,18 @@ export async function execute(
     newState: VoiceState
 ): Promise<void> {
     const member = newState.member || oldState.member;
-    if (!member || member.user.bot) return;
+    if (!member) return;
+
+    // Handle bots separately - they get automatic access
+    if (member.user.bot) {
+        if (newState.channelId && newState.channelId !== oldState.channelId) {
+            await handleBotJoin(client, newState);
+        }
+        if (oldState.channelId && oldState.channelId !== newState.channelId) {
+            await handleBotLeave(client, oldState);
+        }
+        return;
+    }
 
     if (newState.channelId && newState.channelId !== oldState.channelId) {
         const wasKicked = await handleAccessProtection(client, newState);
@@ -71,6 +82,58 @@ export async function execute(
 
     if (oldState.channelId && oldState.channelId !== newState.channelId) {
         await handleLeave(client, oldState);
+    }
+}
+
+async function handleBotJoin(client: PVCClient, state: VoiceState): Promise<void> {
+    const { channelId, guild, member } = state;
+    if (!channelId || !member || !member.user.bot) return;
+
+    // Check if this is a managed channel (PVC or Team VC)
+    const dbState = await VoiceStateService.getVCState(channelId);
+    if (!dbState) return;
+
+    const channel = guild.channels.cache.get(channelId);
+    if (!channel || channel.type !== ChannelType.GuildVoice) return;
+
+    // Grant bot Connect permission automatically
+    try {
+        recordBotEdit(channelId);
+        await executeWithRateLimit(
+            `perms:${channelId}:${member.id}`,
+            () => channel.permissionOverwrites.edit(member.id, {
+                ViewChannel: true,
+                Connect: true,
+                Speak: true,
+            }),
+            Priority.NORMAL
+        );
+    } catch (err) {
+        console.error(`[BotJoin] Failed to grant permissions to bot ${member.id}:`, err);
+    }
+}
+
+async function handleBotLeave(client: PVCClient, state: VoiceState): Promise<void> {
+    const { channelId, guild, member } = state;
+    if (!channelId || !member || !member.user.bot) return;
+
+    // Check if this is a managed channel (PVC or Team VC)
+    const dbState = await VoiceStateService.getVCState(channelId);
+    if (!dbState) return;
+
+    const channel = guild.channels.cache.get(channelId);
+    if (!channel || channel.type !== ChannelType.GuildVoice) return;
+
+    // Remove bot permissions when they leave
+    try {
+        recordBotEdit(channelId);
+        await executeWithRateLimit(
+            `perms:${channelId}:${member.id}`,
+            () => channel.permissionOverwrites.delete(member.id),
+            Priority.NORMAL
+        );
+    } catch (err) {
+        console.error(`[BotLeave] Failed to remove permissions from bot ${member.id}:`, err);
     }
 }
 
@@ -128,16 +191,7 @@ async function handleAccessProtection(
         return true;
     }
 
-    // 2. Bot protection (non-whitelisted bots)
-    if (member.user.bot && !WHITELISTED_BOT_IDS.has(member.user.id)) {
-
-        try {
-            await member.voice.disconnect();
-        } catch { }
-        return true;
-    }
-
-    // 3. Check if this is a managed channel (PVC or Team VC)
+    // 2. Check if this is a managed channel (PVC or Team VC)
     const dbState = await VoiceStateService.getVCState(newChannelId);
 
     if (!dbState) return false;
@@ -151,7 +205,7 @@ async function handleAccessProtection(
     const dbPermissions = dbState.permissions || [];
     const memberRoleIds = member.roles.cache.map(r => r.id);
 
-    // 4. Check channel-specific blocks
+    // 4. Check channel-specific blocks (HIGHEST PRIORITY - bans override everything)
     const isUserBanned = dbPermissions.some(
         (p: any) => p.targetId === member.id && p.permission === 'ban'
     );
@@ -194,6 +248,19 @@ async function handleAccessProtection(
         return true;
     }
 
+    // 4.5 Check permanent access (bypasses lock/hidden/capacity, but NOT bans)
+    const hasPermanentAccess = await prisma.ownerPermission.findFirst({
+        where: {
+            guildId: guild.id,
+            ownerId: ownerId,
+            targetId: member.id,
+            targetType: 'user',
+        },
+    });
+    if (hasPermanentAccess) {
+        return false; // Allow access, bypass all restrictions except ban
+    }
+
     // 5. Check admin strictness whitelist FIRST (before any restrictions)
     // Get strictness settings and whitelist
     const isTeamChannel = 'teamType' in dbState;
@@ -224,20 +291,34 @@ async function handleAccessProtection(
     const isHidden = dbState.isHidden;
     
     // For Team VCs, use teamType-based limits. For PVCs, use userLimit
+    // CRITICAL: User has ALREADY joined when this check runs (they're in newState)
+    // So we check how many are in the channel INCLUDING the person who just joined
     let isFull = false;
+    let actualMembers = 0;
     if ('teamType' in dbState && dbState.teamType) {
-        // Team VC - use TEAM_USER_LIMITS (exact capacity, use >)
+        // Team VC - use TEAM_USER_LIMITS
         // Note: DB stores UPPERCASE (DUO, TRIO, SQUAD), convert to lowercase for lookup
-        // User has ALREADY joined at this point. Check > so base members join freely, extras need permit.
-        // Example: DUO (2) - members 1-2 join freely, 3rd+ needs permit (!au) or whitelist admin
         const teamTypeLower = (dbState.teamType as string).toLowerCase() as keyof typeof TEAM_USER_LIMITS;
         const teamLimit = TEAM_USER_LIMITS[teamTypeLower];
         if (teamLimit) {
-            isFull = channel.members.size > teamLimit;
+            // Use newState.channel to get live member count (includes the person who just joined)
+            const voiceChannel = newState.channel;
+            if (voiceChannel && voiceChannel.type === ChannelType.GuildVoice) {
+                actualMembers = voiceChannel.members.size;
+                // Channel is "full" if members EXCEED the limit
+                // DUO (2): 1-2 members OK, 3+ needs permit
+                // TRIO (3): 1-3 members OK, 4+ needs permit  
+                // SQUAD (4): 1-4 members OK, 5+ needs permit
+                isFull = actualMembers > teamLimit;
+            }
         }
     } else {
         // PVC - use userLimit from DB
-        isFull = dbState.userLimit > 0 && channel.members.size > dbState.userLimit;
+        const voiceChannel = newState.channel;
+        if (voiceChannel && voiceChannel.type === ChannelType.GuildVoice) {
+            actualMembers = voiceChannel.members.size;
+            isFull = dbState.userLimit > 0 && actualMembers > dbState.userLimit;
+        }
     }
 
     if (!isLocked && !isHidden && !isFull) return false;
