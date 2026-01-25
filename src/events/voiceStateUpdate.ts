@@ -226,13 +226,14 @@ async function handleAccessProtection(
     // For Team VCs, use teamType-based limits. For PVCs, use userLimit
     let isFull = false;
     if ('teamType' in dbState && dbState.teamType) {
-        // Team VC - use TEAM_USER_LIMITS (exact capacity, use >=)
+        // Team VC - use TEAM_USER_LIMITS (exact capacity, use >)
         // Note: DB stores UPPERCASE (DUO, TRIO, SQUAD), convert to lowercase for lookup
-        // User has ALREADY joined at this point. Check >= so users at capacity need permit.
+        // User has ALREADY joined at this point. Check > so base members join freely, extras need permit.
+        // Example: DUO (2) - members 1-2 join freely, 3rd+ needs permit (!au) or whitelist admin
         const teamTypeLower = (dbState.teamType as string).toLowerCase() as keyof typeof TEAM_USER_LIMITS;
         const teamLimit = TEAM_USER_LIMITS[teamTypeLower];
         if (teamLimit) {
-            isFull = channel.members.size >= teamLimit;
+            isFull = channel.members.size > teamLimit;
         }
     } else {
         // PVC - use userLimit from DB
