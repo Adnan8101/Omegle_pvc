@@ -489,12 +489,32 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
         }
 
         if (isTeamChannel) {
+            // Delete old permits/bans first
             await prisma.teamVoicePermission.deleteMany({
                 where: { channelId, targetId: { in: userIdsToRemove } },
             });
+            // Create BAN entries for removed users
+            await prisma.teamVoicePermission.createMany({
+                data: userIdsToRemove.map(userId => ({
+                    channelId,
+                    targetId: userId,
+                    targetType: 'user' as const,
+                    permission: 'ban' as const,
+                })),
+            });
         } else {
+            // Delete old permits/bans first
             await prisma.voicePermission.deleteMany({
                 where: { channelId, targetId: { in: userIdsToRemove } },
+            });
+            // Create BAN entries for removed users
+            await prisma.voicePermission.createMany({
+                data: userIdsToRemove.map(userId => ({
+                    channelId,
+                    targetId: userId,
+                    targetType: 'user' as const,
+                    permission: 'ban' as const,
+                })),
             });
         }
 
