@@ -104,14 +104,26 @@ export async function execute(client: PVCClient, message: Message): Promise<void
 
     const isGuildMember = message.guild.members.cache.has(message.author.id);
     if (isPvcOwner && isGuildMember && (message.content.startsWith('!au ') || message.content.startsWith('!ru '))) {
+        // Get settings to check if this is a command channel
+        const pvcSettings = await getGuildSettings(message.guild.id);
+        const teamVcSettings = await prisma.teamVoiceSettings.findUnique({ where: { guildId: message.guild.id } });
+        
+        const pvcOwnershipCheck = getChannelByOwner(message.guild.id, message.author.id);
+        const teamOwnershipCheck = getTeamChannelByOwner(message.guild.id, message.author.id);
+        const isInOwnedVcChatCheck = (pvcOwnershipCheck === message.channel.id) || (teamOwnershipCheck === message.channel.id);
+        
+        const isInPvcCmdChannel = pvcSettings?.commandChannelId && message.channel.id === pvcSettings.commandChannelId;
+        const isInTeamCmdChannel = teamVcSettings?.commandChannelId && message.channel.id === teamVcSettings.commandChannelId;
+        const isInCmdChannel = isInPvcCmdChannel || isInTeamCmdChannel || isInOwnedVcChatCheck;
+        
         const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
         const commandName = args.shift()?.toLowerCase();
 
         if (commandName === 'au' || commandName === 'adduser') {
-            await handleAddUser(message, undefined, args);
+            await handleAddUser(message, undefined, args, isInCmdChannel);
             return;
         } else if (commandName === 'ru' || commandName === 'removeuser') {
-            await handleRemoveUser(message, undefined, args);
+            await handleRemoveUser(message, undefined, args, isInCmdChannel);
             return;
         }
     }
