@@ -68,12 +68,17 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     }
 
     // 4. Send to User
-    const user = await interaction.guild.members.fetch(ticket.userId).catch(() => null);
+    const { client } = await import('../../client');
+    const user = await client.users.fetch(ticket.userId).catch(() => null);
     if (user) {
         try {
-            await user.send(`**Ticket Closed**\nReason: ${reason}\n\nSend a new message to open a new ticket.`);
+            await user.send({
+                content: `**Ticket Closed in ${interaction.guild.name}**\nReason: ${reason}\n\nSend a new message to open a new ticket.`,
+                files: [transcript]
+            });
         } catch (e) {
-            // User likely has DMs closed
+            // User likely has DMs closed - log this
+            await interaction.followUp({ content: '⚠️ Could not send DM to user (DMs may be disabled)', flags: [MessageFlags.Ephemeral] });
         }
     }
 

@@ -178,11 +178,11 @@ export async function execute(client: PVCClient, message: Message): Promise<void
     switch (commandName) {
         case 'adduser':
         case 'au':
-            await handleAddUser(message, ownedChannelId, args);
+            await handleAddUser(message, ownedChannelId, args, isInCommandChannel || isInOwnedVcChat);
             break;
         case 'removeuser':
         case 'ru':
-            await handleRemoveUser(message, ownedChannelId, args);
+            await handleRemoveUser(message, ownedChannelId, args, isInCommandChannel || isInOwnedVcChat);
             break;
         case 'list':
         case 'l':
@@ -191,7 +191,7 @@ export async function execute(client: PVCClient, message: Message): Promise<void
     }
 }
 
-async function handleAddUser(message: Message, channelId: string | undefined, args: string[]): Promise<void> {
+async function handleAddUser(message: Message, channelId: string | undefined, args: string[], isInCommandChannel: boolean = true): Promise<void> {
     const guild = message.guild!;
 
     const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: message.author.id } });
@@ -241,6 +241,12 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
         channelId = pvcCheck?.channelId || teamCheck?.channelId || undefined;
 
         if (!channelId) {
+            // If in non-command channel, reply with emoji instead of error message
+            if (!isInCommandChannel) {
+                await message.reply('<:cz_pompomShowingtounge:1369378568253210715> <:stolen_emoji_blaze:1369366963813617774>').catch(() => { });
+                return;
+            }
+            
             const embed = new EmbedBuilder()
                 .setDescription('You do not own a voice channel. Create one first by joining the interface channel.')
                 .setColor(0xFF0000);
@@ -255,6 +261,12 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
     const channelOwnerId = pvcData?.ownerId || teamData?.ownerId;
 
     if (channelOwnerId !== message.author.id && message.author.id !== BOT_OWNER_ID) {
+        // If in non-command channel, reply with emoji instead of error message
+        if (!isInCommandChannel) {
+            await message.reply('<:cz_pompomShowingtounge:1369378568253210715> <:stolen_emoji_blaze:1369366963813617774>').catch(() => { });
+            return;
+        }
+        
         const embed = new EmbedBuilder()
             .setDescription('❌ **Access Denied**: You do not own this channel.')
             .setColor(0xFF0000);
@@ -400,7 +412,7 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
     } catch { }
 }
 
-async function handleRemoveUser(message: Message, channelId: string | undefined, args: string[]): Promise<void> {
+async function handleRemoveUser(message: Message, channelId: string | undefined, args: string[], isInCommandChannel: boolean = true): Promise<void> {
     const guild = message.guild!;
 
     const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: message.author.id } });
@@ -450,6 +462,12 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
         channelId = pvcCheck?.channelId || teamCheck?.channelId || undefined;
 
         if (!channelId) {
+            // If in non-command channel, reply with emoji instead of error message
+            if (!isInCommandChannel) {
+                await message.reply('<:cz_pompomShowingtounge:1369378568253210715> <:stolen_emoji_blaze:1369366963813617774>').catch(() => { });
+                return;
+            }
+            
             const embed = new EmbedBuilder()
                 .setDescription('You do not own a voice channel. Create one first by joining the interface channel.')
                 .setColor(0xFF0000);
@@ -464,6 +482,12 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
     const channelOwnerId = pvcData?.ownerId || teamData?.ownerId;
 
     if (channelOwnerId !== message.author.id && message.author.id !== BOT_OWNER_ID) {
+        // If in non-command channel, reply with emoji instead of error message
+        if (!isInCommandChannel) {
+            await message.reply('<:cz_pompomShowingtounge:1369378568253210715> <:stolen_emoji_blaze:1369366963813617774>').catch(() => { });
+            return;
+        }
+        
         const embed = new EmbedBuilder()
             .setDescription('❌ **Access Denied**: You do not own this channel.')
             .setColor(0xFF0000);

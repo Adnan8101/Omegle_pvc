@@ -165,9 +165,12 @@ export class ModMailService {
      * Sanitize username for channel name
      */
     private sanitizeUsername(username: string): string {
-        return username.toLowerCase()
-            .replace(/[^a-z0-9]/g, '') // Remove special chars
+        const sanitized = username.toLowerCase()
+            .replace(/[^a-z0-9-]/g, '') // Keep alphanumeric and hyphens
+            .replace(/^-+|-+$/g, '') // Remove leading/trailing hyphens
             .substring(0, 20); // Truncate
+        
+        return sanitized || 'user'; // Fallback if username becomes empty
     }
 
 
@@ -198,6 +201,7 @@ export class ModMailService {
             return null;
         }
 
+        // Find and clean up any pending tickets
         const pendingTicket = await prisma.modMailTicket.findFirst({
             where: {
                 userId: user.id,
@@ -325,6 +329,7 @@ export class ModMailService {
         });
 
         if (pendingTicket) {
+            await message.reply('⏳ You already have a pending ticket. Please react to the confirmation message.');
             return;
         }
 
@@ -342,7 +347,7 @@ export class ModMailService {
         }
 
         if (mutualGuilds.length === 0) {
-            // Silently ignore or generic help
+            await message.reply('❌ You are not a member of any servers with modmail configured.');
             return;
         }
 
@@ -394,6 +399,24 @@ export class ModMailService {
     }
 
     private async promptTicketConfirmation(message: Message, guild: Guild, user: User): Promise<void> {
+        // Check if user already has a pending or active ticket in this guild
+        const existingTicket = await prisma.modMailTicket.findFirst({
+            where: {
+                userId: user.id,
+                guildId: guild.id,
+                status: { in: ['PENDING', 'OPEN', 'CLAIMED'] }
+            }
+        });
+
+        if (existingTicket) {
+            if (existingTicket.status === 'PENDING') {
+                await message.reply('⏳ You already have a pending ticket. Please react to the confirmation message.');
+            } else {
+                await message.reply('❌ You already have an active ticket in this server.');
+            }
+            return;
+        }
+
         // Professional Confirmation Embed
         const embed = new EmbedBuilder()
             .setTitle('Open Support Ticket')
@@ -441,7 +464,7 @@ export class ModMailService {
         }
 
         await webhook.send({
-            content: message.content || undefined, // Webhook errors if content is empty string and no files, but usually message.content is safe if we handle attachments logic right
+            content: message.content || (files.length > 0 ? null : 'Empty message'), // Webhooks require content or files
             username: message.author.username,
             avatarURL: message.author.displayAvatarURL(),
             files: files

@@ -220,7 +220,8 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
             }
         }
 
-        const user = await interaction.guild!.members.fetch(ticket.userId).catch(() => null);
+        const { client } = await import('../../client');
+        const user = await client.users.fetch(ticket.userId).catch(() => null);
         if (user) {
             await user.send({
                 content: `Your ticket in **${interaction.guild!.name}** has been closed.\n**Reason:** Closed via Button`,

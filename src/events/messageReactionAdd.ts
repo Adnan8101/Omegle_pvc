@@ -39,6 +39,11 @@ export async function handleMessageReactionAdd(reaction: MessageReaction | Parti
 
     if (modmailTicket) {
         console.log(`[Reaction] Found Pending Ticket for Message ${message.id}`);
+        // Verify that the user reacting is the ticket owner
+        if (modmailTicket.userId !== user.id) {
+            return; // Ignore reactions from other users
+        }
+        
         if (reaction.emoji.name === '✅') {
             // Open Ticket
             const guild = client.guilds.cache.get(modmailTicket.guildId);
