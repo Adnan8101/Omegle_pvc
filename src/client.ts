@@ -24,8 +24,10 @@ export class PVCClient extends Client {
                 GatewayIntentBits.GuildMessages,
                 GatewayIntentBits.MessageContent,
                 GatewayIntentBits.GuildMessageReactions,
+                GatewayIntentBits.DirectMessages,
+                GatewayIntentBits.DirectMessageReactions,
             ],
-            partials: [Partials.Channel, Partials.Reaction],
+            partials: [Partials.Channel, Partials.Reaction, Partials.Message],
         });
     }
 }

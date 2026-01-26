@@ -13,6 +13,9 @@ const TRACKING_TIMEOUT = 10000;
 const CLEANUP_INTERVAL = 5 * 60 * 1000;
 const ACCESS_GRANT_THRESHOLD = 3;
 
+// Track frequency of !au command usage per user (resets every 3 uses)
+const auFrequencyCounter = new Map<string, number>();
+
 setInterval(() => {
     const now = Date.now();
     for (const [key, usages] of recentCommands.entries()) {
@@ -109,4 +112,24 @@ export async function resetAccessGrant(
     await prisma.userAccessGrant.deleteMany({
         where: { guildId, ownerId, targetId },
     });
+}
+
+/**
+ * Track frequency of !au commands and return true every 3rd use
+ * Counter resets after hitting threshold and starts counting again
+ */
+export function trackAuFrequency(userId: string, guildId: string): boolean {
+    const key = `${guildId}:${userId}:au_freq`;
+    const currentCount = auFrequencyCounter.get(key) || 0;
+    const newCount = currentCount + 1;
+
+    if (newCount >= 3) {
+        // Reset counter and show tip
+        auFrequencyCounter.set(key, 0);
+        return true;
+    } else {
+        // Increment counter
+        auFrequencyCounter.set(key, newCount);
+        return false;
+    }
 }

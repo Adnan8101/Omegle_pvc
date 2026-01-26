@@ -12,11 +12,13 @@ import {
     EmbedBuilder,
     ButtonBuilder,
     ButtonStyle,
+    MessageFlags,
 } from 'discord.js';
 import { getChannelByOwner, getChannelState, transferOwnership, unregisterChannel, getGuildChannels, addTempPermittedUsers, getTeamChannelByOwner, getTeamChannelState } from '../../utils/voiceManager';
 import { executeWithRateLimit, Priority } from '../../utils/rateLimit';
 import { safeEditPermissions, validateVoiceChannel } from '../../utils/discordApi';
 import { VoiceStateService } from '../../services/voiceStateService';
+import { modMailService } from '../../services/modmailService';
 import prisma from '../../utils/database';
 import { BUTTON_EMOJI_MAP } from '../../utils/canvasGenerator';
 import { logAction, LogAction } from '../../utils/logger';
@@ -137,6 +139,103 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
         );
 
         await interaction.update({ embeds: [embed], components: [row] });
+        return;
+    }
+
+    if (customId === 'modmail_userinfo') {
+        await modMailService.handleUserInfo(interaction);
+        return;
+    }
+
+    if (customId === 'modmail_claim') {
+        await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+        const { command: claimCmd } = await import('../../commands/modmail/claim');
+        // Hack: adapt ButtonInteraction to ChatInputCommandInteraction-like enough for execute
+        // Or better, refactor command to sharing logic.
+        // For now, let's call logic directly or use a helper.
+        // The command uses interaction.channelId and interaction.user.
+        // It replys.
+
+        // Actually, let's just implement the small logic here or in service.
+        // User requested buttons.
+        try {
+            const ticket = await prisma.modMailTicket.findFirst({
+                where: { channelId: interaction.channelId, status: 'OPEN' }
+            });
+            if (!ticket) {
+                await interaction.editReply('❌ Ticket is not open or not found.');
+                return;
+            }
+            await prisma.modMailTicket.update({
+                where: { id: ticket.id },
+                data: { status: 'CLAIMED', staffClaimedBy: interaction.user.id }
+            });
+            const channel = interaction.channel as any;
+            const newName = `claimed-${channel.name.replace('claimed-', '')}`;
+            await channel.setName(newName).catch(() => { });
+            await (interaction.channel as any)?.send(`👮‍♂️ Ticket claimed by ${interaction.user}`);
+
+            await interaction.editReply('✅ You claimed the ticket.');
+            await modMailService.logModMail(interaction.guild!, 'Ticket Claimed', `Claimed by ${interaction.user}`, [{ name: 'Ticket', value: ticket.userId }]);
+        } catch (e) {
+            await interaction.editReply('Failed to claim ticket.');
+        }
+        return;
+    }
+
+    if (customId === 'modmail_close') {
+        // Close needs a confirmation or simple action
+        // User asked for "Close" button.
+        await interaction.reply({ content: 'Closing...', flags: [MessageFlags.Ephemeral] });
+        const { command: closeCmd } = await import('../../commands/modmail/close');
+        // This is complex because close command generates transcript etc.
+        // Let's call the command handler or replicate logic.
+        // Replicating logic is safest for types.
+
+        const channel = interaction.channel as any;
+        const ticket = await prisma.modMailTicket.findFirst({
+            where: { channelId: channel.id, status: { in: ['OPEN', 'CLAIMED'] } }
+        });
+        if (!ticket) {
+            await interaction.editReply('❌ Ticket not active.');
+            return;
+        }
+
+        await prisma.modMailTicket.update({
+            where: { id: ticket.id },
+            data: { status: 'CLOSED', closedAt: new Date(), closedBy: interaction.user.id }
+        });
+
+        const { transcriptService } = await import('../../services/transcriptService');
+        const transcript = await transcriptService.generateTranscript(channel);
+
+        const settings = await prisma.modMailSettings.findUnique({ where: { guildId: interaction.guild!.id } });
+        if (settings?.logsChannelId) {
+            const logsChannel = interaction.guild!.channels.cache.get(settings.logsChannelId) as any;
+            if (logsChannel) {
+                await logsChannel.send({
+                    content: `📕 **Ticket Closed**\n**User:** <@${ticket.userId}>\n**Closer:** ${interaction.user}\n**Reason:** Button Click\n**Transcript:**`,
+                    files: [transcript]
+                });
+            }
+        }
+
+        const user = await interaction.guild!.members.fetch(ticket.userId).catch(() => null);
+        if (user) {
+            await user.send({
+                content: `Your ticket in **${interaction.guild!.name}** has been closed.\n**Reason:** Closed via Button`,
+                files: [transcript]
+            }).catch(() => { });
+        }
+
+        if (settings?.closedCategoryId) {
+            await channel.setParent(settings.closedCategoryId);
+            await channel.lockPermissions();
+        }
+        const currentName = channel.name.replace('claimed-', '');
+        await channel.setName(`closed-${currentName}`).catch(() => { });
+        await channel.send({ content: `✅ Ticket Closed by ${interaction.user}.` });
+
         return;
     }
 
@@ -394,7 +493,7 @@ async function handleLock(interaction: ButtonInteraction, channel: any): Promise
 
     // Update DB first, then enforce - this is the ONLY valid way to lock a channel
     await VoiceStateService.setLock(channel.id, true);
-    
+
     await interaction.reply({ content: '🔒 Your voice channel has been locked.', ephemeral: true });
     await logAction({
         action: LogAction.CHANNEL_LOCKED,
@@ -409,7 +508,7 @@ async function handleLock(interaction: ButtonInteraction, channel: any): Promise
 async function handleUnlock(interaction: ButtonInteraction, channel: any): Promise<void> {
     // Update DB first, then enforce - this is the ONLY valid way to unlock a channel
     await VoiceStateService.setLock(channel.id, false);
-    
+
     await interaction.reply({ content: '🔓 Your voice channel has been unlocked.', ephemeral: true });
     await logAction({
         action: LogAction.CHANNEL_UNLOCKED,

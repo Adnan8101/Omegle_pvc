@@ -33,6 +33,10 @@ export enum LogAction {
     TEAM_CHANNEL_CREATED = 'Team Channel Created',
     TEAM_CHANNEL_DELETED = 'Team Channel Deleted',
 
+    TICKET_OPENED = 'Ticket Opened',
+    TICKET_CLOSED = 'Ticket Closed',
+    TICKET_FLUSHED = 'Ticket Flushed',
+
     SETTINGS_UPDATED = 'Settings Updated',
     UNAUTHORIZED_CHANGE_REVERTED = '⚠️ Unauthorized Change Reverted',
 }
@@ -76,6 +80,9 @@ const ACTION_COLORS: Record<LogAction, number> = {
     [LogAction.TEAM_SETUP]: 0x00FF00,
     [LogAction.TEAM_CHANNEL_CREATED]: 0x00FF00,
     [LogAction.TEAM_CHANNEL_DELETED]: 0xFF0000,
+    [LogAction.TICKET_OPENED]: 0x00FF00,
+    [LogAction.TICKET_CLOSED]: 0x808080,
+    [LogAction.TICKET_FLUSHED]: 0xFF0000,
     [LogAction.SETTINGS_UPDATED]: 0x3498DB,
     [LogAction.UNAUTHORIZED_CHANGE_REVERTED]: 0xFF0000,
 };

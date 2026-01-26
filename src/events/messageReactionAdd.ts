@@ -1,5 +1,6 @@
 import { type MessageReaction, type User, EmbedBuilder, PartialMessageReaction, PartialUser } from 'discord.js';
 import prisma from '../utils/database';
+import { client } from '../client';
 import { safeSetChannelName } from '../utils/discordApi';
 import { logAction, LogAction } from '../utils/logger';
 
@@ -22,9 +23,56 @@ export async function handleMessageReactionAdd(reaction: MessageReaction | Parti
         }
     }
 
-    if (reaction.emoji.name !== '✅') return;
+    // console.log(`[Reaction] Emoji: ${reaction.emoji.name} User: ${user.id}`);
+
+    // if (reaction.emoji.name !== '✅') return; // FIX: This prevented cancellation handling
 
     const message = reaction.message;
+
+    // --- ModMail Confirmation ---
+    const modmailTicket = await prisma.modMailTicket.findFirst({
+        where: {
+            messageId: message.id,
+            status: 'PENDING'
+        }
+    });
+
+    if (modmailTicket) {
+        console.log(`[Reaction] Found Pending Ticket for Message ${message.id}`);
+        if (reaction.emoji.name === '✅') {
+            // Open Ticket
+            const guild = client.guilds.cache.get(modmailTicket.guildId);
+            if (guild) {
+                const { modMailService } = await import('../services/modmailService');
+                const ticketChannel = await modMailService.createTicket(guild, user as User);
+
+                if (ticketChannel) {
+                    await message.edit({
+                        components: [],
+                        embeds: [new EmbedBuilder()
+                            .setColor(0x00FF00)
+                            .setTitle('✅ Ticket Opened')
+                            .setDescription(`Your ticket has been opened in **${guild.name}**. Wait for a staff member to respond.`)]
+                    });
+                } else {
+                    await message.edit({
+                        components: [],
+                        embeds: [new EmbedBuilder().setColor(0xFF0000).setDescription('Failed to create ticket channel.')]
+                    });
+                }
+            }
+        } else if (reaction.emoji.name === '❌') {
+            // Cancel Ticket
+            await prisma.modMailTicket.delete({ where: { id: modmailTicket.id } });
+            await message.edit({
+                components: [],
+                embeds: [new EmbedBuilder().setColor(0xFF0000).setTitle('❌ Cancelled').setDescription('Ticket creation cancelled.')]
+            });
+        }
+        return;
+    }
+    // ----------------------------
+
     if (!message.guild) return;
 
     const pendingRequest = await prisma.pendingRenameRequest.findUnique({

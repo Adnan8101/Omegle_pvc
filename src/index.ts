@@ -31,6 +31,13 @@ import * as channelUpdateEvent from './events/channelUpdate';
 import * as channelDeleteEvent from './events/channelDelete';
 import { startCleanupInterval, stopCleanupInterval } from './utils/stateManager';
 
+import { command as mmSetup } from './commands/modmail/setup_modmail';
+import { command as mmClaim } from './commands/modmail/claim';
+import { command as mmUnclaim } from './commands/modmail/unclaim';
+import { command as mmAddStaff } from './commands/modmail/addstaff';
+import { command as mmClose } from './commands/modmail/close';
+import { command as mmFlush } from './commands/modmail/flush';
+
 client.commands.set(pvcSetup.data.name, pvcSetup);
 client.commands.set(adminStrictness.data.name, adminStrictness);
 client.commands.set(teamAdminStrictness.data.name, teamAdminStrictness);
@@ -53,6 +60,12 @@ client.commands.set(pvcResume.data.name, pvcResume);
 client.commands.set(globalVcBlock.data.name, globalVcBlock);
 client.commands.set(wvAllowedRoles.data.name, wvAllowedRoles);
 client.commands.set(showAccess.data.name, showAccess);
+client.commands.set(mmSetup.data.name, mmSetup);
+client.commands.set(mmClaim.data.name, mmClaim);
+client.commands.set(mmUnclaim.data.name, mmUnclaim);
+client.commands.set(mmAddStaff.data.name, mmAddStaff);
+client.commands.set(mmClose.data.name, mmClose);
+client.commands.set(mmFlush.data.name, mmFlush);
 
 client.once(readyEvent.name, () => {
     readyEvent.execute(client);

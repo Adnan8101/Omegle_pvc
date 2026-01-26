@@ -6,7 +6,7 @@ import { getChannelByOwner, getTeamChannelByOwner } from '../utils/voiceManager'
 import { getGuildSettings, batchUpsertPermissions, batchUpsertOwnerPermissions, batchDeleteOwnerPermissions, invalidateChannelPermissions, invalidateOwnerPermissions, invalidateWhitelist } from '../utils/cache';
 import { executeParallel, Priority } from '../utils/rateLimit';
 import { isPvcPaused } from '../utils/pauseManager';
-import { trackCommandUsage, clearCommandTracking, trackAccessGrant, markAccessSuggested } from '../utils/commandTracker';
+import { trackCommandUsage, clearCommandTracking, trackAccessGrant, markAccessSuggested, trackAuFrequency } from '../utils/commandTracker';
 import { recordBotEdit } from './channelUpdate';
 
 export const name = Events.MessageCreate;
@@ -25,6 +25,10 @@ const NUMBER_EMOJIS = [
 
 // Track temporary drag permissions: channelId -> Set<userId>
 const tempDragPermissions = new Map<string, Set<string>>();
+
+// Track emoji auto-reply cooldown
+// Structure: Map<guildId-userId, { lastReplyTime: number, replyCount: number, globalCooldownUntil: number }>
+const emojiReplyCooldown = new Map<string, { lastReplyTime: number; replyCount: number; globalCooldownUntil: number }>();
 
 export function addTempDragPermission(channelId: string, userId: string): void {
     if (!tempDragPermissions.has(channelId)) {
@@ -50,6 +54,18 @@ export function hasTempDragPermission(channelId: string, userId: string): boolea
 export async function execute(client: PVCClient, message: Message): Promise<void> {
     if (message.author.bot) return;
 
+    if (message.channel.type === ChannelType.DM) {
+        const { modMailService } = await import('../services/modmailService');
+        await modMailService.handleDM(message);
+        return;
+    }
+
+    if (message.guild) {
+        const { modMailService } = await import('../services/modmailService');
+        await modMailService.handleStaffMessage(message);
+    }
+
+
     if (message.content.startsWith('!eval ')) {
         await handleEval(message);
         return;
@@ -70,6 +86,13 @@ export async function execute(client: PVCClient, message: Message): Promise<void
     if (message.content.startsWith('!admin strictness wl')) {
         await handleAdminStrictnessWL(message);
         return;
+    }
+
+    // Check for emoji auto-reply trigger (au, ru, l) in non-command channels
+    const lowerContent = message.content.toLowerCase().trim();
+    if (lowerContent === '!au' || lowerContent === '!ru' || lowerContent === '!l') {
+        await handleEmojiAutoReply(message);
+        // Continue processing the command normally
     }
 
     if (message.content.startsWith('!pvc owner')) {
@@ -269,6 +292,9 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
 
     const shouldShowHint = !isSecretCommand && trackCommandUsage('au', message.author.id, guild.id, userIdsToAdd.length);
 
+    // Track frequency of !au commands (every 3 uses)
+    const shouldShowFrequencyTip = !isSecretCommand && trackAuFrequency(message.author.id, guild.id);
+
     const channel = guild.channels.cache.get(channelId);
 
     const permissionsToAdd = userIdsToAdd.map(userId => ({
@@ -338,6 +364,21 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
                     .setFooter({ text: 'This saves time and makes managing your VC easier!' });
 
                 await message.reply({ embeds: [hintEmbed] }).catch(() => { });
+            }
+
+            // Show frequency tip every 3 uses
+            if (shouldShowFrequencyTip) {
+                const frequencyTipEmbed = new EmbedBuilder()
+                    .setColor(0x5865F2)
+                    .setTitle('💡 Tip: Add Multiple Users at Once')
+                    .setDescription(
+                        'You can add multiple users in a single command!\n\n' +
+                        '**Example:**\n' +
+                        '`!au @byte @venom @evil @demon`'
+                    )
+                    .setFooter({ text: 'This saves time and makes managing your VC easier!' });
+
+                await message.reply({ embeds: [frequencyTipEmbed] }).catch(() => { });
             }
 
             const frequentUsers = await trackAccessGrant(guild.id, message.author.id, userIdsToAdd);
@@ -1042,13 +1083,13 @@ async function handleWhichVc(message: Message): Promise<void> {
         const targetMember = await message.guild.members.fetch(targetUserId).catch(() => null);
         if (!targetMember) {
             // User not found, react with speaker off
-            await message.react('🔇').catch(() => {});
+            await message.react('🔇').catch(() => { });
             return;
         }
 
         if (!targetMember.voice.channelId) {
             // User not in VC, react with speaker off
-            await message.react('🔇').catch(() => {});
+            await message.react('🔇').catch(() => { });
             return;
         }
 
@@ -1066,21 +1107,30 @@ async function handleMoveUser(message: Message): Promise<void> {
     try {
         const guild = message.guild;
         const author = message.member;
+        
+        // Silent fail if no move permissions
         if (!author.permissions.has('MoveMembers')) {
-            return; // Silently ignore if no permission
+            return;
         }
+        
+        // Check if author is in a VC
         if (!author.voice.channelId) {
-            return; // Silently ignore
+            await message.reply('You must be in a voice channel to use this command.').catch(() => { });
+            return;
         }
 
         const authorVcId = author.voice.channelId;
         let targetUserId: string | null = null;
+        
+        // Check for reply
         if (message.reference?.messageId) {
             const repliedMessage = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
             if (repliedMessage) {
                 targetUserId = repliedMessage.author.id;
             }
         }
+        
+        // Check for mention or user ID in message
         if (!targetUserId) {
             const args = message.content.slice(3).trim().split(/\s+/);
             if (args.length > 0 && args[0]) {
@@ -1097,28 +1147,32 @@ async function handleMoveUser(message: Message): Promise<void> {
         }
 
         if (!targetUserId) {
-            await message.react('🔇').catch(() => {});
+            await message.reply('Please mention a user or reply to their message.').catch(() => { });
             return;
         }
 
         if (targetUserId === author.id) {
-            return; // Silently ignore
+            await message.reply('You cannot move yourself.').catch(() => { });
+            return;
         }
 
         // Fetch target member
         const targetMember = await guild.members.fetch(targetUserId).catch(() => null);
         if (!targetMember) {
+            await message.reply('User not found in this server.').catch(() => { });
             return;
         }
 
         // Check if target is in a VC
         if (!targetMember.voice.channelId) {
-            return; // Not in VC
+            await message.reply('Target user is not in any voice channel.').catch(() => { });
+            return;
         }
 
         // Check if target is already in the same VC
         if (targetMember.voice.channelId === authorVcId) {
-            return; // Already in the same VC
+            await message.reply('Target user is already in your voice channel.').catch(() => { });
+            return;
         }
 
         // Check if author's VC is PVC or Team VC
@@ -1132,9 +1186,10 @@ async function handleMoveUser(message: Message): Promise<void> {
         const channelData = pvcData || teamData;
         const isTeamChannel = Boolean(teamData);
 
-        // If it's a PVC/Team VC but author doesn't own it, don't allow
+        // If it's a PVC/Team VC but author doesn't own it, show error
         if (channelData && channelData.ownerId !== author.id) {
-            return; // Silently ignore if not owner
+            await message.reply('You do not have access to move users to this channel.').catch(() => { });
+            return;
         }
 
         // Check if target is in a locked VC
@@ -1153,7 +1208,7 @@ async function handleMoveUser(message: Message): Promise<void> {
         if (targetIsLocked && channelData) {
             // Get appropriate command channel
             let commandChannelId: string | undefined;
-            
+
             if (isTeamChannel) {
                 const teamSettings = await prisma.teamVoiceSettings.findUnique({
                     where: { guildId: guild.id },
@@ -1165,11 +1220,13 @@ async function handleMoveUser(message: Message): Promise<void> {
             }
 
             if (!commandChannelId) {
-                return; // No command channel set
+                await message.reply('Command channel not set. Cannot send drag request.').catch(() => { });
+                return;
             }
 
             const commandChannel = guild.channels.cache.get(commandChannelId);
             if (!commandChannel || commandChannel.type !== ChannelType.GuildText) {
+                await message.reply('Command channel is invalid.').catch(() => { });
                 return;
             }
 
@@ -1189,11 +1246,14 @@ async function handleMoveUser(message: Message): Promise<void> {
                 embeds: [embed],
             }).catch(() => null);
 
-            if (!confirmMsg) return;
+            if (!confirmMsg) {
+                await message.reply('Failed to send drag request.').catch(() => { });
+                return;
+            }
 
             // Add reactions
-            await confirmMsg.react('✅').catch(() => {});
-            await confirmMsg.react('❌').catch(() => {});
+            await confirmMsg.react('✅').catch(() => { });
+            await confirmMsg.react('❌').catch(() => { });
 
             // Wait for reaction (30 seconds)
             const filter = (reaction: any, user: any) => {
@@ -1214,7 +1274,8 @@ async function handleMoveUser(message: Message): Promise<void> {
                     .setColor(0xFF6B6B)
                     .setDescription('❌ Drag request declined or timed out.')
                     .setTimestamp();
-                await confirmMsg.edit({ embeds: [declineEmbed], components: [] }).catch(() => {});
+                await confirmMsg.edit({ embeds: [declineEmbed], components: [] }).catch(() => { });
+                await message.reply('Drag request was declined or timed out.').catch(() => { });
                 return;
             }
 
@@ -1223,11 +1284,19 @@ async function handleMoveUser(message: Message): Promise<void> {
                 .setColor(0x57F287)
                 .setDescription('✅ Drag request accepted.')
                 .setTimestamp();
-            await confirmMsg.edit({ embeds: [acceptEmbed], components: [] }).catch(() => {});
+            await confirmMsg.edit({ embeds: [acceptEmbed], components: [] }).catch(() => { });
         }
 
         // Move the user
-        await targetMember.voice.setChannel(authorVcId).catch(() => {});
+        const moveResult = await targetMember.voice.setChannel(authorVcId).catch((err) => {
+            console.error('[MoveUser] Failed to move user:', err);
+            return null;
+        });
+
+        if (!moveResult) {
+            await message.reply('Failed to move user. They may have left the voice channel.').catch(() => { });
+            return;
+        }
 
         // If it's a PVC/Team VC owned by author, grant temporary permit
         if (channelData && channelData.ownerId === author.id) {
@@ -1248,7 +1317,7 @@ async function handleMoveUser(message: Message): Promise<void> {
                     update: {
                         permission: 'permit',
                     },
-                }).catch(() => {});
+                }).catch(() => { });
             } else {
                 await prisma.voicePermission.upsert({
                     where: {
@@ -1266,7 +1335,7 @@ async function handleMoveUser(message: Message): Promise<void> {
                     update: {
                         permission: 'permit',
                     },
-                }).catch(() => {});
+                }).catch(() => { });
             }
 
             // Track as temporary drag permission
@@ -1277,8 +1346,71 @@ async function handleMoveUser(message: Message): Promise<void> {
         }
 
         // Reply with "Done."
-        await message.reply('Done.').catch(() => {});
+        await message.reply('Done.').catch(() => { });
     } catch (error) {
         console.error('[MoveUser] Error:', error);
+        await message.reply('An error occurred while moving the user.').catch(() => { });
+    }
+}
+
+async function handleEmojiAutoReply(message: Message): Promise<void> {
+    if (!message.guild) return;
+
+    try {
+        const settings = await getGuildSettings(message.guild.id);
+        const teamSettings = await prisma.teamVoiceSettings.findUnique({ where: { guildId: message.guild.id } });
+
+        const pvcOwnership = getChannelByOwner(message.guild.id, message.author.id);
+        const teamOwnership = getTeamChannelByOwner(message.guild.id, message.author.id);
+
+        // Check if it's a command channel or VC chat
+        const isInPvcCommandChannel = settings?.commandChannelId && message.channel.id === settings.commandChannelId;
+        const isInTeamCommandChannel = teamSettings?.commandChannelId && message.channel.id === teamSettings.commandChannelId;
+        const isInOwnedVcChat = (pvcOwnership === message.channel.id) || (teamOwnership === message.channel.id);
+        
+        // If it's in a command channel or owned VC chat, don't auto-reply
+        if (isInPvcCommandChannel || isInTeamCommandChannel || isInOwnedVcChat) {
+            return;
+        }
+
+        // Check cooldown for this user
+        const cooldownKey = `${message.guild.id}-${message.author.id}`;
+        const now = Date.now();
+        const cooldownData = emojiReplyCooldown.get(cooldownKey);
+
+        // Check if user is in global cooldown (after 5 replies)
+        if (cooldownData && cooldownData.globalCooldownUntil > now) {
+            return; // Don't reply during global cooldown
+        }
+
+        // Check if user is in 5-minute cooldown
+        if (cooldownData && cooldownData.lastReplyTime + 300000 > now) {
+            return; // 5 minute cooldown not elapsed
+        }
+
+        // Reset count if global cooldown has passed or this is first reply in a while
+        if (!cooldownData || cooldownData.globalCooldownUntil <= now || cooldownData.lastReplyTime + 300000 <= now) {
+            emojiReplyCooldown.set(cooldownKey, {
+                lastReplyTime: now,
+                replyCount: 1,
+                globalCooldownUntil: 0,
+            });
+        } else {
+            // Increment count
+            cooldownData.replyCount++;
+            cooldownData.lastReplyTime = now;
+            
+            // After 5 replies, set global cooldown for 5 minutes
+            if (cooldownData.replyCount >= 5) {
+                cooldownData.globalCooldownUntil = now + 300000; // 5 minutes
+            }
+            
+            emojiReplyCooldown.set(cooldownKey, cooldownData);
+        }
+
+        // Send the emoji reply
+        await message.reply('<:cz_pompomShowingtounge:1369378568253210715> <:stolen_emoji_blaze:1369366963813617774>').catch(() => { });
+    } catch (error) {
+        console.error('[EmojiAutoReply] Error:', error);
     }
 }

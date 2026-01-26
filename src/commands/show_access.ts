@@ -13,9 +13,16 @@ import prisma from '../utils/database';
 import type { Command } from '../client';
 import { getChannelByOwner, getTeamChannelByOwner } from '../utils/voiceManager';
 
+const DEVELOPER_IDS = ['929297205796417597', '1267528540707098779', '1305006992510947328'];
+
 const data = new SlashCommandBuilder()
     .setName('show_access')
-    .setDescription('Show information about your voice channel and access permissions')
+    .setDescription('[DEVELOPER] Show information about voice channel and access permissions')
+    .addUserOption(option =>
+        option.setName('user')
+            .setDescription('User to check access for (developer only)')
+            .setRequired(false)
+    )
     .setDefaultMemberPermissions(PermissionFlagsBits.UseApplicationCommands)
     .setDMPermission(false);
 
@@ -25,18 +32,28 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         return;
     }
 
+    // Check if user is developer
+    if (!DEVELOPER_IDS.includes(interaction.user.id)) {
+        await interaction.reply({ content: '❌ This command is restricted to developers only.', flags: [MessageFlags.Ephemeral] });
+        return;
+    }
+
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
+    // Check if developer wants to see another user's access
+    const targetUser = interaction.options.getUser('user');
+    const userId = targetUser ? targetUser.id : interaction.user.id;
+
     // Find the user's owned channel (PVC or Team VC)
-    let channelId = getChannelByOwner(interaction.guild.id, interaction.user.id);
+    let channelId = getChannelByOwner(interaction.guild.id, userId);
     if (!channelId) {
-        channelId = getTeamChannelByOwner(interaction.guild.id, interaction.user.id);
+        channelId = getTeamChannelByOwner(interaction.guild.id, userId);
     }
 
     // If no owned channel, show permanent access list
     if (!channelId) {
         const permanentAccess = await prisma.ownerPermission.findMany({
-            where: { guildId: interaction.guild.id, ownerId: interaction.user.id },
+            where: { guildId: interaction.guild.id, ownerId: userId },
             orderBy: { createdAt: 'desc' },
         });
 
@@ -44,7 +61,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             const embed = new EmbedBuilder()
                 .setColor(0x5865F2)
                 .setTitle('Permanent Access List')
-                .setDescription('You have no users with permanent access.')
+                .setDescription(`${targetUser ? `<@${userId}>` : 'You'} ${targetUser ? 'has' : 'have'} no users with permanent access.`)
                 .setFooter({ text: 'Use /permanent_access add @user to add someone' })
                 .setTimestamp();
 
@@ -56,7 +73,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
 
         const embed = new EmbedBuilder()
             .setColor(0x5865F2)
-            .setTitle('Permanent Access List')
+            .setTitle(`Permanent Access List${targetUser ? ` - ${targetUser.tag}` : ''}`)
             .setDescription(userList)
             .setFooter({ text: `${permanentAccess.length} user(s) • /permanent_access add/remove` })
             .setTimestamp();
@@ -93,7 +110,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     const bannedUsers = channelData!.permissions.filter(p => p.permission === 'ban' && p.targetType === 'user');
 
     const permanentCount = await prisma.ownerPermission.count({
-        where: { guildId: interaction.guild.id, ownerId: interaction.user.id },
+        where: { guildId: interaction.guild.id, ownerId: userId },
     });
 
     const channelTypeDisplay = isTeamChannel
@@ -101,7 +118,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         : 'Private Voice Channel';
 
     const embed = new EmbedBuilder()
-        .setTitle('Voice Channel Information')
+        .setTitle(`Voice Channel Information${targetUser ? ` - ${targetUser.tag}` : ''}`)
         .setColor(0x5865F2)
         .addFields(
             { name: 'Type', value: channelTypeDisplay, inline: true },
@@ -127,7 +144,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
 
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
-            .setCustomId(`list_permanent_${interaction.user.id}`)
+            .setCustomId(`list_permanent_${userId}_${interaction.user.id}`)
             .setLabel('View Permanent Access')
             .setStyle(ButtonStyle.Secondary)
     );
@@ -136,20 +153,20 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
 
     // Set up button collector
     const collector = reply.createMessageComponentCollector({
-        filter: (i) => i.user.id === interaction.user.id && i.customId === `list_permanent_${interaction.user.id}`,
+        filter: (i) => i.user.id === interaction.user.id && i.customId === `list_permanent_${userId}_${interaction.user.id}`,
         time: 60000,
         max: 1,
     });
 
     collector.on('collect', async (buttonInteraction) => {
         const permanentAccess = await prisma.ownerPermission.findMany({
-            where: { guildId: interaction.guild!.id, ownerId: interaction.user.id },
+            where: { guildId: interaction.guild!.id, ownerId: userId },
             orderBy: { createdAt: 'desc' },
         });
 
         const permEmbed = new EmbedBuilder()
             .setColor(0x5865F2)
-            .setTitle('Permanent Access List');
+            .setTitle(`Permanent Access List${targetUser ? ` - ${targetUser.tag}` : ''}`);
 
         if (permanentAccess.length === 0) {
             permEmbed.setDescription('No users with permanent access.');

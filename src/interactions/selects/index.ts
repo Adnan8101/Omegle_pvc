@@ -112,6 +112,10 @@ export async function handleSelectMenuInteraction(
         case 'pvc_transfer_select':
             await handleTransferSelect(interaction as UserSelectMenuInteraction, targetChannelId, isTeamChannel);
             break;
+        case 'modmail_server_select':
+            const { modMailService } = await import('../../services/modmailService');
+            await modMailService.handleServerSelection(interaction as StringSelectMenuInteraction);
+            break;
         default:
             await interaction.reply({ content: 'Unknown selection.', ephemeral: true });
     }
@@ -143,12 +147,12 @@ async function updateVoicePermissions(
             if (type === 'user') {
                 const member = channel.members.get(id);
                 if (member) {
-                    await member.voice.disconnect().catch(() => {});
+                    await member.voice.disconnect().catch(() => { });
                 }
             } else {
                 for (const [, member] of channel.members) {
                     if (member.roles.cache.has(id)) {
-                        await member.voice.disconnect().catch(() => {});
+                        await member.voice.disconnect().catch(() => { });
                     }
                 }
             }

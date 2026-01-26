@@ -216,3 +216,41 @@ model WvAllowedRole {
   @@unique([guildId, roleId])
   @@index([guildId])
 }
+
+model ModMailSettings {
+  id              String   @id @default(uuid())
+  guildId         String   @unique
+  categoryId      String?  // "ModMail Tickets" category
+  closedCategoryId String? // "Closed Tickets" category
+  logsChannelId   String?  // "Ticket Logs" channel
+  staffRoleId     String?  // Role to mention/add
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([guildId])
+}
+
+model ModMailTicket {
+  id              String   @id @default(uuid())
+  guildId         String
+  userId          String   // The user who opened the ticket
+  channelId       String?  // The channel ID (null if PENDING)
+  messageId       String?  // The ID of the initial "Open Ticket" embed message in DM
+  status          TicketStatus @default(PENDING)
+  createdAt       DateTime @default(now())
+  closedAt        DateTime?
+  closedBy        String?  // ID of staff who closed it
+  staffClaimedBy  String?  // ID of staff who claimed it
+
+  @@index([guildId])
+  @@index([userId])
+  @@index([channelId])
+  @@index([status])
+}
+
+enum TicketStatus {
+  PENDING
+  OPEN
+  CLAIMED
+  CLOSED
+}
