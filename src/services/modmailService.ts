@@ -464,7 +464,7 @@ export class ModMailService {
         }
 
         await webhook.send({
-            content: message.content || (files.length > 0 ? null : 'Empty message'), // Webhooks require content or files
+            content: message.content || (files.length > 0 ? undefined : 'Empty message'), // Webhooks require content or files
             username: message.author.username,
             avatarURL: message.author.displayAvatarURL(),
             files: files
