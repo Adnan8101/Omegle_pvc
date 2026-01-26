@@ -138,11 +138,15 @@ export async function execute(client: PVCClient, message: Message): Promise<void
     if (!allowedForPvc && !allowedForTeam && !isInCommandChannel && !isInOwnedVcChat) {
 
         if (message.content.startsWith('!au') || message.content.startsWith('!ru') || message.content.startsWith('!l')) {
+            // If command channel is not set, show emoji reply in any non-command channel
             if (!settings?.commandChannelId && !teamSettings?.commandChannelId) {
                 const embed = new EmbedBuilder()
                     .setDescription('Command channel not set. Use `/pvc_command_channel` or `/team_vc_command_channel` to set it.')
                     .setColor(0xFF0000);
                 await message.reply({ embeds: [embed] }).catch(() => { });
+            } else {
+                // Command channel is set but user is in a non-command channel - reply with emoji
+                await message.reply('<:cz_pompomShowingtounge:1369378568253210715> <:stolen_emoji_blaze:1369366963813617774>').catch(() => { });
             }
         }
         return;
@@ -196,6 +200,12 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
 
     const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: message.author.id } });
     const isBotOwner = message.author.id === BOT_OWNER_ID;
+
+    // If trying to use in non-command channel without being in a VC chat, reject early
+    if (!isInCommandChannel && channelId && !(await prisma.privateVoiceChannel.findUnique({ where: { channelId: message.channel.id } }) || await prisma.teamVoiceChannel.findUnique({ where: { channelId: message.channel.id } }))) {
+        await message.reply('<:cz_pompomShowingtounge:1369378568253210715> <:stolen_emoji_blaze:1369366963813617774>').catch(() => { });
+        return;
+    }
 
     let userIdsToAdd: string[] = [];
     let argsStartIndex = 0;
@@ -417,6 +427,12 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
 
     const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: message.author.id } });
     const isBotOwner = message.author.id === BOT_OWNER_ID;
+
+    // If trying to use in non-command channel without being in a VC chat, reject early
+    if (!isInCommandChannel && channelId && !(await prisma.privateVoiceChannel.findUnique({ where: { channelId: message.channel.id } }) || await prisma.teamVoiceChannel.findUnique({ where: { channelId: message.channel.id } }))) {
+        await message.reply('<:cz_pompomShowingtounge:1369378568253210715> <:stolen_emoji_blaze:1369366963813617774>').catch(() => { });
+        return;
+    }
 
     let userIdsToRemove: string[] = [];
     let argsStartIndex = 0;
