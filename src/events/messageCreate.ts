@@ -74,6 +74,12 @@ export function hasTempDragPermission(channelId: string, userId: string): boolea
 export async function execute(client: PVCClient, message: Message): Promise<void> {
     if (message.author.bot) return;
 
+    // Handle counting first (before DM and guild checks)
+    if (message.guild && !message.content.startsWith(PREFIX)) {
+        const { CountingService } = await import('../services/countingService');
+        await CountingService.handleCountingMessage(message);
+    }
+
     if (message.channel.type === ChannelType.DM) {
         const { modMailService } = await import('../services/modmailService');
         await modMailService.handleDM(message);

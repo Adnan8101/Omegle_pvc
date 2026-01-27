@@ -254,3 +254,17 @@ enum TicketStatus {
   CLAIMED
   CLOSED
 }
+
+model CountingSettings {
+  id           String   @id @default(uuid())
+  guildId      String   @unique
+  channelId    String
+  enabled      Boolean  @default(true)
+  currentCount Int      @default(0)
+  lastUserId   String?  // To prevent same user counting twice
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([guildId])
+  @@index([channelId])
+}
