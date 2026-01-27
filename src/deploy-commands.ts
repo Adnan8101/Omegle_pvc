@@ -27,6 +27,7 @@ import { command as mmUnclaim } from './commands/modmail/unclaim';
 import { command as mmAddStaff } from './commands/modmail/addstaff';
 import { command as mmClose } from './commands/modmail/close';
 import { command as mmFlush } from './commands/modmail/flush';
+import { command as funBan } from './commands/fun_ban';
 import prisma from './utils/database';
 
 const commands = [
@@ -57,6 +58,7 @@ const commands = [
     mmAddStaff.data.toJSON(),
     mmClose.data.toJSON(),
     mmFlush.data.toJSON(),
+    funBan.data.toJSON(),
 ];
 
 const rest = new REST().setToken(Config.token);

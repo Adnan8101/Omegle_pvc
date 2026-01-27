@@ -30,6 +30,26 @@ const tempDragPermissions = new Map<string, Set<string>>();
 // Structure: Map<guildId-userId, { lastReplyTime: number, replyCount: number, globalCooldownUntil: number }>
 const emojiReplyCooldown = new Map<string, { lastReplyTime: number; replyCount: number; globalCooldownUntil: number }>();
 
+// New Channel-based cooldown for emoji error messages (5 minutes)
+const channelEmojiCooldown = new Map<string, number>();
+
+async function checkAndSendEmoji(message: Message) {
+    const channelId = message.channel.id;
+    const now = Date.now();
+    const lastTime = channelEmojiCooldown.get(channelId);
+
+    if (lastTime && now - lastTime < 5 * 60 * 1000) {
+        return; // Cooldown active
+    }
+
+    try {
+        await message.reply('<:cz_pompomShowingtounge:1369378568253210715> <:stolen_emoji_blaze:1369366963813617774>');
+        channelEmojiCooldown.set(channelId, now);
+    } catch (error) {
+        // Ignore error
+    }
+}
+
 export function addTempDragPermission(channelId: string, userId: string): void {
     if (!tempDragPermissions.has(channelId)) {
         tempDragPermissions.set(channelId, new Set());
@@ -88,12 +108,7 @@ export async function execute(client: PVCClient, message: Message): Promise<void
         return;
     }
 
-    // Check for emoji auto-reply trigger (au, ru, l) in non-command channels
-    const lowerContent = message.content.toLowerCase().trim();
-    if (lowerContent === '!au' || lowerContent === '!ru' || lowerContent === '!l') {
-        await handleEmojiAutoReply(message);
-        // Continue processing the command normally
-    }
+
 
     if (message.content.startsWith('!pvc owner')) {
         await handlePvcOwnerCommand(message);
@@ -107,15 +122,15 @@ export async function execute(client: PVCClient, message: Message): Promise<void
         // Get settings to check if this is a command channel
         const pvcSettings = await getGuildSettings(message.guild.id);
         const teamVcSettings = await prisma.teamVoiceSettings.findUnique({ where: { guildId: message.guild.id } });
-        
+
         const pvcOwnershipCheck = getChannelByOwner(message.guild.id, message.author.id);
         const teamOwnershipCheck = getTeamChannelByOwner(message.guild.id, message.author.id);
         const isInOwnedVcChatCheck = (pvcOwnershipCheck === message.channel.id) || (teamOwnershipCheck === message.channel.id);
-        
+
         const isInPvcCmdChannel = pvcSettings?.commandChannelId && message.channel.id === pvcSettings.commandChannelId;
         const isInTeamCmdChannel = teamVcSettings?.commandChannelId && message.channel.id === teamVcSettings.commandChannelId;
         const isInCmdChannel = isInPvcCmdChannel || isInTeamCmdChannel || isInOwnedVcChatCheck;
-        
+
         const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
         const commandName = args.shift()?.toLowerCase();
 
@@ -158,7 +173,7 @@ export async function execute(client: PVCClient, message: Message): Promise<void
                 await message.reply({ embeds: [embed] }).catch(() => { });
             } else {
                 // Command channel is set but user is in a non-command channel - reply with emoji
-                await message.reply('<:cz_pompomShowingtounge:1369378568253210715> <:stolen_emoji_blaze:1369366963813617774>').catch(() => { });
+                await checkAndSendEmoji(message);
             }
         }
         return;
@@ -215,7 +230,7 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
 
     // If trying to use in non-command channel without being in a VC chat, reject early
     if (!isInCommandChannel && channelId && !(await prisma.privateVoiceChannel.findUnique({ where: { channelId: message.channel.id } }) || await prisma.teamVoiceChannel.findUnique({ where: { channelId: message.channel.id } }))) {
-        await message.reply('<:cz_pompomShowingtounge:1369378568253210715> <:stolen_emoji_blaze:1369366963813617774>').catch(() => { });
+        await checkAndSendEmoji(message);
         return;
     }
 
@@ -265,10 +280,10 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
         if (!channelId) {
             // If in non-command channel, reply with emoji instead of error message
             if (!isInCommandChannel) {
-                await message.reply('<:cz_pompomShowingtounge:1369378568253210715> <:stolen_emoji_blaze:1369366963813617774>').catch(() => { });
+                await checkAndSendEmoji(message);
                 return;
             }
-            
+
             const embed = new EmbedBuilder()
                 .setDescription('You do not own a voice channel. Create one first by joining the interface channel.')
                 .setColor(0xFF0000);
@@ -285,10 +300,10 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
     if (channelOwnerId !== message.author.id && message.author.id !== BOT_OWNER_ID) {
         // If in non-command channel, reply with emoji instead of error message
         if (!isInCommandChannel) {
-            await message.reply('<:cz_pompomShowingtounge:1369378568253210715> <:stolen_emoji_blaze:1369366963813617774>').catch(() => { });
+            await checkAndSendEmoji(message);
             return;
         }
-        
+
         const embed = new EmbedBuilder()
             .setDescription('❌ **Access Denied**: You do not own this channel.')
             .setColor(0xFF0000);
@@ -442,7 +457,7 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
 
     // If trying to use in non-command channel without being in a VC chat, reject early
     if (!isInCommandChannel && channelId && !(await prisma.privateVoiceChannel.findUnique({ where: { channelId: message.channel.id } }) || await prisma.teamVoiceChannel.findUnique({ where: { channelId: message.channel.id } }))) {
-        await message.reply('<:cz_pompomShowingtounge:1369378568253210715> <:stolen_emoji_blaze:1369366963813617774>').catch(() => { });
+        await checkAndSendEmoji(message);
         return;
     }
 
@@ -492,10 +507,10 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
         if (!channelId) {
             // If in non-command channel, reply with emoji instead of error message
             if (!isInCommandChannel) {
-                await message.reply('<:cz_pompomShowingtounge:1369378568253210715> <:stolen_emoji_blaze:1369366963813617774>').catch(() => { });
+                await checkAndSendEmoji(message);
                 return;
             }
-            
+
             const embed = new EmbedBuilder()
                 .setDescription('You do not own a voice channel. Create one first by joining the interface channel.')
                 .setColor(0xFF0000);
@@ -512,10 +527,10 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
     if (channelOwnerId !== message.author.id && message.author.id !== BOT_OWNER_ID) {
         // If in non-command channel, reply with emoji instead of error message
         if (!isInCommandChannel) {
-            await message.reply('<:cz_pompomShowingtounge:1369378568253210715> <:stolen_emoji_blaze:1369366963813617774>').catch(() => { });
+            await checkAndSendEmoji(message);
             return;
         }
-        
+
         const embed = new EmbedBuilder()
             .setDescription('❌ **Access Denied**: You do not own this channel.')
             .setColor(0xFF0000);
@@ -1159,12 +1174,12 @@ async function handleMoveUser(message: Message): Promise<void> {
     try {
         const guild = message.guild;
         const author = message.member;
-        
+
         // Silent fail if no move permissions
         if (!author.permissions.has('MoveMembers')) {
             return;
         }
-        
+
         // Check if author is in a VC
         if (!author.voice.channelId) {
             await message.reply('You must be in a voice channel to use this command.').catch(() => { });
@@ -1173,7 +1188,7 @@ async function handleMoveUser(message: Message): Promise<void> {
 
         const authorVcId = author.voice.channelId;
         let targetUserId: string | null = null;
-        
+
         // Check for reply
         if (message.reference?.messageId) {
             const repliedMessage = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
@@ -1181,7 +1196,7 @@ async function handleMoveUser(message: Message): Promise<void> {
                 targetUserId = repliedMessage.author.id;
             }
         }
-        
+
         // Check for mention or user ID in message
         if (!targetUserId) {
             const args = message.content.slice(3).trim().split(/\s+/);
@@ -1405,64 +1420,4 @@ async function handleMoveUser(message: Message): Promise<void> {
     }
 }
 
-async function handleEmojiAutoReply(message: Message): Promise<void> {
-    if (!message.guild) return;
 
-    try {
-        const settings = await getGuildSettings(message.guild.id);
-        const teamSettings = await prisma.teamVoiceSettings.findUnique({ where: { guildId: message.guild.id } });
-
-        const pvcOwnership = getChannelByOwner(message.guild.id, message.author.id);
-        const teamOwnership = getTeamChannelByOwner(message.guild.id, message.author.id);
-
-        // Check if it's a command channel or VC chat
-        const isInPvcCommandChannel = settings?.commandChannelId && message.channel.id === settings.commandChannelId;
-        const isInTeamCommandChannel = teamSettings?.commandChannelId && message.channel.id === teamSettings.commandChannelId;
-        const isInOwnedVcChat = (pvcOwnership === message.channel.id) || (teamOwnership === message.channel.id);
-        
-        // If it's in a command channel or owned VC chat, don't auto-reply
-        if (isInPvcCommandChannel || isInTeamCommandChannel || isInOwnedVcChat) {
-            return;
-        }
-
-        // Check cooldown for this user
-        const cooldownKey = `${message.guild.id}-${message.author.id}`;
-        const now = Date.now();
-        const cooldownData = emojiReplyCooldown.get(cooldownKey);
-
-        // Check if user is in global cooldown (after 5 replies)
-        if (cooldownData && cooldownData.globalCooldownUntil > now) {
-            return; // Don't reply during global cooldown
-        }
-
-        // Check if user is in 5-minute cooldown
-        if (cooldownData && cooldownData.lastReplyTime + 300000 > now) {
-            return; // 5 minute cooldown not elapsed
-        }
-
-        // Reset count if global cooldown has passed or this is first reply in a while
-        if (!cooldownData || cooldownData.globalCooldownUntil <= now || cooldownData.lastReplyTime + 300000 <= now) {
-            emojiReplyCooldown.set(cooldownKey, {
-                lastReplyTime: now,
-                replyCount: 1,
-                globalCooldownUntil: 0,
-            });
-        } else {
-            // Increment count
-            cooldownData.replyCount++;
-            cooldownData.lastReplyTime = now;
-            
-            // After 5 replies, set global cooldown for 5 minutes
-            if (cooldownData.replyCount >= 5) {
-                cooldownData.globalCooldownUntil = now + 300000; // 5 minutes
-            }
-            
-            emojiReplyCooldown.set(cooldownKey, cooldownData);
-        }
-
-        // Send the emoji reply
-        await message.reply('<:cz_pompomShowingtounge:1369378568253210715> <:stolen_emoji_blaze:1369366963813617774>').catch(() => { });
-    } catch (error) {
-        console.error('[EmojiAutoReply] Error:', error);
-    }
-}
