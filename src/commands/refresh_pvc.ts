@@ -12,7 +12,7 @@ import {
     EmbedBuilder,
     OverwriteType,
 } from 'discord.js';
-import prisma from '../utils/database';
+import prisma, { withRetry } from '../utils/database';
 import type { Command } from '../client';
 import { generateInterfaceEmbed, generateInterfaceImage, generateVcInterfaceEmbed, createInterfaceComponents, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
 import { canRunAdminCommand } from '../utils/permissions';
@@ -115,25 +115,35 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     
     try {
         console.log('[Refresh PVC] Fetching guild settings from database...');
-        settings = await prisma.guildSettings.findUnique({
+        settings = await withRetry(() => prisma.guildSettings.findUnique({
             where: { guildId: guild.id },
-        });
+        }));
         console.log(`[Refresh PVC] Guild settings found: ${!!settings}, interfaceTextId: ${settings?.interfaceTextId}, interfaceVcId: ${settings?.interfaceVcId}`);
-    } catch (dbError) {
+    } catch (dbError: any) {
         console.error('[Refresh PVC] Error fetching guild settings:', dbError);
-        await interaction.editReply('❌ Database error while fetching settings. Please try again.');
+        const isConnectionError = dbError?.message?.includes("Can't reach database") || dbError?.code === 'P1001';
+        if (isConnectionError) {
+            await interaction.editReply('❌ **Database Connection Error**\n\nCannot reach the database server. Please check:\n• Database server is running\n• Network connectivity\n• DATABASE_URL in .env is correct\n\nTry again in a few moments.');
+        } else {
+            await interaction.editReply('❌ Database error while fetching settings. Please try again.');
+        }
         return;
     }
 
     try {
         console.log('[Refresh PVC] Fetching team settings from database...');
-        teamSettings = await prisma.teamVoiceSettings.findUnique({
+        teamSettings = await withRetry(() => prisma.teamVoiceSettings.findUnique({
             where: { guildId: guild.id },
-        });
+        }));
         console.log(`[Refresh PVC] Team settings found: ${!!teamSettings}, categoryId: ${teamSettings?.categoryId}`);
-    } catch (dbError) {
+    } catch (dbError: any) {
         console.error('[Refresh PVC] Error fetching team settings:', dbError);
-        await interaction.editReply('❌ Database error while fetching team settings. Please try again.');
+        const isConnectionError = dbError?.message?.includes("Can't reach database") || dbError?.code === 'P1001';
+        if (isConnectionError) {
+            await interaction.editReply('❌ **Database Connection Error**\n\nCannot reach the database server. Please check your database configuration.');
+        } else {
+            await interaction.editReply('❌ Database error while fetching team settings. Please try again.');
+        }
         return;
     }
 
