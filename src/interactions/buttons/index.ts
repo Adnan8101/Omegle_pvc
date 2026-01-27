@@ -29,6 +29,8 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
     const { customId, guild, member } = interaction;
     if (!guild || !member) return;
 
+    if (customId.startsWith('fun_ban_')) return;
+
     if (isPvcPaused(guild.id) && customId.startsWith('pvc_')) {
         const pauseEmbed = new EmbedBuilder()
             .setColor(0xFF6B6B)

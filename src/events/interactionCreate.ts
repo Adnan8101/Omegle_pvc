@@ -94,9 +94,22 @@ export async function execute(client: PVCClient, interaction: Interaction): Prom
             return;
         }
     } catch (error) {
+        // Log the full error for debugging
+        console.error(`[InteractionCreate] Error handling interaction:`, {
+            type: interaction.type,
+            commandName: interaction.isChatInputCommand() ? interaction.commandName : 'N/A',
+            customId: (interaction as any).customId || 'N/A',
+            userId: interaction.user.id,
+            guildId: interaction.guildId,
+            error: error instanceof Error ? {
+                name: error.name,
+                message: error.message,
+                stack: error.stack,
+            } : error,
+        });
 
         if (!isStaleError(error)) {
-
+            console.error(`[InteractionCreate] Non-stale error occurred:`, error);
             await safeReply(interaction, 'An error occurred while processing this interaction.');
         }
     }
