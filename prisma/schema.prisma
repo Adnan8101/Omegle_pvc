@@ -268,3 +268,17 @@ model CountingSettings {
   @@index([guildId])
   @@index([channelId])
 }
+
+model CountingUserStats {
+  id        String   @id @default(uuid())
+  guildId   String
+  userId    String
+  counting  Int      @default(0) // Total successful counts
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([guildId, userId])
+  @@index([guildId])
+  @@index([userId])
+  @@index([guildId, counting])
+}

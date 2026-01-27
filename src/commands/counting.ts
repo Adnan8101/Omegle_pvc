@@ -40,6 +40,28 @@ const data = new SlashCommandBuilder()
         subcommand
             .setName('reset')
             .setDescription('Reset the counting to start from 1')
+    )
+    .addSubcommand(subcommand =>
+        subcommand
+            .setName('leaderboard')
+            .setDescription('Show top counters in this server')
+            .addIntegerOption(option =>
+                option
+                    .setName('top')
+                    .setDescription('Number of users to show (default: 10)')
+                    .setMinValue(1)
+                    .setMaxValue(25)
+            )
+    )
+    .addSubcommand(subcommand =>
+        subcommand
+            .setName('stats')
+            .setDescription('Show counting stats for a user')
+            .addUserOption(option =>
+                option
+                    .setName('user')
+                    .setDescription('The user to check (default: yourself)')
+            )
     );
 
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -196,6 +218,91 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         } catch (error) {
             console.error('[Counting] Error resetting counting:', error);
             await interaction.reply({ content: '❌ Failed to reset counting.', flags: [MessageFlags.Ephemeral] });
+        }
+    } else if (subcommand === 'leaderboard') {
+        try {
+            const topCount = interaction.options.getInteger('top') || 10;
+
+            const topUsers = await prisma.countingUserStats.findMany({
+                where: { guildId: interaction.guild.id },
+                orderBy: { counting: 'desc' },
+                take: topCount,
+            });
+
+            if (topUsers.length === 0) {
+                await interaction.reply({ content: '📊 No counting stats yet. Start counting!', flags: [MessageFlags.Ephemeral] });
+                return;
+            }
+
+            const leaderboardText = topUsers
+                .map((stat, index) => {
+                    const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
+                    return `${medal} <@${stat.userId}> - **${stat.counting}** counts`;
+                })
+                .join('\n');
+
+            const embed = new EmbedBuilder()
+                .setColor(0xFFD700)
+                .setTitle('📊 Counting Leaderboard')
+                .setDescription(leaderboardText)
+                .setFooter({ text: `Top ${topUsers.length} counters` });
+
+            await interaction.reply({ embeds: [embed], flags: [MessageFlags.Ephemeral] });
+        } catch (error) {
+            console.error('[Counting] Error showing leaderboard:', error);
+            await interaction.reply({ content: '❌ Failed to get leaderboard.', flags: [MessageFlags.Ephemeral] });
+        }
+    } else if (subcommand === 'stats') {
+        try {
+            const targetUser = interaction.options.getUser('user') || interaction.user;
+
+            const stats = await prisma.countingUserStats.findUnique({
+                where: {
+                    guildId_userId: {
+                        guildId: interaction.guild.id,
+                        userId: targetUser.id,
+                    },
+                },
+            });
+
+            const countingSettings = await prisma.countingSettings.findUnique({
+                where: { guildId: interaction.guild.id },
+            });
+
+            if (!stats || stats.counting === 0) {
+                await interaction.reply({
+                    content: `📊 ${targetUser} hasn't counted any numbers yet.`,
+                    flags: [MessageFlags.Ephemeral],
+                });
+                return;
+            }
+
+            // Get user's rank
+            const allStats = await prisma.countingUserStats.findMany({
+                where: { guildId: interaction.guild.id },
+                orderBy: { counting: 'desc' },
+            });
+
+            const rank = allStats.findIndex(s => s.userId === targetUser.id) + 1;
+            const totalCounts = countingSettings?.currentCount || 0;
+            const percentage = totalCounts > 0 ? ((stats.counting / totalCounts) * 100).toFixed(1) : '0';
+
+            const embed = new EmbedBuilder()
+                .setColor(0x00BFFF)
+                .setTitle(`📊 Counting Stats`)
+                .setThumbnail(targetUser.displayAvatarURL())
+                .addFields(
+                    { name: 'User', value: `${targetUser}`, inline: true },
+                    { name: 'Total Counts', value: `**${stats.counting}**`, inline: true },
+                    { name: 'Rank', value: `**#${rank}**`, inline: true },
+                    { name: 'Contribution', value: `**${percentage}%**`, inline: true }
+                )
+                .setFooter({ text: `Keep counting! Current server count: ${totalCounts}` });
+
+            await interaction.reply({ embeds: [embed], flags: [MessageFlags.Ephemeral] });
+        } catch (error) {
+            console.error('[Counting] Error showing stats:', error);
+            await interaction.reply({ content: '❌ Failed to get stats.', flags: [MessageFlags.Ephemeral] });
         }
     }
 }

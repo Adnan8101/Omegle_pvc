@@ -60,13 +60,33 @@ export class CountingService {
 
             if (isCorrect && !isSameUser) {
                 // ✅ CORRECT! Update DB immediately before anything else
-                await prisma.countingSettings.update({
-                    where: { guildId: message.guild.id },
-                    data: {
-                        currentCount: number,
-                        lastUserId: message.author.id,
-                    },
-                });
+                await prisma.$transaction([
+                    // Update counting settings
+                    prisma.countingSettings.update({
+                        where: { guildId: message.guild.id },
+                        data: {
+                            currentCount: number,
+                            lastUserId: message.author.id,
+                        },
+                    }),
+                    // Increment user's counting stat
+                    prisma.countingUserStats.upsert({
+                        where: {
+                            guildId_userId: {
+                                guildId: message.guild.id,
+                                userId: message.author.id,
+                            },
+                        },
+                        update: {
+                            counting: { increment: 1 },
+                        },
+                        create: {
+                            guildId: message.guild.id,
+                            userId: message.author.id,
+                            counting: 1,
+                        },
+                    }),
+                ]);
 
                 // React after DB is updated (non-blocking)
                 message.react('✅').catch(() => {});
