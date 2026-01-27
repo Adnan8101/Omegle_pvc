@@ -58,6 +58,29 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             return;
         }
 
+        // Check if bot has necessary permissions in the channel
+        const botMember = interaction.guild.members.me;
+        if (!botMember) {
+            await interaction.reply({ content: '❌ Could not find bot member in guild.', flags: [MessageFlags.Ephemeral] });
+            return;
+        }
+
+        // Fetch the full channel object to check permissions
+        const fullChannel = await interaction.guild.channels.fetch(channel.id);
+        if (!fullChannel || !fullChannel.isTextBased()) {
+            await interaction.reply({ content: '❌ Could not access the channel.', flags: [MessageFlags.Ephemeral] });
+            return;
+        }
+
+        const permissions = fullChannel.permissionsFor(botMember);
+        if (!permissions?.has(['ViewChannel', 'SendMessages', 'ManageMessages', 'AddReactions', 'ReadMessageHistory'])) {
+            await interaction.reply({ 
+                content: '❌ Bot needs the following permissions in that channel:\n• View Channel\n• Send Messages\n• Manage Messages (to delete wrong counts)\n• Add Reactions (to react with ✅)\n• Read Message History', 
+                flags: [MessageFlags.Ephemeral] 
+            });
+            return;
+        }
+
         try {
             await prisma.countingSettings.upsert({
                 where: { guildId: interaction.guild.id },
@@ -83,7 +106,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             await interaction.reply({ embeds: [embed], flags: [MessageFlags.Ephemeral] });
         } catch (error) {
             console.error('[Counting] Error enabling counting:', error);
-            await interaction.reply({ content: '❌ Failed to enable counting.', flags: [MessageFlags.Ephemeral] });
+            await interaction.reply({ content: '❌ Failed to enable counting. Check database connection.', flags: [MessageFlags.Ephemeral] });
         }
     } else if (subcommand === 'disable') {
         try {
