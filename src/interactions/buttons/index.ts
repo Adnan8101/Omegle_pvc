@@ -309,81 +309,40 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
     }
 
     const messageChannel = interaction.channel;
-    let targetChannelId: string | undefined;
-    let isTeamChannel = false;
 
-    if (voiceChannelId) {
+    // 1. Determine if the user owns a channel (Source of Truth: Database)
+    const dbPvc = await prisma.privateVoiceChannel.findFirst({ where: { guildId: guild.id, ownerId: userId } });
+    const dbTeam = !dbPvc ? await prisma.teamVoiceChannel.findFirst({ where: { guildId: guild.id, ownerId: userId } }) : null;
 
-        let pvcState = getChannelState(voiceChannelId);
-        let teamState = getTeamChannelState(voiceChannelId);
+    const ownedChannelId = dbPvc?.channelId || dbTeam?.channelId;
+    let isTeamChannel = Boolean(dbTeam);
+    let targetChannelId = ownedChannelId;
 
-        if (!pvcState && !teamState) {
-            const pvcData = await prisma.privateVoiceChannel.findUnique({
-                where: { channelId: voiceChannelId },
-            });
-            const teamData = await prisma.teamVoiceChannel.findUnique({
-                where: { channelId: voiceChannelId },
-            });
+    // 2. Hydrate Cache if needed (Side-effect)
+    if (dbPvc) {
+        const { registerChannel } = await import('../../utils/voiceManager');
+        registerChannel(dbPvc.channelId, dbPvc.guildId, dbPvc.ownerId);
+    } else if (dbTeam) {
+        const { registerTeamChannel } = await import('../../utils/voiceManager');
+        const teamType = dbTeam.teamType.toLowerCase() as 'duo' | 'trio' | 'squad';
+        registerTeamChannel(dbTeam.channelId, dbTeam.guildId, dbTeam.ownerId, teamType);
+    }
 
-            if (pvcData) {
-                const { registerChannel } = await import('../../utils/voiceManager');
-                registerChannel(pvcData.channelId, pvcData.guildId, pvcData.ownerId);
-                pvcState = { channelId: pvcData.channelId, guildId: pvcData.guildId, ownerId: pvcData.ownerId, interfaceChannel: false };
-            } else if (teamData) {
-                const { registerTeamChannel } = await import('../../utils/voiceManager');
-                const teamType = teamData.teamType.toLowerCase() as 'duo' | 'trio' | 'squad';
-                registerTeamChannel(teamData.channelId, teamData.guildId, teamData.ownerId, teamType);
-                teamState = { channelId: teamData.channelId, guildId: teamData.guildId, ownerId: teamData.ownerId, teamType: teamType };
-            }
-        }
+    // 3. Check Context: Am I in someone else's PVC?
+    if (voiceChannelId && voiceChannelId !== ownedChannelId) {
+        // I am in a voice channel, but it's not the one I own.
+        // Check if this channel belongs to someone else (is a PVC/Team channel).
+        const currentChannelPvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId: voiceChannelId } });
+        const currentChannelTeam = !currentChannelPvc ? await prisma.teamVoiceChannel.findUnique({ where: { channelId: voiceChannelId } }) : null;
 
-        if (pvcState && pvcState.ownerId === userId) {
-            targetChannelId = voiceChannelId;
-            isTeamChannel = false;
-        } else if (teamState && teamState.ownerId === userId) {
-            targetChannelId = voiceChannelId;
-            isTeamChannel = true;
-        } else if (pvcState || teamState) {
-
+        if (currentChannelPvc || currentChannelTeam) {
             await interaction.reply({
-                content: `⚠️ You can only use these controls in **your own** voice channel.\n\nThis channel belongs to someone else.`,
+                content: `⚠️ You can only use these controls in **your own** voice channel.\n\nThis channel belongs to <@${currentChannelPvc?.ownerId || currentChannelTeam?.ownerId}>.`,
                 ephemeral: true,
             });
             return;
         }
-    }
-
-    if (!targetChannelId) {
-        let ownedChannelId = getChannelByOwner(guild.id, userId);
-        if (!ownedChannelId) {
-            ownedChannelId = getTeamChannelByOwner(guild.id, userId);
-            isTeamChannel = Boolean(ownedChannelId);
-        } else {
-            isTeamChannel = false;
-        }
-
-        if (!ownedChannelId) {
-            const pvcData = await prisma.privateVoiceChannel.findFirst({
-                where: { guildId: guild.id, ownerId: userId },
-            });
-            const teamData = !pvcData ? await prisma.teamVoiceChannel.findFirst({
-                where: { guildId: guild.id, ownerId: userId },
-            }) : null;
-
-            ownedChannelId = pvcData?.channelId || teamData?.channelId || undefined;
-            isTeamChannel = Boolean(teamData);
-
-            if (pvcData) {
-                const { registerChannel } = await import('../../utils/voiceManager');
-                registerChannel(pvcData.channelId, pvcData.guildId, pvcData.ownerId);
-            } else if (teamData) {
-                const { registerTeamChannel } = await import('../../utils/voiceManager');
-                const teamType = teamData.teamType.toLowerCase() as 'duo' | 'trio' | 'squad';
-                registerTeamChannel(teamData.channelId, teamData.guildId, teamData.ownerId, teamType);
-            }
-        }
-
-        targetChannelId = ownedChannelId;
+        // If it's a public channel (not PVC), we allow controlling own PVC.
     }
 
     if (!targetChannelId) {
