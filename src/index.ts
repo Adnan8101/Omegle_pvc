@@ -38,6 +38,7 @@ import { command as mmAddStaff } from './commands/modmail/addstaff';
 import { command as mmClose } from './commands/modmail/close';
 import { command as mmFlush } from './commands/modmail/flush';
 import { command as funBan } from './commands/fun_ban';
+import { command as counting } from './commands/counting';
 
 client.commands.set(pvcSetup.data.name, pvcSetup);
 client.commands.set(adminStrictness.data.name, adminStrictness);
@@ -69,6 +70,7 @@ client.commands.set(mmClose.data.name, mmClose);
 client.commands.set(mmClose.data.name, mmClose);
 client.commands.set(mmFlush.data.name, mmFlush);
 client.commands.set(funBan.data.name, funBan);
+client.commands.set(counting.data.name, counting);
 
 client.once(readyEvent.name, () => {
     readyEvent.execute(client);
