@@ -3,7 +3,7 @@ import { PrismaClient } from '@prisma/client';
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
 
 export const prisma = globalForPrisma.prisma || new PrismaClient({
-    log: [],
+    log: ['query', 'info', 'warn', 'error'],
     transactionOptions: {
         maxWait: 10000,
         timeout: 30000,
@@ -13,14 +13,26 @@ export const prisma = globalForPrisma.prisma || new PrismaClient({
 globalForPrisma.prisma = prisma;
 
 async function connectWithRetry(maxRetries = 5, delay = 3000): Promise<void> {
+    console.log('[DATABASE] Attempting to connect to database...');
+    console.log('[DATABASE] Connection string:', process.env.DATABASE_URL?.replace(/:[^:@]+@/, ':****@'));
+    
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
+            console.log(`[DATABASE] Connection attempt ${attempt}/${maxRetries}...`);
             await prisma.$connect();
+            console.log('[DATABASE] ✅ Successfully connected to database!');
+            
+            // Test query
+            const result = await prisma.$queryRaw`SELECT current_database(), current_user`;
+            console.log('[DATABASE] Database info:', result);
             return;
-        } catch {
+        } catch (error: any) {
+            console.error(`[DATABASE] ❌ Connection attempt ${attempt} failed:`, error.message);
             if (attempt === maxRetries) {
+                console.error('[DATABASE] 💀 Max retries reached. Exiting...');
                 process.exit(1);
             }
+            console.log(`[DATABASE] Retrying in ${delay * attempt}ms...`);
             await new Promise(resolve => setTimeout(resolve, delay * attempt));
         }
     }

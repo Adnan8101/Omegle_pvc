@@ -94,20 +94,31 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
 
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
+    console.log('[PVC Setup] Starting PVC setup process...');
+    console.log('[PVC Setup] Guild:', interaction.guild.name, '(' + interaction.guild.id + ')');
+    console.log('[PVC Setup] Category:', category.name, '(' + category.id + ')');
+    console.log('[PVC Setup] Logs Channel:', logsChannel.name, '(' + logsChannel.id + ')');
+    console.log('[PVC Setup] Command Channel:', commandChannel.name, '(' + commandChannel.id + ')');
+
     try {
         const guild = interaction.guild;
 
+        console.log('[PVC Setup] Creating interface text channel...');
         const interfaceTextChannel = await guild.channels.create({
             name: 'interface',
             type: ChannelType.GuildText,
             parent: category.id,
         });
 
+        console.log('[PVC Setup] Interface text channel created:', interfaceTextChannel.id);
+        
+        console.log('[PVC Setup] Creating Join to Create voice channel...');
         const joinToCreateVc = await guild.channels.create({
             name: 'Join to Create',
             type: ChannelType.GuildVoice,
             parent: category.id,
         });
+        console.log('[PVC Setup] Join to Create VC created:', joinToCreateVc.id);
 
         const row1 = new ActionRowBuilder<ButtonBuilder>();
         const row2 = new ActionRowBuilder<ButtonBuilder>();
@@ -147,11 +158,18 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             components,
         });
 
+        console.log('[PVC Setup] Creating logs webhook...');
         const logsWebhook = await (logsChannel as any).createWebhook({
             name: 'PVC Logger',
             reason: 'For logging PVC actions',
         });
+        console.log('[PVC Setup] Webhook created successfully');
 
+        console.log('[PVC Setup] Saving guild settings to database...');
+        console.log('[PVC Setup] Guild ID:', guild.id);
+        console.log('[PVC Setup] Interface VC ID:', joinToCreateVc.id);
+        console.log('[PVC Setup] Interface Text ID:', interfaceTextChannel.id);
+        
         await prisma.guildSettings.upsert({
             where: { guildId: guild.id },
             update: {
@@ -170,6 +188,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 commandChannelId: commandChannel.id,
             },
         });
+        console.log('[PVC Setup] ✅ Guild settings saved to database successfully!');
 
         invalidateGuildSettings(guild.id);
 
@@ -182,6 +201,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             details: `PVC System set up with category: ${category.name}, logs: ${logsChannel}, commands: ${commandChannel}`,
         });
 
+        console.log('[PVC Setup] Setup complete! Sending success message...');
         await interaction.editReply(
             `✅ PVC System set up successfully!\n\n` +
             `**Category:** ${category.name}\n` +
@@ -191,8 +211,12 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             `**Command Channel:** ${commandChannel}\n\n` +
             `All actions will now be logged to ${logsChannel}`
         );
-    } catch {
-        await interaction.editReply('Failed to set up PVC system. Check bot permissions.');
+    } catch (error: any) {
+        console.error('[PVC Setup] ❌ Setup failed with error:', error);
+        console.error('[PVC Setup] Error name:', error.name);
+        console.error('[PVC Setup] Error message:', error.message);
+        console.error('[PVC Setup] Error stack:', error.stack);
+        await interaction.editReply(`Failed to set up PVC system.\n\n**Error:** ${error.message}\n\nCheck bot permissions and database connection.`);
     }
 }
 
