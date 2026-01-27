@@ -1,51 +1,56 @@
 import { Message, EmbedBuilder } from 'discord.js';
 import prisma from '../utils/database';
 
-// In-memory lock to prevent race conditions
-const guildLocks = new Map<string, Promise<void>>();
+// In-memory lock with proper queuing
+const processingQueue = new Map<string, Promise<void>>();
 
 export class CountingService {
     /**
-     * Handle counting messages in configured channels with race condition protection
+     * Handle counting messages with proper serialization per guild
      */
     public static async handleCountingMessage(message: Message): Promise<void> {
         if (!message.guild || message.author.bot) return;
 
         const guildId = message.guild.id;
 
-        // Wait for any existing processing to complete (prevents race conditions)
-        while (guildLocks.has(guildId)) {
-            try {
-                await guildLocks.get(guildId);
-            } catch {
-                // Ignore errors from previous operations
-            }
-        }
+        // Create a promise chain to serialize all messages for this guild
+        const previousPromise = processingQueue.get(guildId) || Promise.resolve();
+        
+        const currentPromise = previousPromise
+            .then(() => this.processCountingMessage(message))
+            .catch((err) => console.error('[Counting] Processing error:', err));
 
-        // Create a new lock for this operation
-        let resolveLock: () => void;
-        const lockPromise = new Promise<void>((resolve) => {
-            resolveLock = resolve;
+        processingQueue.set(guildId, currentPromise);
+
+        // Clean up after a delay to prevent memory leak
+        currentPromise.finally(() => {
+            setTimeout(() => {
+                if (processingQueue.get(guildId) === currentPromise) {
+                    processingQueue.delete(guildId);
+                }
+            }, 100);
         });
-        guildLocks.set(guildId, lockPromise);
+    }
+
+    private static async processCountingMessage(message: Message): Promise<void> {
+        if (!message.guild) return;
 
         try {
-            // Fetch settings
-            const settings = await prisma.countingSettings.findUnique({
-                where: { guildId: guildId },
-            });
-
-            if (!settings || !settings.enabled || settings.channelId !== message.channel.id) {
-                return;
-            }
-
-            // Extract number from message
+            // Extract number FIRST (before any async operations)
             const content = message.content.trim();
             const number = parseInt(content, 10);
 
-            // Check if message is a valid number (also check for leading zeros, spaces, etc.)
+            // Validate number format
             if (isNaN(number) || content !== number.toString() || number < 1) {
-                // Silently ignore non-numeric messages or invalid numbers
+                return; // Silently ignore invalid numbers
+            }
+
+            // Get fresh settings from database
+            const settings = await prisma.countingSettings.findUnique({
+                where: { guildId: message.guild.id },
+            });
+
+            if (!settings || !settings.enabled || settings.channelId !== message.channel.id) {
                 return;
             }
 
@@ -53,89 +58,54 @@ export class CountingService {
             const isCorrect = number === expectedNumber;
             const isSameUser = settings.lastUserId === message.author.id;
 
-            // Check if it's the correct number and not the same user
             if (isCorrect && !isSameUser) {
-                // Correct count! Update database first (atomic operation)
-                try {
-                    await prisma.countingSettings.update({
-                        where: { 
-                            guildId: guildId,
-                        },
-                        data: {
-                            currentCount: number,
-                            lastUserId: message.author.id,
-                        },
-                    });
-
-                    // Then react with checkmark
-                    await message.react('✅').catch((err) => {
-                        console.error(`[Counting] Failed to react: ${err.message}`);
-                    });
-
-                    console.log(`[Counting] ${message.guild.name}: ${message.author.tag} counted ${number}`);
-                } catch (dbError) {
-                    console.error('[Counting] Database update failed:', dbError);
-                    // If database update fails, don't react
-                }
-            } else {
-                // Wrong count! Delete message and send error
-                let errorReason = '';
-                if (isSameUser) {
-                    errorReason = "You can't count twice in a row!";
-                } else {
-                    errorReason = `Expected **${expectedNumber}**, but got **${number}**`;
-                }
-
-                // Delete the wrong message first
-                const messageDeleted = await message.delete().catch((err) => {
-                    console.error(`[Counting] Failed to delete message: ${err.message}`);
-                    return null;
+                // ✅ CORRECT! Update DB immediately before anything else
+                await prisma.countingSettings.update({
+                    where: { guildId: message.guild.id },
+                    data: {
+                        currentCount: number,
+                        lastUserId: message.author.id,
+                    },
                 });
 
-                // Send error embed
-                const embed = new EmbedBuilder()
-                    .setColor(0xFF0000)
-                    .setDescription(
-                        `❌ **Wrong Count!**\n\n` +
-                        `${messageDeleted ? message.author : `<@${message.author.id}>`} broke the counting!\n` +
-                        `${errorReason}\n\n` +
-                        `Start from: **${settings.currentCount + 1}**`
-                    )
-                    .setFooter({ text: 'Pay attention to the sequence!' });
+                // React after DB is updated (non-blocking)
+                message.react('✅').catch(() => {});
 
+                console.log(`[Counting] ✅ ${message.author.tag} -> ${number}`);
+            } else {
+                // ❌ WRONG! Handle error
+                const errorReason = isSameUser 
+                    ? "Can't count twice in a row!" 
+                    : `Expected **${expectedNumber}**, got **${number}**`;
+
+                // Delete wrong message
+                await message.delete().catch(() => {});
+
+                // Send brief error message
                 if (message.channel.isSendable()) {
-                    try {
-                        const errorMsg = await message.channel.send({ embeds: [embed] });
+                    const embed = new EmbedBuilder()
+                        .setColor(0xFF0000)
+                        .setDescription(
+                            `❌ ${message.author}\n${errorReason}\nContinue: **${settings.currentCount + 1}**`
+                        );
 
-                        // Delete error message after 5 seconds
-                        setTimeout(() => {
-                            errorMsg.delete().catch(() => {});
-                        }, 5000);
-                    } catch (sendError) {
-                        console.error('[Counting] Failed to send error message:', sendError);
+                    const errorMsg = await message.channel.send({ embeds: [embed] }).catch(() => null);
+                    
+                    if (errorMsg) {
+                        setTimeout(() => errorMsg.delete().catch(() => {}), 3500);
                     }
                 }
 
-                // Reset last user so anyone can continue (prevent deadlock)
-                try {
-                    await prisma.countingSettings.update({
-                        where: { guildId: guildId },
-                        data: {
-                            lastUserId: null,
-                        },
-                    });
-                } catch (dbError) {
-                    console.error('[Counting] Failed to reset last user:', dbError);
-                }
+                // Reset last user
+                await prisma.countingSettings.update({
+                    where: { guildId: message.guild.id },
+                    data: { lastUserId: null },
+                }).catch(() => {});
 
-                console.log(`[Counting] ${message.guild.name}: ${message.author.tag} broke counting at ${number} (expected ${expectedNumber})`);
+                console.log(`[Counting] ❌ ${message.author.tag} -> ${number} (expected ${expectedNumber})`);
             }
         } catch (error) {
-            console.error('[Counting] Error handling counting message:', error);
-        } finally {
-            // Always release the lock
-            guildLocks.delete(guildId);
-            resolveLock!();
+            console.error('[Counting] Error:', error);
         }
     }
 }
