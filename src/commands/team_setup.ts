@@ -79,10 +79,32 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             parent: category.id,
         });
 
-        const logsWebhook = await (logsChannel as any).createWebhook({
-            name: 'Team VC Logger',
-            reason: 'For logging Team VC actions',
-        });
+        // Setup webhook - reuse existing or create new
+        let logsWebhook;
+        try {
+            const webhooks = await (logsChannel as any).fetchWebhooks();
+            logsWebhook = webhooks.find((w: any) => w.owner?.id === interaction.client.user?.id && w.name === 'Team VC Logger');
+            
+            if (!logsWebhook) {
+                // Clean up old bot webhooks if we're at the limit
+                const botWebhooks = webhooks.filter((w: any) => w.owner?.id === interaction.client.user?.id);
+                if (webhooks.size >= 15 && botWebhooks.size > 0) {
+                    console.log('[Team Setup] Webhook limit reached, cleaning up old bot webhooks...');
+                    for (const oldWebhook of botWebhooks.values()) {
+                        try {
+                            await oldWebhook.delete('Cleaning up old webhooks');
+                        } catch {}
+                    }
+                }
+                
+                logsWebhook = await (logsChannel as any).createWebhook({
+                    name: 'Team VC Logger',
+                    reason: 'For logging Team VC actions',
+                });
+            }
+        } catch (webhookError: any) {
+            throw new Error(`Failed to setup webhook: ${webhookError.message}`);
+        }
 
         await prisma.teamVoiceSettings.upsert({
             where: { guildId: guild.id },

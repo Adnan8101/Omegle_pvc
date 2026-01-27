@@ -454,9 +454,20 @@ export class ModMailService {
         // Ensure bot has Manage Webhooks permission in the category creation or channel creation, assume yes.
 
         const webhooks = await channel.fetchWebhooks();
-        let webhook = webhooks.find(w => w.owner?.id === client.user?.id);
+        let webhook = webhooks.find(w => w.owner?.id === client.user?.id && w.name === 'ModMail Relay');
 
         if (!webhook) {
+            // Clean up old bot webhooks if we're at the limit
+            const botWebhooks = webhooks.filter(w => w.owner?.id === client.user?.id);
+            if (webhooks.size >= 15 && botWebhooks.size > 0) {
+                console.log('[ModMail] Webhook limit reached, cleaning up old bot webhooks...');
+                for (const oldWebhook of botWebhooks.values()) {
+                    try {
+                        await oldWebhook.delete('Cleaning up old webhooks');
+                    } catch {}
+                }
+            }
+            
             webhook = await channel.createWebhook({
                 name: 'ModMail Relay',
                 avatar: client.user?.displayAvatarURL()

@@ -159,14 +159,39 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         try {
             console.log(`[Refresh PVC] Fetching webhooks for PVC logs channel: ${pvcLogsChannel.id}`);
             const webhooks = await (pvcLogsChannel as any).fetchWebhooks();
-            let webhook = webhooks.find((w: any) => w.owner?.id === interaction.client.user?.id);
+            const botWebhooks = webhooks.filter((w: any) => w.owner?.id === interaction.client.user?.id && w.name === 'PVC Logger');
+            
+            let webhook = botWebhooks.first();
 
             if (!webhook) {
-                console.log('[Refresh PVC] Creating new PVC webhook...');
+                console.log('[Refresh PVC] No existing webhook found, creating new PVC webhook...');
+                
+                // Clean up old bot webhooks if we're at the limit
+                const allBotWebhooks = webhooks.filter((w: any) => w.owner?.id === interaction.client.user?.id);
+                if (webhooks.size >= 15 && allBotWebhooks.size > 0) {
+                    console.log('[Refresh PVC] Webhook limit reached, cleaning up old bot webhooks...');
+                    for (const oldWebhook of allBotWebhooks.values()) {
+                        try {
+                            await oldWebhook.delete('Cleaning up old webhooks');
+                            console.log('[Refresh PVC] Deleted old webhook:', oldWebhook.name);
+                        } catch {}
+                    }
+                }
+                
                 webhook = await (pvcLogsChannel as any).createWebhook({
                     name: 'PVC Logger',
                     reason: 'PVC Logs Refresh',
                 });
+            } else if (botWebhooks.size > 1) {
+                // Clean up duplicates, keep the first one
+                console.log(`[Refresh PVC] Found ${botWebhooks.size} duplicate webhooks, cleaning up...`);
+                const duplicates = botWebhooks.filter((w: any) => w.id !== webhook.id);
+                for (const dup of duplicates.values()) {
+                    try {
+                        await dup.delete('Removing duplicate webhook');
+                        console.log('[Refresh PVC] Deleted duplicate webhook');
+                    } catch {}
+                }
             }
             pvcLogsWebhookUrl = webhook.url;
             console.log('[Refresh PVC] PVC webhook ready');
@@ -180,14 +205,39 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         try {
             console.log(`[Refresh PVC] Fetching webhooks for Team logs channel: ${teamLogsChannel.id}`);
             const webhooks = await (teamLogsChannel as any).fetchWebhooks();
-            let webhook = webhooks.find((w: any) => w.owner?.id === interaction.client.user?.id);
+            const botWebhooks = webhooks.filter((w: any) => w.owner?.id === interaction.client.user?.id && w.name === 'Team VC Logger');
+            
+            let webhook = botWebhooks.first();
 
             if (!webhook) {
-                console.log('[Refresh PVC] Creating new Team webhook...');
+                console.log('[Refresh PVC] No existing webhook found, creating new Team webhook...');
+                
+                // Clean up old bot webhooks if we're at the limit
+                const allBotWebhooks = webhooks.filter((w: any) => w.owner?.id === interaction.client.user?.id);
+                if (webhooks.size >= 15 && allBotWebhooks.size > 0) {
+                    console.log('[Refresh PVC] Webhook limit reached, cleaning up old bot webhooks...');
+                    for (const oldWebhook of allBotWebhooks.values()) {
+                        try {
+                            await oldWebhook.delete('Cleaning up old webhooks');
+                            console.log('[Refresh PVC] Deleted old webhook:', oldWebhook.name);
+                        } catch {}
+                    }
+                }
+                
                 webhook = await (teamLogsChannel as any).createWebhook({
                     name: 'Team VC Logger',
                     reason: 'Team Logs Refresh',
                 });
+            } else if (botWebhooks.size > 1) {
+                // Clean up duplicates
+                console.log(`[Refresh PVC] Found ${botWebhooks.size} duplicate webhooks, cleaning up...`);
+                const duplicates = botWebhooks.filter((w: any) => w.id !== webhook.id);
+                for (const dup of duplicates.values()) {
+                    try {
+                        await dup.delete('Removing duplicate webhook');
+                        console.log('[Refresh PVC] Deleted duplicate webhook');
+                    } catch {}
+                }
             }
             teamLogsWebhookUrl = webhook.url;
             console.log('[Refresh PVC] Team webhook ready');

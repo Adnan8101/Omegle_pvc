@@ -158,12 +158,42 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             components,
         });
 
-        console.log('[PVC Setup] Creating logs webhook...');
-        const logsWebhook = await (logsChannel as any).createWebhook({
-            name: 'PVC Logger',
-            reason: 'For logging PVC actions',
-        });
-        console.log('[PVC Setup] Webhook created successfully');
+        console.log('[PVC Setup] Setting up logs webhook...');
+        let logsWebhook;
+        try {
+            // Try to reuse existing webhook
+            const webhooks = await (logsChannel as any).fetchWebhooks();
+            logsWebhook = webhooks.find((w: any) => w.owner?.id === interaction.client.user?.id && w.name === 'PVC Logger');
+            
+            if (logsWebhook) {
+                console.log('[PVC Setup] Reusing existing webhook:', logsWebhook.id);
+            } else {
+                console.log('[PVC Setup] No existing webhook found, creating new one...');
+                
+                // Clean up old bot webhooks if we're at the limit
+                const botWebhooks = webhooks.filter((w: any) => w.owner?.id === interaction.client.user?.id);
+                if (webhooks.size >= 15 && botWebhooks.size > 0) {
+                    console.log('[PVC Setup] Webhook limit reached, cleaning up old bot webhooks...');
+                    for (const oldWebhook of botWebhooks.values()) {
+                        try {
+                            await oldWebhook.delete('Cleaning up old webhooks');
+                            console.log('[PVC Setup] Deleted old webhook:', oldWebhook.name);
+                        } catch (deleteErr) {
+                            console.error('[PVC Setup] Failed to delete old webhook:', deleteErr);
+                        }
+                    }
+                }
+                
+                logsWebhook = await (logsChannel as any).createWebhook({
+                    name: 'PVC Logger',
+                    reason: 'For logging PVC actions',
+                });
+                console.log('[PVC Setup] Webhook created successfully');
+            }
+        } catch (webhookError: any) {
+            console.error('[PVC Setup] Webhook error:', webhookError.message);
+            throw new Error(`Failed to setup webhook: ${webhookError.message}`);
+        }
 
         console.log('[PVC Setup] Saving guild settings to database...');
         console.log('[PVC Setup] Guild ID:', guild.id);
