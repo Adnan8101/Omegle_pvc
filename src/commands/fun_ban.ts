@@ -28,6 +28,9 @@ async function execute(interaction: ChatInputCommandInteraction) {
         return;
     }
 
+    await interaction.deferReply();
+    await interaction.guild.members.fetch();
+
     const role = interaction.options.getRole('role') as Role;
 
     // Fallback if members size is not available directly (though normally it is in cached roles)
@@ -51,7 +54,7 @@ async function execute(interaction: ChatInputCommandInteraction) {
     const row = new ActionRowBuilder<ButtonBuilder>()
         .addComponents(confirmButton, cancelButton);
 
-    const response = await interaction.reply({
+    const response = await interaction.editReply({
         embeds: [embed],
         components: [row],
     });
