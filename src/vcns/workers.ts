@@ -257,7 +257,7 @@ async function executeVCCreate(intent: Intent<VCCreatePayload>): Promise<WorkerR
         teamType: payload.teamType,
         userLimit: payload.userLimit,
         bitrate: payload.bitrate,
-        skipDbWrite: false,
+        skipDbWrite: true, // Let the caller handle DB write with permissions
         skipLock: true, // Intent system already holds the lock
         lockHolder: intent.id, // CRITICAL FIX #3: Use intent.id as lock holder
     });

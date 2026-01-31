@@ -784,34 +784,62 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
             } catch { }
             return;
         }
-        const newChannel = guild.channels.cache.get(createResult.channelId);
+        
+        // Fetch channel - it might not be in cache yet
+        let newChannel = guild.channels.cache.get(createResult.channelId);
+        if (!newChannel) {
+            try {
+                newChannel = await guild.channels.fetch(createResult.channelId) as any;
+            } catch {
+                console.log(`[VCNS-CREATE] ❌ Could not fetch created channel ${createResult.channelId}`);
+            }
+        }
         if (!newChannel || !newChannel.isVoiceBased()) {
+            console.log(`[VCNS-CREATE] ❌ Channel not found or not voice-based`);
             releaseCreationLock(guild.id, member.id);
             return;
         }
+        
+        // Register channel in memory immediately
         recordBotEdit(newChannel.id);
         registerChannel(newChannel.id, guild.id, member.id);
         addUserToJoinOrder(newChannel.id, member.id);
-        await prisma.privateVoiceChannel.create({
-            data: {
-                channelId: newChannel.id,
-                guildId: guild.id,
-                ownerId: member.id,
-                createdAt: new Date(),
-                permissions: {
-                    create: savedPermissions.map(p => ({
-                        targetId: p.targetId,
-                        targetType: p.targetType,
-                        permission: p.permission,
-                    })),
-                },
-            },
-        });
         releaseCreationLock(guild.id, member.id);
+        
+        // MOVE USER FIRST - This is the most important thing
+        console.log(`[VCNS-CREATE] 🚚 Moving user ${member.user.tag} to new channel ${newChannel.id}`);
         const freshMember = await guild.members.fetch(member.id);
-        if (freshMember.voice.channelId) {
-            await freshMember.voice.setChannel(newChannel);
+        if (!freshMember.voice.channelId) {
+            console.log(`[VCNS-CREATE] ❌ User left voice before move - cleaning up`);
+            await newChannel.delete().catch(() => {});
+            unregisterChannel(newChannel.id);
+            return;
+        }
+        
+        await freshMember.voice.setChannel(newChannel);
+        console.log(`[VCNS-CREATE] ✅ User moved successfully`);
+        
+        // Now do DB write and interface in background (don't await)
+        (async () => {
             try {
+                // Write to DB
+                await prisma.privateVoiceChannel.create({
+                    data: {
+                        channelId: newChannel.id,
+                        guildId: guild.id,
+                        ownerId: member.id,
+                        createdAt: new Date(),
+                        permissions: {
+                            create: savedPermissions.map(p => ({
+                                targetId: p.targetId,
+                                targetType: p.targetType,
+                                permission: p.permission,
+                            })),
+                        },
+                    },
+                });
+                
+                // Send interface
                 const imageBuffer = await generateInterfaceImage();
                 const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
                 const embed = generateVcInterfaceEmbed(guild, member.id, 'interface.png');
@@ -823,67 +851,66 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                     components,
                 });
                 await interfaceMessage.pin().catch(() => { });
-            } catch { }
-            await logAction({
-                action: LogAction.CHANNEL_CREATED,
-                guild: guild,
-                user: member.user,
-                channelName: newChannel.name,
-                channelId: newChannel.id,
-                details: `Private voice channel created`,
-            });
-        } else {
-            await newChannel.delete();
-            unregisterChannel(newChannel.id);
-            await prisma.privateVoiceChannel.delete({ where: { channelId: newChannel.id } }).catch(() => { });
-            return;
-        }
-        const ownerPermissions = await getCachedOwnerPerms(guild.id, member.id);
-        if (ownerPermissions.length > 0) {
-            const validPermissions: typeof ownerPermissions = [];
-            const invalidTargetIds: string[] = [];
-            for (const perm of ownerPermissions) {
-                const isValidTarget = perm.targetType === 'role'
-                    ? guild.roles.cache.has(perm.targetId)
-                    : guild.members.cache.has(perm.targetId) || await guild.members.fetch(perm.targetId).catch(() => null);
-                if (isValidTarget) {
-                    validPermissions.push(perm);
-                } else {
-                    invalidTargetIds.push(perm.targetId);
+                
+                // Log action
+                await logAction({
+                    action: LogAction.CHANNEL_CREATED,
+                    guild: guild,
+                    user: member.user,
+                    channelName: newChannel.name,
+                    channelId: newChannel.id,
+                    details: `Private voice channel created`,
+                });
+            } catch (err) {
+                console.error(`[VCNS-CREATE] Background tasks error:`, err);
+            }
+        })();
+        
+        // Handle owner permissions in background too
+        (async () => {
+            try {
+                const ownerPermissions = await getCachedOwnerPerms(guild.id, member.id);
+                if (ownerPermissions.length > 0) {
+                    const validPermissions: typeof ownerPermissions = [];
+                    const invalidTargetIds: string[] = [];
+                    for (const perm of ownerPermissions) {
+                        const isValidTarget = perm.targetType === 'role'
+                            ? guild.roles.cache.has(perm.targetId)
+                            : guild.members.cache.has(perm.targetId) || await guild.members.fetch(perm.targetId).catch(() => null);
+                        if (isValidTarget) {
+                            validPermissions.push(perm);
+                        } else {
+                            invalidTargetIds.push(perm.targetId);
+                        }
+                    }
+                    if (invalidTargetIds.length > 0) {
+                        await prisma.ownerPermission.deleteMany({
+                            where: {
+                                guildId: guild.id,
+                                ownerId: member.id,
+                                targetId: { in: invalidTargetIds },
+                            },
+                        }).catch(() => { });
+                    }
+                    if (validPermissions.length > 0) {
+                        recordBotEdit(newChannel.id);
+                        for (const perm of validPermissions) {
+                            await vcnsBridge.editPermission({
+                                guild,
+                                channelId: newChannel.id,
+                                targetId: perm.targetId,
+                                permissions: {
+                                    ViewChannel: true,
+                                    Connect: true,
+                                },
+                            });
+                        }
+                    }
                 }
+            } catch (err) {
+                console.error(`[VCNS-CREATE] Owner permissions error:`, err);
             }
-            if (invalidTargetIds.length > 0) {
-                await prisma.ownerPermission.deleteMany({
-                    where: {
-                        guildId: guild.id,
-                        ownerId: member.id,
-                        targetId: { in: invalidTargetIds },
-                    },
-                }).catch(() => { });
-            }
-            if (validPermissions.length > 0) {
-                recordBotEdit(newChannel.id);
-                for (const perm of validPermissions) {
-                    await vcnsBridge.editPermission({
-                        guild,
-                        channelId: newChannel.id,
-                        targetId: perm.targetId,
-                        permissions: {
-                            ViewChannel: true,
-                            Connect: true,
-                        },
-                    });
-                }
-                await batchUpsertPermissions(
-                    newChannel.id,
-                    validPermissions.map(p => ({
-                        targetId: p.targetId,
-                        targetType: p.targetType,
-                        permission: 'permit',
-                    }))
-                );
-            }
-        }
+        })();
     } catch (error) {
         releaseCreationLock(guild.id, member.id);
     }
