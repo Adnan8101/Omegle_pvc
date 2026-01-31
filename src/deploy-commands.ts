@@ -28,7 +28,8 @@ import prisma from './utils/database';
 // Giveaway commands
 import { giveawayCommands } from './commands/giveaways';
 
-const commands = [
+// Base commands array
+const baseCommands = [
     pvcSetup.data.toJSON(),
     adminStrictness.data.toJSON(),
     teamAdminStrictness.data.toJSON(),
@@ -53,16 +54,30 @@ const commands = [
     funBan.data.toJSON(),
     counting.data.toJSON(),
 ];
+
+// Add giveaway commands to the array
+const giveawayCommandsArray = Object.values(giveawayCommands)
+    .filter((cmd: any) => cmd.data)
+    .map((cmd: any) => cmd.data.toJSON());
+
+const commands = [...baseCommands, ...giveawayCommandsArray];
 const rest = new REST().setToken(Config.token);
 async function deployCommands() {
     try {
+        console.log(`Started refreshing ${commands.length} application (/) commands.`);
+        console.log(`Base commands: ${baseCommands.length}`);
+        console.log(`Giveaway commands: ${giveawayCommandsArray.length}`);
+        
         const route = Config.guildId
             ? Routes.applicationGuildCommands(Config.clientId, Config.guildId)
             : Routes.applicationCommands(Config.clientId);
         await rest.put(route, { body: commands });
+        
+        console.log(`Successfully reloaded ${commands.length} application (/) commands.`);
         await prisma.$disconnect();
         process.exit(0);
     } catch (error) {
+        console.error('Failed to deploy commands:', error);
         await prisma.$disconnect();
         process.exit(1);
     }
