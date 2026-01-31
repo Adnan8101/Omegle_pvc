@@ -598,7 +598,27 @@ async function handleDelete(interaction: ButtonInteraction): Promise<void> {
         });
         return;
     }
-    const allPVCs = getGuildChannels(guild.id);
+    let allPVCs = getGuildChannels(guild.id);
+    
+    // If cache is empty, try loading from database as fallback
+    if (allPVCs.length === 0) {
+        const dbPVCs = await prisma.privateVoiceChannel.findMany({
+            where: { guildId: guild.id },
+        });
+        
+        // Re-register any PVCs found in DB that are still valid Discord channels
+        for (const pvc of dbPVCs) {
+            const channel = guild.channels.cache.get(pvc.channelId);
+            if (channel) {
+                const { registerChannel } = await import('../../utils/voiceManager');
+                registerChannel(pvc.channelId, pvc.guildId, pvc.ownerId);
+            }
+        }
+        
+        // Re-fetch from cache after registration
+        allPVCs = getGuildChannels(guild.id);
+    }
+    
     if (allPVCs.length === 0) {
         await interaction.reply({
             content: 'There are no active private voice channels.',

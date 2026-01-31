@@ -1,6 +1,6 @@
 import { type Guild, ChannelType } from 'discord.js';
 import prisma from './database';
-import { unregisterChannel, registerChannel, registerInterfaceChannel } from './voiceManager';
+import { unregisterChannel, registerChannel, registerInterfaceChannel, getGuildChannels, registerTeamChannel, type TeamType } from './voiceManager';
 import { client } from '../client';
 import { invalidateGuildSettings } from './cache';
 let cleanupInterval: NodeJS.Timeout | null = null;
@@ -41,13 +41,75 @@ export async function loadGuildSettings(): Promise<void> {
         }
     }
 }
+
+/**
+ * Sync in-memory cache with database for a specific guild.
+ * This ensures the cache always reflects what's in the DB.
+ */
+export async function syncGuildFromDatabase(guildId: string): Promise<{ synced: number }> {
+    let synced = 0;
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild) return { synced };
+
+    // Get current in-memory state
+    const cachedPVCs = getGuildChannels(guildId);
+    const cachedIds = new Set(cachedPVCs.map(p => p.channelId));
+
+    // Get database state
+    const dbPVCs = await prisma.privateVoiceChannel.findMany({
+        where: { guildId },
+    });
+
+    // Register any PVCs that are in DB but not in cache
+    for (const pvc of dbPVCs) {
+        if (!cachedIds.has(pvc.channelId)) {
+            const channel = guild.channels.cache.get(pvc.channelId);
+            if (channel && channel.type === ChannelType.GuildVoice) {
+                registerChannel(pvc.channelId, pvc.guildId, pvc.ownerId);
+                synced++;
+            }
+        }
+    }
+
+    // Also sync team channels
+    const dbTeamChannels = await prisma.teamVoiceChannel.findMany({
+        where: { guildId },
+    });
+
+    for (const tc of dbTeamChannels) {
+        const channel = guild.channels.cache.get(tc.channelId);
+        if (channel && channel.type === ChannelType.GuildVoice) {
+            registerTeamChannel(tc.channelId, tc.guildId, tc.ownerId, tc.teamType.toLowerCase() as TeamType);
+            synced++;
+        }
+    }
+
+    return { synced };
+}
+
+/**
+ * Sync all guilds from database - useful for recovery
+ */
+export async function syncAllFromDatabase(): Promise<{ synced: number }> {
+    let totalSynced = 0;
+    for (const [guildId] of client.guilds.cache) {
+        const result = await syncGuildFromDatabase(guildId);
+        totalSynced += result.synced;
+    }
+    if (totalSynced > 0) {
+        console.log(`[StateManager] Synced ${totalSynced} channels from database`);
+    }
+    return { synced: totalSynced };
+}
 export function startCleanupInterval(): void {
     if (cleanupInterval) return;
     setTimeout(async () => {
         await cleanupStaleChannels();
+        await syncAllFromDatabase(); // Ensure cache is in sync after cleanup
     }, 30000);
     cleanupInterval = setInterval(async () => {
         await cleanupStaleChannels();
+        await syncAllFromDatabase(); // Periodic sync to catch any missed registrations
     }, 5 * 60 * 1000);
 }
 export function stopCleanupInterval(): void {

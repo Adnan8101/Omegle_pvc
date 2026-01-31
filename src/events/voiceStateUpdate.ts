@@ -936,25 +936,24 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
         await freshMember.voice.setChannel(newChannel);
         console.log(`[VCNS-CREATE] ✅ User moved successfully`);
         
-        // Now do DB write and interface in background (don't await)
+        // Now do interface and permissions in background (don't await)
+        // NOTE: DB record is already created by buildVC in workers.ts
         (async () => {
             try {
-                // Write to DB
-                await prisma.privateVoiceChannel.create({
-                    data: {
-                        channelId: newChannel.id,
-                        guildId: guild.id,
-                        ownerId: member.id,
-                        createdAt: new Date(),
-                        permissions: {
-                            create: savedPermissions.map(p => ({
-                                targetId: p.targetId,
-                                targetType: p.targetType,
-                                permission: p.permission,
-                            })),
-                        },
-                    },
-                });
+                // Add permissions to the existing DB record if any
+                if (savedPermissions.length > 0) {
+                    await prisma.voicePermission.createMany({
+                        data: savedPermissions.map(p => ({
+                            channelId: newChannel.id,
+                            targetId: p.targetId,
+                            targetType: p.targetType,
+                            permission: p.permission,
+                        })),
+                        skipDuplicates: true,
+                    }).catch(err => {
+                        console.error(`[VCNS-CREATE] Failed to add permissions to DB:`, err);
+                    });
+                }
                 
                 // Send interface
                 const imageBuffer = await generateInterfaceImage();

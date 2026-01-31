@@ -132,8 +132,9 @@ async function writeToDatabase(
     ownerId: string,
     isTeamChannel: boolean,
     teamType?: 'DUO' | 'TRIO' | 'SQUAD',
-): Promise<void> {
+): Promise<boolean> {
     try {
+        console.log(`[VCBuilder] 📝 Writing channel ${channelId} to database (guild: ${guildId}, owner: ${ownerId}, team: ${isTeamChannel})`);
         if (isTeamChannel) {
             await prisma.teamVoiceChannel.create({
                 data: {
@@ -156,17 +157,20 @@ async function writeToDatabase(
                 },
             });
         }
+        console.log(`[VCBuilder] ✅ Channel ${channelId} written to database successfully`);
+        return true;
     } catch (error: any) {
-        // CRITICAL FIX #4: Stop swallowing DB errors - log them for debugging
-        console.error(`[VCBuilder] Database write failed for channel ${channelId}:`, {
+        // CRITICAL: Log full error including code for debugging foreign key issues
+        console.error(`[VCBuilder] ❌ Database write failed for channel ${channelId}:`, {
             error: error.message,
+            code: error.code,
             channelId,
             guildId,
             ownerId,
             isTeamChannel,
             teamType
         });
-        // DB write failure doesn't block VC creation, but must be visible
+        return false;
     }
 }
 function handleError(error: any, guildId: string): VCBuildResult {

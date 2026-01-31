@@ -78,7 +78,7 @@ for (const [name, command] of Object.entries(giveawayCommands)) {
 }
 
 client.once(readyEvent.name, async () => {
-    readyEvent.execute(client);
+    await readyEvent.execute(client);
     startCleanupInterval();
     await vcns.start();
     console.log('[VCNS] Virtual Central Nervous System started');
