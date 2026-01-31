@@ -245,34 +245,118 @@ model CountingUserStats {
   @@index([guildId, counting])
 }
 
+// =====================================
+// GIVEAWAY SYSTEM MODELS
+// =====================================
+
 model Giveaway {
-  id           String   @id @default(uuid())
-  messageId    String   @unique
-  guildId      String
-  channelId    String
-  hostId       String   // User who created the giveaway
-  prize        String
-  winnerCount  Int      @default(1)
-  endsAt       DateTime
-  ended        Boolean  @default(false)
-  createdAt    DateTime @default(now())
+  id                    Int      @id @default(autoincrement())
+  messageId             String   @unique
+  channelId             String
+  guildId               String
+  hostId                String
+  prize                 String
+  winnersCount          Int
+  endTime               BigInt   // Unix timestamp in milliseconds
+  ended                 Boolean  @default(false)
+  paused                Boolean  @default(false)
+  pausedAt              BigInt?
+  createdAt             BigInt
 
-  forcedWinners ForcedWinner[]
+  // Requirements
+  roleRequirement       String?
+  inviteRequirement     Int      @default(0)
+  accountAgeRequirement Int      @default(0)
+  serverAgeRequirement  Int      @default(0)
+  captchaRequirement    Boolean  @default(false)
+  messageRequired       Int      @default(0)
+  voiceRequirement      Int      @default(0)
 
+  // Features
+  customMessage         String?
+  assignRole            String?
+  winnerRole            String?
+  thumbnail             String?
+  emoji                 String   @default("🎉")
+  increaseChance        String?  // 'role', 'booster', 'role_booster'
+  increaseChanceRole    String?
+  forcedWinners         String?  // Comma-separated user IDs for forced winners
+  preCalculatedWinners  String?  // Pre-calculated winner IDs (comma-separated)
+  winnersCalculatedAt   BigInt?  // When winners were pre-calculated
+
+  participants          GiveawayParticipant[]
+  winners               GiveawayWinner[]
+  
   @@index([guildId])
-  @@index([messageId])
   @@index([ended])
 }
 
-model ForcedWinner {
-  id          String   @id @default(uuid())
-  giveawayId  String
-  userId      String
-  addedBy     String   // Bot owner who added this
-  createdAt   DateTime @default(now())
+model GiveawayParticipant {
+  id         Int      @id @default(autoincrement())
+  giveawayId Int
+  userId     String
+  joinedAt   BigInt
+  giveaway   Giveaway @relation(fields: [giveawayId], references: [id], onDelete: Cascade)
 
-  giveaway    Giveaway @relation(fields: [giveawayId], references: [id], onDelete: Cascade)
+  @@index([giveawayId])
+  @@index([userId])
+}
 
-  @@unique([giveawayId, userId])
+model GiveawayWinner {
+  id         Int      @id @default(autoincrement())
+  giveawayId Int
+  userId     String
+  wonAt      BigInt
+  giveaway   Giveaway @relation(fields: [giveawayId], references: [id], onDelete: Cascade)
+
   @@index([giveawayId])
 }
+
+model ScheduledGiveaway {
+  id                    Int      @id @default(autoincrement())
+  channelId             String
+  guildId               String
+  hostId                String
+  prize                 String
+  winnersCount          Int
+  payload               String   // JSON string containing all options
+  startTime             BigInt   // Unix timestamp in milliseconds
+  createdAt             DateTime @default(now())
+
+  @@index([guildId])
+  @@index([startTime])
+}
+
+model GiveawayConfig {
+  guildId     String @id
+  managerRole String?
+  prefix      String @default("!")
+}
+
+model GiveawayUserStats {
+  id           Int    @id @default(autoincrement())
+  guildId      String
+  userId       String
+  messageCount Int    @default(0)
+  voiceMinutes Int    @default(0)
+  inviteCount  Int    @default(0)
+
+  @@unique([guildId, userId])
+  @@index([guildId])
+}
+
+model GiveawayInviteTracker {
+  id        Int      @id @default(autoincrement())
+  guildId   String
+  inviterId String
+  inviteeId String
+  code      String?
+  createdAt DateTime @default(now())
+
+  @@unique([guildId, inviteeId])
+  @@index([guildId])
+}
+
+// =====================================
+// END GIVEAWAY SYSTEM MODELS
+// =====================================

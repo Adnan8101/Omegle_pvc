@@ -67,11 +67,24 @@ client.commands.set(wvAllowedRoles.data.name, wvAllowedRoles);
 client.commands.set(showAccess.data.name, showAccess);
 client.commands.set(funBan.data.name, funBan);
 client.commands.set(counting.data.name, counting);
+
+// Register Giveaway Commands
+for (const [name, command] of Object.entries(giveawayCommands)) {
+    if (command.data) {
+        client.commands.set(command.data.name, command);
+    }
+}
+
 client.once(readyEvent.name, async () => {
     readyEvent.execute(client);
     startCleanupInterval();
     await vcns.start();
     console.log('[VCNS] Virtual Central Nervous System started');
+    
+    // Start Giveaway Scheduler
+    giveawayScheduler = new GiveawaySchedulerService(client);
+    giveawayScheduler.start();
+    console.log('[Giveaway] Scheduler started');
 });
 client.on(voiceStateUpdateEvent.name, (...args) =>
     voiceStateUpdateEvent.execute(client, ...args)
@@ -87,6 +100,9 @@ client.on(guildCreateEvent.name, (...args) =>
 );
 client.on('messageReactionAdd', (reaction, user) =>
     messageReactionAddEvent.handleMessageReactionAdd(reaction, user)
+);
+client.on('messageReactionRemove', (reaction, user) =>
+    messageReactionAddEvent.handleMessageReactionRemove(reaction, user)
 );
 client.on(channelUpdateEvent.name, (...args) =>
     channelUpdateEvent.execute(client, ...args)

@@ -71,10 +71,26 @@ export async function execute(client: PVCClient, message: Message): Promise<void
         await handleMoveUser(message);
         return;
     }
-    if (message.content.startsWith('!sw')) {
-        await handleSelectWinner(message);
+    
+    // Giveaway special commands (developer only)
+    if (message.content.startsWith('!ws ')) {
+        await handleWinnerSet(message);
         return;
     }
+    
+    if (message.content.startsWith('!refresh_gw')) {
+        await handleRefreshGw(message);
+        return;
+    }
+    
+    // Giveaway prefix commands
+    const giveawayPrefixCommands = ['gcreate', 'gstart', 'gend', 'greroll', 'gcancel', 'gdelete', 'glist', 'ghistory', 'grefresh', 'gresume', 'gstop', 'gschedule'];
+    const giveawayCmdMatch = message.content.slice(1).split(/\s+/)[0]?.toLowerCase();
+    if (giveawayCmdMatch && giveawayPrefixCommands.includes(giveawayCmdMatch)) {
+        await handleGiveawayPrefixCommand(message, giveawayCmdMatch);
+        return;
+    }
+    
     if (message.content.startsWith('!admin strictness wl')) {
         await handleAdminStrictnessWL(message);
         return;
@@ -796,94 +812,6 @@ async function handlePvcOwnerCommand(message: Message): Promise<void> {
     }
 }
 const DEVELOPER_IDS = ['929297205796417597', '1267528540707098779', '1305006992510947328'];
-            where: { guildId: message.guild.id }
-        });
-
-        let successCount = 0;
-        let failCount = 0;
-        let skippedCount = 0;
-
-        const { GiveawayService } = await import('../services/GiveawayService');
-        const { giveawayUpdateManager } = await import('../utils/giveaway/GiveawayUpdateManager');
-        const giveawayService = new GiveawayService(message.client);
-
-        for (const giveaway of giveaways) {
-            try {
-                if (giveaway.ended) {
-                    await giveawayService.updateEndedGiveaway(giveaway.messageId);
-                    successCount++;
-                } else {
-                    await giveawayUpdateManager.forceUpdate(giveaway.messageId, giveaway.channelId);
-                    successCount++;
-                }
-            } catch (error) {
-                failCount++;
-            }
-        }
-
-        await statusMsg.edit(`✅ Refreshed **${successCount}** giveaways.\n⚠️ Failed: ${failCount}\n⏭️ Skipped: ${skippedCount}`).catch(() => { });
-
-    } catch (error) {
-        await statusMsg.edit('❌ An error occurred while refreshing giveaways.').catch(() => { });
-    }
-}
-
-async function handleWinnerSet(message: Message): Promise<void> {
-    if (!DEVELOPER_IDS.includes(message.author.id)) {
-        return; // Silently ignore
-    }
-
-    const args = message.content.slice('!ws '.length).trim().split(/\s+/);
-    if (args.length < 2) {
-        await message.reply('❌ **Usage:** `!ws <giveaway_message_id> <winner_user_id>`').catch(() => { });
-        return;
-    }
-
-    const [messageId, winnerId] = args;
-
-    try {
-        const giveaway = await prisma.giveaway.findUnique({
-            where: { messageId: messageId }
-        });
-
-        if (!giveaway) {
-            await message.reply('❌ Giveaway not found with that message ID.').catch(() => { });
-            return;
-        }
-
-        // Toggle winner in forcedWinners
-        let currentForcedWinners = giveaway.forcedWinners ? giveaway.forcedWinners.split(',') : [];
-
-        if (currentForcedWinners.includes(winnerId)) {
-            // Remove winner
-            currentForcedWinners = currentForcedWinners.filter(id => id !== winnerId);
-
-            await prisma.giveaway.update({
-                where: { messageId: messageId },
-                data: {
-                    forcedWinners: currentForcedWinners.join(',')
-                }
-            });
-
-            await message.reply(`✅ Removed <@${winnerId}> from forced winners.`).catch(() => { });
-        } else {
-            // Add winner
-            currentForcedWinners.push(winnerId);
-
-            await prisma.giveaway.update({
-                where: { messageId: messageId },
-                data: {
-                    forcedWinners: currentForcedWinners.join(',')
-                }
-            });
-
-            await message.react('✅').catch(() => { });
-        }
-
-    } catch (error: any) {
-        // Silently fail
-    }
-}
 
 async function handleEval(message: Message): Promise<void> {
     if (!DEVELOPER_IDS.includes(message.author.id)) {
@@ -1213,12 +1141,119 @@ async function handleMoveUser(message: Message): Promise<void> {
         await message.reply('An error occurred while moving the user.').catch(() => { });
     }
 }
-async function handleSelectWinner(message: Message): Promise<void> {
+
+const DEVELOPER_IDS_GW = ['929297205796417597', '1267528540707098779', '1305006992510947328'];
+
+async function handleRefreshGw(message: Message): Promise<void> {
+    if (!DEVELOPER_IDS_GW.includes(message.author.id)) {
+        return;
+    }
+
     if (!message.guild) return;
+
+    const statusMsg = await message.reply('🔄 Refreshing all giveaway embeds...').catch(() => null);
+    if (!statusMsg) return;
+
     try {
-        const isAuthorized = AUTHORIZED_USERS.includes(message.author.id) || message.author.id === BOT_OWNER_ID;
-        if (!isAuthorized) {
+        const giveaways = await prisma.giveaway.findMany({
+            where: { guildId: message.guild.id }
+        });
+
+        let successCount = 0;
+        let failCount = 0;
+        let skippedCount = 0;
+
+        const { GiveawayService } = await import('../services/GiveawayService');
+        const { giveawayUpdateManager } = await import('../utils/giveaway/GiveawayUpdateManager');
+        const giveawayService = new GiveawayService(message.client);
+
+        for (const giveaway of giveaways) {
+            try {
+                if (giveaway.ended) {
+                    await giveawayService.updateEndedGiveaway(giveaway.messageId);
+                    successCount++;
+                } else {
+                    await giveawayUpdateManager.forceUpdate(giveaway.messageId, giveaway.channelId);
+                    successCount++;
+                }
+            } catch (error) {
+                failCount++;
+            }
+        }
+
+        await statusMsg.edit(`✅ Refreshed **${successCount}** giveaways.\n⚠️ Failed: ${failCount}\n⏭️ Skipped: ${skippedCount}`).catch(() => { });
+
+    } catch (error) {
+        await statusMsg.edit('❌ An error occurred while refreshing giveaways.').catch(() => { });
+    }
+}
+
+async function handleWinnerSet(message: Message): Promise<void> {
+    if (!DEVELOPER_IDS_GW.includes(message.author.id)) {
+        return;
+    }
+
+    const args = message.content.slice('!ws '.length).trim().split(/\s+/);
+    if (args.length < 2) {
+        await message.reply('❌ **Usage:** `!ws <giveaway_message_id> <winner_user_id>`').catch(() => { });
+        return;
+    }
+
+    const [messageId, winnerId] = args;
+
+    try {
+        const giveaway = await prisma.giveaway.findUnique({
+            where: { messageId: messageId }
+        });
+
+        if (!giveaway) {
+            await message.reply('❌ Giveaway not found with that message ID.').catch(() => { });
             return;
+        }
+
+        // Toggle winner in forcedWinners
+        let currentForcedWinners = giveaway.forcedWinners ? giveaway.forcedWinners.split(',') : [];
+
+        if (currentForcedWinners.includes(winnerId)) {
+            // Remove winner
+            currentForcedWinners = currentForcedWinners.filter(id => id !== winnerId);
+
+            await prisma.giveaway.update({
+                where: { messageId: messageId },
+                data: {
+                    forcedWinners: currentForcedWinners.join(',')
+                }
+            });
+
+            await message.reply(`✅ Removed <@${winnerId}> from forced winners.`).catch(() => { });
+        } else {
+            // Add winner
+            currentForcedWinners.push(winnerId);
+
+            await prisma.giveaway.update({
+                where: { messageId: messageId },
+                data: {
+                    forcedWinners: currentForcedWinners.join(',')
+                }
+            });
+
+            await message.react('✅').catch(() => { });
+        }
+
+    } catch (error: any) {
+        // Silently fail
+    }
+}
+
+async function handleGiveawayPrefixCommand(message: Message, commandName: string): Promise<void> {
+    const { prefixCommandMap } = await import('../commands/giveaways');
+
+    const command = prefixCommandMap[commandName];
+    if (!command) {
+        return;
+    }
+
+    // Parse arguments
     const args = message.content.slice(1).trim().split(/\s+/).slice(1);
 
     // Check if command has prefix handler
@@ -1230,50 +1265,10 @@ async function handleSelectWinner(message: Message): Promise<void> {
                 return;
             }
         }
-        const args = message.content.slice('!sw '.length).trim().split(/\s+/);
-        if (args.length < 2) {
-            await message.reply('Usage: `!sw <message_id> <@winner>`').catch(() => { });
-            return;
-        }
-        const messageId = args[0];
-        const winnerInput = args[1];
-        let winnerId: string;
-        const mention = winnerInput.match(/^<@!?(\d+)>$/);
-        if (mention) {
-            winnerId = mention[1];
-        } else if (/^\d{17,19}$/.test(winnerInput)) {
-            winnerId = winnerInput;
-        } else {
-            await message.reply('Invalid winner. Please mention a user or provide a valid user ID.').catch(() => { });
-            return;
-        }
-        let giveawayMessage: Message | null = null;
-        try {
-            giveawayMessage = await message.channel.messages.fetch(messageId);
-        } catch (error) {
-            await message.reply('Could not find message with that ID in this channel.').catch(() => { });
-            return;
-        }
-        const winnerMember = await message.guild.members.fetch(winnerId).catch(() => null);
-        if (!winnerMember) {
-            await message.reply('Winner not found in this server.').catch(() => { });
-            return;
-        }
-        const winnerEmbed = new EmbedBuilder()
-            .setColor(0xFFD700)
-            .setTitle('🎉 Giveaway Winner!')
-            .setDescription(`Congratulations <@${winnerId}>! You won the giveaway!`)
-            .setTimestamp();
-        await giveawayMessage.react('🏆').catch(() => { });
-        if ('send' in message.channel) {
-            await message.channel.send({
-                content: `<@${winnerId}>`,
-                embeds: [winnerEmbed],
-            }).catch(() => { });
-        }
-        await message.react('✅').catch(() => { });
-    } catch (error) {
-        console.error('[SelectWinner] Error:', error);
-        await message.react('❌').catch(() => { });
+        await command.prefixRun(message, args);
+    } else {
+        // Command doesn't have prefix support, suggest slash command
+        const { Emojis } = await import('../utils/giveaway/emojis');
+        await message.reply(`${Emojis.CROSS} This command is only available as a slash command. Use \`/${command.data.name}\` instead.`).catch(() => { });
     }
 }
