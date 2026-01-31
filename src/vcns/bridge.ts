@@ -236,11 +236,21 @@ export class VCNSBridge {
         }
         try {
             if (guild) {
-                const channel = guild.channels.cache.get(targetChannelId);
+                // Try cache first, then fetch if not found
+                let channel = guild.channels.cache.get(targetChannelId);
+                if (!channel) {
+                    try {
+                        channel = await guild.channels.fetch(targetChannelId) as any;
+                    } catch {
+                        // Channel doesn't exist in Discord anymore - that's fine
+                        console.log(`[Bridge] Channel ${targetChannelId} not found in Discord (already deleted)`);
+                    }
+                }
+                
                 if (channel) {
                     await this.executeFallback(
                         `vc:delete:${guildId}`,
-                        async () => channel.delete(reason),
+                        async () => channel!.delete(reason),
                         IntentPriority.HIGH,
                     );
                     rateGovernor.recordAction(IntentAction.VC_DELETE, 25);
@@ -249,6 +259,7 @@ export class VCNSBridge {
             stateStore.unregisterChannel(targetChannelId);
             return { success: true, queued: false };
         } catch (error: any) {
+            console.error(`[Bridge] Failed to delete VC ${targetChannelId}:`, error.message);
             return { success: false, queued: false, error: error.message };
         }
     }

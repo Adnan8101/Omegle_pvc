@@ -1076,9 +1076,20 @@ async function deletePrivateChannel(channelId: string, guildId: string): Promise
         if (!guild) {
             unregisterChannel(channelId);
             await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+            await prisma.voicePermission.deleteMany({ where: { channelId } }).catch(() => { });
             return;
         }
-        const channel = guild.channels.cache.get(channelId);
+        
+        // DELETE FROM DISCORD FIRST - try cache, then fetch
+        let channel = guild.channels.cache.get(channelId);
+        if (!channel) {
+            try {
+                channel = await guild.channels.fetch(channelId) as any;
+            } catch {
+                // Channel already deleted from Discord
+            }
+        }
+        
         if (channel?.isVoiceBased()) {
             try {
                 await vcnsBridge.deleteVC({
@@ -1086,13 +1097,20 @@ async function deletePrivateChannel(channelId: string, guildId: string): Promise
                     channelId,
                     isTeam: false,
                 });
-            } catch { }
+            } catch (err) {
+                console.error(`[DeletePVC] Failed to delete channel from Discord:`, err);
+            }
         }
+        
+        // THEN clean up memory and DB
         unregisterChannel(channelId);
         await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
-    } catch {
+        await prisma.voicePermission.deleteMany({ where: { channelId } }).catch(() => { });
+    } catch (err) {
+        console.error(`[DeletePVC] Error:`, err);
         unregisterChannel(channelId);
         await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+        await prisma.voicePermission.deleteMany({ where: { channelId } }).catch(() => { });
     }
 }
 async function createTeamChannel(client: PVCClient, state: VoiceState, teamType: TeamType): Promise<void> {
@@ -1266,9 +1284,20 @@ async function deleteTeamChannel(channelId: string, guildId: string): Promise<vo
         if (!guild) {
             unregisterTeamChannel(channelId);
             await prisma.teamVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+            await prisma.teamVoicePermission.deleteMany({ where: { channelId } }).catch(() => { });
             return;
         }
-        const channel = guild.channels.cache.get(channelId);
+        
+        // DELETE FROM DISCORD FIRST - try cache, then fetch
+        let channel = guild.channels.cache.get(channelId);
+        if (!channel) {
+            try {
+                channel = await guild.channels.fetch(channelId) as any;
+            } catch {
+                // Channel already deleted from Discord
+            }
+        }
+        
         if (channel?.isVoiceBased()) {
             try {
                 await vcnsBridge.deleteVC({
@@ -1276,13 +1305,20 @@ async function deleteTeamChannel(channelId: string, guildId: string): Promise<vo
                     channelId,
                     isTeam: true,
                 });
-            } catch { }
+            } catch (err) {
+                console.error(`[DeleteTeam] Failed to delete channel from Discord:`, err);
+            }
         }
+        
+        // THEN clean up memory and DB
         unregisterTeamChannel(channelId);
         await prisma.teamVoiceChannel.delete({ where: { channelId } }).catch(() => { });
-    } catch {
+        await prisma.teamVoicePermission.deleteMany({ where: { channelId } }).catch(() => { });
+    } catch (err) {
+        console.error(`[DeleteTeam] Error:`, err);
         unregisterTeamChannel(channelId);
         await prisma.teamVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+        await prisma.teamVoicePermission.deleteMany({ where: { channelId } }).catch(() => { });
     }
 }
 async function transferTeamChannelOwnership(

@@ -627,13 +627,30 @@ async function handleDeleteConfirm(interaction: ButtonInteraction): Promise<void
     const parts = customId.replace('pvc_delete_confirm:', '').split(':');
     const channelId = parts[0];
     const isTeamChannel = parts[1] === 'true';
-    const channel = guild.channels.cache.get(channelId);
+    
+    // Try to get channel from cache or fetch it
+    let channel = guild.channels.cache.get(channelId);
     if (!channel) {
-        await interaction.update({ content: 'Channel not found.', embeds: [], components: [] });
-        return;
+        try {
+            channel = await guild.channels.fetch(channelId) as any;
+        } catch {
+            // Channel doesn't exist in Discord - just clean up DB
+        }
     }
+    
     try {
-        const channelName = channel.name;
+        const channelName = channel?.name || 'Unknown';
+        
+        // DELETE FROM DISCORD FIRST
+        if (channel) {
+            await vcnsBridge.deleteVC({
+                guild,
+                channelId,
+                isTeam: isTeamChannel,
+            });
+        }
+        
+        // THEN clean up DB and memory
         if (isTeamChannel) {
             const { unregisterTeamChannel } = await import('../../utils/voiceManager');
             unregisterTeamChannel(channelId);
@@ -644,11 +661,7 @@ async function handleDeleteConfirm(interaction: ButtonInteraction): Promise<void
             await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
             await prisma.voicePermission.deleteMany({ where: { channelId } }).catch(() => { });
         }
-        await vcnsBridge.deleteVC({
-            guild,
-            channelId,
-            isTeam: isTeamChannel,
-        });
+        
         await logAction({
             action: isTeamChannel ? LogAction.TEAM_CHANNEL_DELETED : LogAction.CHANNEL_DELETED,
             guild: guild,
@@ -663,7 +676,8 @@ async function handleDeleteConfirm(interaction: ButtonInteraction): Promise<void
             embeds: [],
             components: [],
         });
-    } catch {
+    } catch (err) {
+        console.error(`[DeleteConfirm] Failed to delete channel ${channelId}:`, err);
         await interaction.update({
             content: 'Failed to delete the channel.',
             embeds: [],
@@ -681,25 +695,41 @@ async function handleAdminDelete(interaction: ButtonInteraction): Promise<void> 
         return;
     }
     const channelId = customId.replace('pvc_admin_delete:', '');
-    const channel = guild.channels.cache.get(channelId);
+    
+    // Try to get channel from cache or fetch it
+    let channel = guild.channels.cache.get(channelId);
     if (!channel) {
-        await interaction.update({ content: 'Channel not found.', embeds: [], components: [] });
-        return;
+        try {
+            channel = await guild.channels.fetch(channelId) as any;
+        } catch {
+            // Channel doesn't exist in Discord
+        }
     }
+    
     try {
+        const channelName = channel?.name || 'Unknown';
+        
+        // DELETE FROM DISCORD FIRST
+        if (channel) {
+            await vcnsBridge.deleteVC({
+                guild,
+                channelId,
+                isTeam: false,
+            });
+        }
+        
+        // THEN clean up DB and memory
         unregisterChannel(channelId);
-        await vcnsBridge.deleteVC({
-            guild,
-            channelId,
-            isTeam: false,
-        });
         await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+        await prisma.voicePermission.deleteMany({ where: { channelId } }).catch(() => { });
+        
         await interaction.update({
-            content: `Channel **${channel.name}** deleted successfully.`,
+            content: `Channel **${channelName}** deleted successfully.`,
             embeds: [],
             components: [],
         });
-    } catch {
+    } catch (err) {
+        console.error(`[AdminDelete] Failed to delete channel ${channelId}:`, err);
         await interaction.update({
             content: 'Failed to delete the channel.',
             embeds: [],

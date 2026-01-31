@@ -9,10 +9,13 @@ export const once = true;
 export async function execute(client: PVCClient): Promise<void> {
     setRecordBotEditFn(recordBotEdit);
     await loadAllTeamInterfaces();
+    console.log('[Ready] Loading PVC state from database...');
     try {
         const guildSettings = await prisma.guildSettings.findMany({
             include: { privateChannels: true },
         });
+        let registeredCount = 0;
+        let cleanedCount = 0;
         for (const settings of guildSettings) {
             const guild = client.guilds.cache.get(settings.guildId);
             if (!guild) continue;
@@ -23,13 +26,22 @@ export async function execute(client: PVCClient): Promise<void> {
                 }
             }
             for (const pvc of settings.privateChannels) {
-                const channel = guild.channels.cache.get(pvc.channelId);
+                // Try cache first, then fetch if needed
+                let channel = guild.channels.cache.get(pvc.channelId);
+                if (!channel) {
+                    try {
+                        channel = await guild.channels.fetch(pvc.channelId).catch(() => null) as any;
+                    } catch {}
+                }
                 if (channel && channel.type === ChannelType.GuildVoice) {
                     registerChannel(pvc.channelId, pvc.guildId, pvc.ownerId);
+                    registeredCount++;
                 } else {
+                    // Channel doesn't exist, clean up DB
                     await prisma.privateVoiceChannel.delete({
                         where: { channelId: pvc.channelId },
                     }).catch(() => { });
+                    cleanedCount++;
                 }
             }
         }
@@ -37,15 +49,25 @@ export async function execute(client: PVCClient): Promise<void> {
         for (const tc of teamChannels) {
             const guild = client.guilds.cache.get(tc.guildId);
             if (!guild) continue;
-            const channel = guild.channels.cache.get(tc.channelId);
+            // Try cache first, then fetch if needed
+            let channel = guild.channels.cache.get(tc.channelId);
+            if (!channel) {
+                try {
+                    channel = await guild.channels.fetch(tc.channelId).catch(() => null) as any;
+                } catch {}
+            }
             if (channel && channel.type === ChannelType.GuildVoice) {
                 registerTeamChannel(tc.channelId, tc.guildId, tc.ownerId, tc.teamType.toLowerCase() as TeamType);
+                registeredCount++;
             } else {
                 await prisma.teamVoiceChannel.delete({
                     where: { channelId: tc.channelId },
                 }).catch(() => { });
+                cleanedCount++;
             }
         }
+        console.log(`[Ready] ✅ Registered ${registeredCount} channels, cleaned ${cleanedCount} stale entries`);
     } catch (error) {
+        console.error('[Ready] Error loading PVC state:', error);
     }
 }
