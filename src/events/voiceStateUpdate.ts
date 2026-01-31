@@ -168,11 +168,20 @@ async function handleAccessProtection(
         return true;
     }
     const dbState = await VoiceStateService.getVCState(newChannelId);
-    if (!dbState) return false;
+    if (!dbState) {
+        console.log(`[VCNS-ACCESS] ⚠️ Channel ${newChannelId} not in DB - not a managed PVC, allowing access`);
+        return false;
+    }
     const channel = guild.channels.cache.get(newChannelId);
-    if (!channel || channel.type !== ChannelType.GuildVoice) return false;
+    if (!channel || channel.type !== ChannelType.GuildVoice) {
+        console.log(`[VCNS-ACCESS] ⚠️ Channel ${newChannelId} not found in cache or not voice - skipping`);
+        return false;
+    }
     const ownerId = dbState.ownerId;
-    if (member.id === ownerId) return false;
+    if (member.id === ownerId) {
+        console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} is OWNER - access granted`);
+        return false;
+    }
     const dbPermissions = dbState.permissions || [];
     const memberRoleIds = member.roles.cache.map(r => r.id);
     const isUserBanned = dbPermissions.some(
