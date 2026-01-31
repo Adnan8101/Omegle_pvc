@@ -33,6 +33,7 @@ import { startCleanupInterval, stopCleanupInterval } from './utils/stateManager'
 import { vcns } from './vcns';
 import { command as funBan } from './commands/fun_ban';
 import { command as counting } from './commands/counting';
+import { command as ping } from './commands/ping';
 
 
 // Giveaway Commands
@@ -67,6 +68,7 @@ client.commands.set(wvAllowedRoles.data.name, wvAllowedRoles);
 client.commands.set(showAccess.data.name, showAccess);
 client.commands.set(funBan.data.name, funBan);
 client.commands.set(counting.data.name, counting);
+client.commands.set(ping.data.name, ping);
 
 // Register Giveaway Commands
 for (const [name, command] of Object.entries(giveawayCommands)) {

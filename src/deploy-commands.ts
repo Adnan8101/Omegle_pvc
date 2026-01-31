@@ -23,6 +23,7 @@ import { command as showAccess } from './commands/show_access';
 import { command as deployCommandsCmd } from './commands/deploy_commands';
 import { command as funBan } from './commands/fun_ban';
 import { command as counting } from './commands/counting';
+import { command as ping } from './commands/ping';
 import prisma from './utils/database';
 
 // Giveaway commands
@@ -53,6 +54,7 @@ const baseCommands = [
     deployCommandsCmd.data.toJSON(),
     funBan.data.toJSON(),
     counting.data.toJSON(),
+    ping.data.toJSON(),
 ];
 
 // Add giveaway commands to the array
