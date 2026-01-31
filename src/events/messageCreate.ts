@@ -122,9 +122,33 @@ export async function execute(client: PVCClient, message: Message): Promise<void
     }
     const settings = await getGuildSettings(message.guild.id);
     const teamSettings = await prisma.teamVoiceSettings.findUnique({ where: { guildId: message.guild.id } });
-    const pvcOwnership = getChannelByOwner(message.guild.id, message.author.id);
-    const teamOwnership = getTeamChannelByOwner(message.guild.id, message.author.id);
-    const isInOwnedVcChat = (pvcOwnership === message.channel.id) || (teamOwnership === message.channel.id);
+    
+    // Check memory state first
+    let pvcOwnership = getChannelByOwner(message.guild.id, message.author.id);
+    let teamOwnership = getTeamChannelByOwner(message.guild.id, message.author.id);
+    
+    // Also check if user owns the current channel (DB check for VC chat)
+    const currentChannelPvc = await prisma.privateVoiceChannel.findUnique({ 
+        where: { channelId: message.channel.id } 
+    });
+    const currentChannelTeam = !currentChannelPvc ? await prisma.teamVoiceChannel.findUnique({ 
+        where: { channelId: message.channel.id } 
+    }) : null;
+    
+    // Check if user is in their own VC chat (either from memory or DB)
+    const isInOwnedVcChat = (pvcOwnership === message.channel.id) || 
+                           (teamOwnership === message.channel.id) ||
+                           (currentChannelPvc?.ownerId === message.author.id) ||
+                           (currentChannelTeam?.ownerId === message.author.id);
+    
+    // Update ownership if found from DB but not in memory
+    if (!pvcOwnership && currentChannelPvc?.ownerId === message.author.id) {
+        pvcOwnership = message.channel.id;
+    }
+    if (!teamOwnership && currentChannelTeam?.ownerId === message.author.id) {
+        teamOwnership = message.channel.id;
+    }
+    
     const vcChannelId = isInOwnedVcChat ? (pvcOwnership || teamOwnership) : undefined;
     const isInPvcCommandChannel = settings?.commandChannelId && message.channel.id === settings.commandChannelId;
     const isInTeamCommandChannel = teamSettings?.commandChannelId && message.channel.id === teamSettings.commandChannelId;
@@ -154,6 +178,16 @@ export async function execute(client: PVCClient, message: Message): Promise<void
     let ownedChannelId = vcChannelId || getChannelByOwner(message.guild.id, member.id);
     if (!ownedChannelId) {
         ownedChannelId = getTeamChannelByOwner(message.guild.id, member.id);
+    }
+    // If still no owned channel found, check database as fallback
+    if (!ownedChannelId) {
+        const dbPvc = await prisma.privateVoiceChannel.findFirst({
+            where: { guildId: message.guild.id, ownerId: member.id }
+        });
+        const dbTeam = !dbPvc ? await prisma.teamVoiceChannel.findFirst({
+            where: { guildId: message.guild.id, ownerId: member.id }
+        }) : null;
+        ownedChannelId = dbPvc?.channelId || dbTeam?.channelId;
     }
     if (isPvcPaused(message.guild.id) && ['adduser', 'au', 'removeuser', 'ru', 'list', 'l'].includes(commandName)) {
         const pauseEmbed = new EmbedBuilder()

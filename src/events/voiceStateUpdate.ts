@@ -643,6 +643,71 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
                 }
             }
         }
+        return;
+    }
+    
+    // Database fallback: Check if this is a managed channel not in memory
+    const dbPvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+    const dbTeam = !dbPvc ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
+    
+    if (dbPvc || dbTeam) {
+        const channel = guild.channels.cache.get(channelId);
+        if (!channel || channel.type !== ChannelType.GuildVoice) return;
+        
+        const isTeamChannel = Boolean(dbTeam);
+        const ownerId = dbPvc?.ownerId || dbTeam?.ownerId;
+        
+        // Register the channel in memory for future events
+        if (dbPvc) {
+            registerChannel(channelId, guild.id, dbPvc.ownerId);
+        } else if (dbTeam) {
+            registerTeamChannel(channelId, guild.id, dbTeam.ownerId, dbTeam.teamType.toLowerCase() as TeamType);
+        }
+        
+        if (channel.members.size === 0) {
+            // Delete the empty channel
+            if (isTeamChannel) {
+                await logAction({
+                    action: LogAction.TEAM_CHANNEL_DELETED,
+                    guild: guild,
+                    channelName: channel.name,
+                    channelId: channelId,
+                    details: `Team channel deleted (empty - DB fallback)`,
+                    isTeamChannel: true,
+                    teamType: dbTeam?.teamType.toLowerCase(),
+                });
+                await deleteTeamChannel(channelId, guild.id);
+            } else {
+                await logAction({
+                    action: LogAction.CHANNEL_DELETED,
+                    guild: guild,
+                    channelName: channel.name,
+                    channelId: channelId,
+                    details: `Channel deleted (empty - DB fallback)`,
+                });
+                await deletePrivateChannel(channelId, guild.id);
+            }
+        } else {
+            const allBots = channel.members.every(m => m.user.bot);
+            if (allBots && channel.members.size > 0) {
+                // Only bots remain, disconnect them and delete
+                for (const [, botMember] of channel.members) {
+                    await botMember.voice.disconnect().catch(() => { });
+                }
+                if (isTeamChannel) {
+                    await deleteTeamChannel(channelId, guild.id);
+                } else {
+                    await deletePrivateChannel(channelId, guild.id);
+                }
+            } else if (member && ownerId === member.id) {
+                // Owner left, transfer ownership
+                if (isTeamChannel) {
+                    await transferTeamChannelOwnership(client, channelId, guild, channel);
+                } else {
+                    await transferChannelOwnership(client, channelId, guild, channel);
+                }
+            }
+        }
     }
 }
 async function createPrivateChannel(client: PVCClient, state: VoiceState): Promise<void> {
@@ -923,10 +988,11 @@ async function transferChannelOwnership(
 ): Promise<void> {
     try {
         let nextUserId = getNextUserInOrder(channelId);
+        const currentState = getChannelState(channelId);
+        const teamState = getTeamChannelState(channelId);
+        const oldOwnerId = currentState?.ownerId || teamState?.ownerId;
+        
         if (!nextUserId && channel.members.size > 0) {
-            const currentState = getChannelState(channelId);
-            const teamState = getTeamChannelState(channelId);
-            const oldOwnerId = currentState?.ownerId || teamState?.ownerId;
             const availableMember = channel.members.find((m: any) => m.id !== oldOwnerId && !m.user.bot);
             if (availableMember) {
                 nextUserId = availableMember.id;
@@ -939,8 +1005,6 @@ async function transferChannelOwnership(
         if (!newOwner) {
             return;
         }
-        const currentState = getChannelState(channelId);
-        const teamState = getTeamChannelState(channelId);
         const isTeamChannel = Boolean(teamState);
         if (currentState) {
             transferOwnership(channelId, nextUserId);
@@ -961,6 +1025,15 @@ async function transferChannelOwnership(
         }
         const ownerPerms = getOwnerPermissions();
         recordBotEdit(channelId);
+        
+        // Remove old owner's elevated permissions (they left, but clean up the overwrite)
+        if (oldOwnerId) {
+            try {
+                await channel.permissionOverwrites.delete(oldOwnerId);
+            } catch { }
+        }
+        
+        // Grant new owner full permissions
         await channel.permissionOverwrites.edit(nextUserId, {
             ViewChannel: true,
             Connect: true,
@@ -1242,6 +1315,15 @@ async function transferTeamChannelOwnership(
         });
         const ownerPerms = getOwnerPermissions();
         recordBotEdit(channelId);
+        
+        // Remove old owner's elevated permissions
+        if (oldOwnerId) {
+            try {
+                await channel.permissionOverwrites.delete(oldOwnerId);
+            } catch { }
+        }
+        
+        // Grant new owner full permissions
         await channel.permissionOverwrites.edit(nextUserId, {
             ViewChannel: true,
             Connect: true,
