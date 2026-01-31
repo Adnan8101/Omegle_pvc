@@ -130,9 +130,12 @@ export class VCNSBridge {
             userLimit,
             bitrate,
         };
+        console.log(`[Bridge] 📤 Submitting VC create intent for user ${targetOwnerId}`);
         const result = vcns.requestVCCreate(payload, targetOwnerId);
+        console.log(`[Bridge] 📥 Intent submitted - queued: ${result.queued}, intentId: ${result.intentId}`);
         
         if (!result.queued) {
+            console.log(`[Bridge] ❌ Intent was NOT queued - returning failure`);
             return {
                 success: false,
                 queued: false,
@@ -142,8 +145,10 @@ export class VCNSBridge {
         }
         
         // Wait for the intent to complete and get the channelId
+        console.log(`[Bridge] ⏳ Waiting for intent ${result.intentId} to complete (30s timeout)...`);
         try {
             const workerResult = await waitForIntent(result.intentId, 30000);
+            console.log(`[Bridge] ✅ Intent completed - success: ${workerResult.success}, channelId: ${workerResult.data?.channelId}`);
             if (workerResult.success && workerResult.data?.channelId) {
                 return {
                     success: true,

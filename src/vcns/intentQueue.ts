@@ -87,10 +87,13 @@ export class IntentQueue extends EventEmitter {
         if (this.queue.length === 0) {
             return null;
         }
+        console.log(`[IntentQueue] 🔍 Dequeue called - queue size: ${this.queue.length}`);
         for (let i = 0; i < this.queue.length; i++) {
             const queued = this.queue[i];
             const intent = queued.intent;
+            console.log(`[IntentQueue] 📋 Checking intent ${intent.id} (${intent.action}) - resourceId: ${intent.resourceId}`);
             if (Date.now() > intent.expiresAt) {
+                console.log(`[IntentQueue] ⏰ Intent ${intent.id} EXPIRED`);
                 this.queue.splice(i, 1);
                 this.decrementGuildCount(intent.guildId);
                 intent.status = IntentStatus.EXPIRED;
@@ -100,7 +103,9 @@ export class IntentQueue extends EventEmitter {
                 continue;
             }
             const currentHolder = lockManager.getHolder(intent.resourceId);
+            console.log(`[IntentQueue] 🔐 Lock check for ${intent.resourceId}: holder=${currentHolder}, intentId=${intent.id}`);
             if (currentHolder && currentHolder !== intent.id) {
+                console.log(`[IntentQueue] ⏭️ Skipping intent ${intent.id} - resource locked by ${currentHolder}`);
                 continue; 
             }
             this.queue.splice(i, 1);
@@ -108,6 +113,7 @@ export class IntentQueue extends EventEmitter {
             const lockDuration = VCNS_CONFIG.INTENT_DEFAULT_TTL_MS;
             lockManager.acquire(intent.resourceId, intent.id, lockDuration, `intent:${intent.action}`);
             intent.status = IntentStatus.SCHEDULED;
+            console.log(`[IntentQueue] ✅ Dequeued intent ${intent.id} successfully`);
             this.emit('intentDequeued', intent);
             return intent;
         }

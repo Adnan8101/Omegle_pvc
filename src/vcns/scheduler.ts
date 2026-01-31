@@ -110,17 +110,21 @@ export class Scheduler extends EventEmitter {
             return;
         }
         if (rateGovernor.isInEmergencyMode()) {
+            console.log(`[Scheduler] ⚠️ Skipping pullFromQueue - emergency mode active`);
             return;
         }
         const toPull = Math.min(
             maxScheduled - scheduledCount,
             5, 
         );
+        let pulledCount = 0;
         for (let i = 0; i < toPull; i++) {
             const intent = intentQueue.dequeue();
             if (!intent) {
                 break; 
             }
+            pulledCount++;
+            console.log(`[Scheduler] 📥 Pulled intent ${intent.id} (${intent.action}) from queue`);
             
             // CRITICAL FIX #5: Handle RETRY_SCHEDULED intents
             if (intent.status === IntentStatus.RETRY_SCHEDULED && intent.nextRetryAt) {
@@ -149,7 +153,9 @@ export class Scheduler extends EventEmitter {
     }
     private scheduleIntent(intent: Intent<unknown>): void {
         const decision = decisionEngine.decide(intent);
+        console.log(`[Scheduler] 🔍 Decision for intent ${intent.id} (${intent.action}): execute=${decision.execute}, reason=${decision.reason}, delayMs=${decision.delayMs}`);
         if (!decision.execute) {
+            console.log(`[Scheduler] ❌ Intent ${intent.id} REJECTED: ${decision.reason}`);
             intent.status = IntentStatus.DROPPED;
             intent.error = decision.reason;
             this.stats.rejected++;
@@ -167,6 +173,7 @@ export class Scheduler extends EventEmitter {
         };
         this.scheduled.set(intent.id, scheduled);
         intent.status = IntentStatus.SCHEDULED;
+        console.log(`[Scheduler] ✅ Intent ${intent.id} SCHEDULED, executeAt: ${new Date(executeAt).toISOString()}`);
         if (decision.delayMs && decision.delayMs > 0) {
             this.stats.delayed++;
         }
@@ -174,11 +181,13 @@ export class Scheduler extends EventEmitter {
         this.emit('intentScheduled', intent, executeAt);
     }
     private dispatchToWorker(intent: Intent<unknown>): void {
+        console.log(`[Scheduler] 🚀 Dispatching intent ${intent.id} (${intent.action}) to worker`);
         if (!this.executeCallback) {
             console.error('[Scheduler] No execute callback registered');
             return;
         }
         if (Date.now() > intent.expiresAt) {
+            console.log(`[Scheduler] ⏰ Intent ${intent.id} EXPIRED before dispatch`);
             intent.status = IntentStatus.EXPIRED;
             intentQueue.complete(intent.id);
             this.stats.rejected++;
@@ -189,9 +198,13 @@ export class Scheduler extends EventEmitter {
         stateStore.setActiveWorkers(stateStore.getSystemState().activeWorkers + 1);
         this.emit('intentReady', intent);
         this.stats.executed++;
+        console.log(`[Scheduler] ⚡ Executing intent ${intent.id}...`);
         this.executeCallback(intent)
+            .then(() => {
+                console.log(`[Scheduler] ✅ Intent ${intent.id} execution completed`);
+            })
             .catch((error) => {
-                console.error(`[Scheduler] Worker error for ${intent.id}:`, error);
+                console.error(`[Scheduler] ❌ Worker error for ${intent.id}:`, error);
             })
             .finally(() => {
                 const current = stateStore.getSystemState().activeWorkers;
