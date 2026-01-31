@@ -1,5 +1,5 @@
 import { prisma } from '../../utils/database';
-import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, TextChannel } from 'discord.js';
+import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, TextChannel, MessageFlags } from 'discord.js';
 import { hasGiveawayPermissions } from '../../utils/giveaway/permissions';
 import { Theme } from '../../utils/giveaway/theme';
 import { Emojis } from '../../utils/giveaway/emojis';
@@ -41,7 +41,7 @@ export default {
         const isInteraction = !!ctx.options;
 
         if (isInteraction) {
-            await ctx.deferReply({ ephemeral: true });
+            await ctx.deferReply({ flags: [MessageFlags.Ephemeral] });
         }
 
         try {
@@ -147,20 +147,20 @@ export default {
             if (isInteraction) {
                 await ctx.editReply({
                     embeds: [previewInfo],
-                    ephemeral: true
+                    flags: [MessageFlags.Ephemeral]
                 });
                 
                 // Send the actual preview in separate messages
                 await ctx.followUp({
                     content: `${gwEmoji} **Giveaway Ended** ${gwEmoji}`,
                     embeds: [embed],
-                    ephemeral: true
+                    flags: [MessageFlags.Ephemeral]
                 });
 
                 await ctx.followUp({
                     content: winnerMessage,
                     components: [row],
-                    ephemeral: true
+                    flags: [MessageFlags.Ephemeral]
                 });
             } else {
                 await ctx.channel.send({ embeds: [previewInfo] });

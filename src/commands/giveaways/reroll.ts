@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits } from 'discord.js';
+import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits, MessageFlags } from 'discord.js';
 import { GiveawayService } from '../../services/GiveawayService';
 import { hasGiveawayPermissions } from '../../utils/giveaway/permissions';
 import { Emojis } from '../../utils/giveaway/emojis';
@@ -31,13 +31,13 @@ export default {
             const winners = await service.rerollGiveaway(messageId);
 
             if (winners.length > 0) {
-                await ctx.reply?.({ content: `${Emojis.TICK} Successfully rerolled!`, ephemeral: true });
+                await ctx.reply?.({ content: `${Emojis.TICK} Successfully rerolled!`, flags: [MessageFlags.Ephemeral] });
                 setTimeout(() => ctx.deleteReply?.().catch(() => { }), 3000);
             } else {
-                await ctx.reply?.({ content: `${Emojis.CROSS} Could not find a new winner.`, ephemeral: true });
+                await ctx.reply?.({ content: `${Emojis.CROSS} Could not find a new winner.`, flags: [MessageFlags.Ephemeral] });
             }
         } catch (error: any) {
-            await ctx.reply?.({ content: `${Emojis.CROSS} ${error.message || 'Failed to reroll.'}`, ephemeral: true });
+            await ctx.reply?.({ content: `${Emojis.CROSS} ${error.message || 'Failed to reroll.'}`, flags: [MessageFlags.Ephemeral] });
         }
     }
 };

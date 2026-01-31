@@ -1,6 +1,6 @@
 import { prisma } from '../../utils/database';
 
-import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder, PermissionFlagsBits, TextChannel } from 'discord.js';
+import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder, PermissionFlagsBits, TextChannel, MessageFlags } from 'discord.js';
 import { hasGiveawayPermissions } from '../../utils/giveaway/permissions';
 import { Theme } from '../../utils/giveaway/theme';
 import { Emojis } from '../../utils/giveaway/emojis';
@@ -61,7 +61,7 @@ export default {
 
         
         if (isInteraction) {
-            await ctx.deferReply({ ephemeral: true });
+            await ctx.deferReply({ flags: [MessageFlags.Ephemeral] });
         }
 
         try {

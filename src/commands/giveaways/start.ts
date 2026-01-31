@@ -1,5 +1,5 @@
 import { prisma } from '../../utils/database';
-import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits, TextChannel } from 'discord.js';
+import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits, TextChannel, MessageFlags } from 'discord.js';
 import { createGiveawayEmbed } from '../../utils/giveaway/embeds';
 import { hasGiveawayPermissions, hasGiveawayPermissionsMessage } from '../../utils/giveaway/permissions';
 import { Emojis } from '../../utils/giveaway/emojis';
@@ -78,19 +78,19 @@ export default {
     async run(ctx: any, channel: TextChannel, durationStr: string, winners: number, prize: string) {
         const validation = validateDuration(durationStr);
         if (!validation.isValid) {
-            return ctx.reply?.({ content: `${Emojis.CROSS} ${validation.error}`, ephemeral: true });
+            return ctx.reply?.({ content: `${Emojis.CROSS} ${validation.error}`, flags: [MessageFlags.Ephemeral] });
         }
 
         const endTimeMs = calculateEndTimeFromString(durationStr);
         if (!endTimeMs) {
-            return ctx.reply?.({ content: `${Emojis.CROSS} Invalid duration. Use: 30s, 2m, 1h, 7d`, ephemeral: true });
+            return ctx.reply?.({ content: `${Emojis.CROSS} Invalid duration. Use: 30s, 2m, 1h, 7d`, flags: [MessageFlags.Ephemeral] });
         }
 
         const hostId = ctx.user?.id || ctx.author.id;
         const guildId = ctx.guildId;
 
         try {
-            if (ctx.deferReply) await ctx.deferReply({ ephemeral: true });
+            if (ctx.deferReply) await ctx.deferReply({ flags: [MessageFlags.Ephemeral] });
 
             const giveawayData = {
                 channelId: channel.id,

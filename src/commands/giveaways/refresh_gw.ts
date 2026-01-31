@@ -1,5 +1,5 @@
 import { prisma } from '../../utils/database';
-import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder, PermissionFlagsBits, TextChannel } from 'discord.js';
+import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder, PermissionFlagsBits, TextChannel, MessageFlags } from 'discord.js';
 import { hasGiveawayPermissions } from '../../utils/giveaway/permissions';
 import { Theme } from '../../utils/giveaway/theme';
 import { Emojis } from '../../utils/giveaway/emojis';
@@ -49,7 +49,7 @@ export default {
         if (isInteraction) {
             target = ctx.options.getString('target') || 'all';
             messageId = ctx.options.getString('message_id');
-            await ctx.deferReply({ ephemeral: true });
+            await ctx.deferReply({ flags: [MessageFlags.Ephemeral] });
         } else {
             target = target || 'all';
         }

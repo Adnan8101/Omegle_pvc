@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
+import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder, PermissionFlagsBits, MessageFlags } from 'discord.js';
 import { hasGiveawayPermissions } from '../../utils/giveaway/permissions';
 import { Theme } from '../../utils/giveaway/theme';
 import { Emojis } from '../../utils/giveaway/emojis';
@@ -37,7 +37,7 @@ export default {
 
         if (giveaways.length === 0 && scheduled.length === 0) {
             const msg = 'No active or scheduled giveaways.';
-            if (ctx.reply) return ctx.reply({ content: msg, ephemeral: true });
+            if (ctx.reply) return ctx.reply({ content: msg, flags: [MessageFlags.Ephemeral] });
             return;
         }
 
@@ -72,6 +72,6 @@ export default {
             embed.setDescription(`Showing ${fieldCount} of ${giveaways.length + scheduled.length} giveaways.`);
         }
 
-        if (ctx.reply) await ctx.reply({ embeds: [embed], ephemeral: true });
+        if (ctx.reply) await ctx.reply({ embeds: [embed], flags: [MessageFlags.Ephemeral] });
     }
 };

@@ -8,7 +8,8 @@ import {
     ButtonBuilder, 
     ButtonStyle,
     AttachmentBuilder,
-    PermissionFlagsBits
+    PermissionFlagsBits,
+    MessageFlags
 } from 'discord.js';
 import { hasGiveawayPermissions } from '../../utils/giveaway/permissions';
 import { Emojis } from '../../utils/giveaway/emojis';
@@ -36,7 +37,7 @@ export default {
 
         const exportToExcel = interaction.options.getBoolean('export') || false;
 
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
         try {
             const guildId = interaction.guildId!;
@@ -172,7 +173,7 @@ export default {
 
         collector.on('collect', async i => {
             if (i.user.id !== interaction.user.id) {
-                return i.reply({ content: 'These buttons are not for you.', ephemeral: true });
+                return i.reply({ content: 'These buttons are not for you.', flags: [MessageFlags.Ephemeral] });
             }
 
             if (i.customId === 'history_export') {
@@ -268,13 +269,13 @@ export default {
             await interaction.followUp({ 
                 content: `${Emojis.TICK} Exported ${giveaways.length} giveaways to Excel.`,
                 files: [attachment],
-                ephemeral: true
+                flags: [MessageFlags.Ephemeral]
             });
 
         } catch (error) {
             await interaction.followUp({ 
                 content: `${Emojis.CROSS} Failed to export to Excel.`, 
-                ephemeral: true 
+                flags: [MessageFlags.Ephemeral] 
             });
         }
     },

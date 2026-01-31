@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits } from 'discord.js';
+import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits, MessageFlags } from 'discord.js';
 import { GiveawayService } from '../../services/GiveawayService';
 import { hasGiveawayPermissions } from '../../utils/giveaway/permissions';
 import { Emojis } from '../../utils/giveaway/emojis';
@@ -37,7 +37,7 @@ export default {
                     await service.deleteScheduledGiveaway(id);
                     const msg = `${Emojis.TICK} Scheduled giveaway **#${id}** cancelled and deleted.`;
                     if (ctx.reply) {
-                        const reply = await ctx.reply({ content: msg, ephemeral: true });
+                        const reply = await ctx.reply({ content: msg, flags: [MessageFlags.Ephemeral] });
                         setTimeout(async () => {
                             try {
                                 if (ctx.deleteReply) await ctx.deleteReply().catch(() => {});
@@ -51,7 +51,7 @@ export default {
             await service.deleteGiveaway(inputId);
             const msg = `${Emojis.TICK} Giveaway deleted.`;
             if (ctx.reply) {
-                await ctx.reply({ content: msg, ephemeral: true });
+                await ctx.reply({ content: msg, flags: [MessageFlags.Ephemeral] });
                 setTimeout(async () => {
                     try {
                         if (ctx.deleteReply) await ctx.deleteReply().catch(() => {});
@@ -60,7 +60,7 @@ export default {
             }
         } catch (error) {
             const msg = `${Emojis.CROSS} Failed to delete giveaway. Check ID.`;
-            if (ctx.reply) await ctx.reply({ content: msg, ephemeral: true });
+            if (ctx.reply) await ctx.reply({ content: msg, flags: [MessageFlags.Ephemeral] });
         }
     }
 };

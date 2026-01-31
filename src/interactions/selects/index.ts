@@ -9,6 +9,7 @@ import {
     ButtonStyle,
     EmbedBuilder,
     GuildMember,
+    MessageFlags,
 } from 'discord.js';
 import { getChannelByOwner, getTeamChannelByOwner, transferOwnership, unregisterChannel, getGuildChannels, getChannelState, getTeamChannelState } from '../../utils/voiceManager';
 import { vcnsBridge } from '../../vcns/bridge';
@@ -34,7 +35,7 @@ export async function handleSelectMenuInteraction(
                 'Please wait for an administrator to resume the system.'
             )
             .setTimestamp();
-        await interaction.reply({ embeds: [pauseEmbed], ephemeral: true });
+        await interaction.reply({ embeds: [pauseEmbed], flags: [MessageFlags.Ephemeral] });
         return;
     }
     const userId = interaction.user.id;
@@ -69,7 +70,7 @@ export async function handleSelectMenuInteraction(
     if (!targetChannelId && customId !== 'pvc_transfer_select') {
         await interaction.reply({
             content: 'You do not own a private voice channel, or you must use the controls in your own channel.',
-            ephemeral: true,
+            flags: [MessageFlags.Ephemeral],
         });
         return;
     }
@@ -101,7 +102,7 @@ export async function handleSelectMenuInteraction(
             break;
             break;
         default:
-            await interaction.reply({ content: 'Unknown selection.', ephemeral: true });
+            await interaction.reply({ content: 'Unknown selection.', flags: [MessageFlags.Ephemeral] });
     }
 }
 async function updateVoicePermissions(
@@ -144,12 +145,12 @@ async function handleAddUserSelect(
     isTeamChannel: boolean = false
 ): Promise<void> {
     if (!channel || channel.type !== ChannelType.GuildVoice) {
-        await interaction.reply({ content: 'Channel not found.', ephemeral: true });
+        await interaction.reply({ content: 'Channel not found.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     const { users } = interaction;
     if (users.has(ownerId)) {
-        await interaction.reply({ content: 'You cannot add yourself to your own channel.', ephemeral: true });
+        await interaction.reply({ content: 'You cannot add yourself to your own channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     await updateVoicePermissions(channel, users, 'user', 'permit', { ViewChannel: true, Connect: true, SendMessages: true, EmbedLinks: true, AttachFiles: true }, isTeamChannel);
@@ -181,12 +182,12 @@ async function handleRemoveUserSelect(
     isTeamChannel: boolean = false
 ): Promise<void> {
     if (!channel || channel.type !== ChannelType.GuildVoice) {
-        await interaction.reply({ content: 'Channel not found.', ephemeral: true });
+        await interaction.reply({ content: 'Channel not found.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     const { users } = interaction;
     if (users.has(ownerId)) {
-        await interaction.reply({ content: 'You cannot remove yourself from your own channel.', ephemeral: true });
+        await interaction.reply({ content: 'You cannot remove yourself from your own channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     const targetIds = Array.from(users.keys());
@@ -220,12 +221,12 @@ async function handleInviteSelect(
     isTeamChannel: boolean = false
 ): Promise<void> {
     if (!channel || channel.type !== ChannelType.GuildVoice) {
-        await interaction.reply({ content: 'Channel not found.', ephemeral: true });
+        await interaction.reply({ content: 'Channel not found.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     const { users, user: inviter } = interaction;
     if (users.has(ownerId)) {
-        await interaction.reply({ content: 'You cannot invite yourself to your own channel.', ephemeral: true });
+        await interaction.reply({ content: 'You cannot invite yourself to your own channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     await updateVoicePermissions(channel, users, 'user', 'permit', { ViewChannel: true, Connect: true, SendMessages: true, EmbedLinks: true, AttachFiles: true }, isTeamChannel);
@@ -243,12 +244,12 @@ async function handleKickSelect(
     ownerId: string
 ): Promise<void> {
     if (!channel || channel.type !== ChannelType.GuildVoice) {
-        await interaction.reply({ content: 'Channel not found.', ephemeral: true });
+        await interaction.reply({ content: 'Channel not found.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     const { users } = interaction;
     if (users.has(ownerId)) {
-        await interaction.reply({ content: 'You cannot kick yourself from your own channel.', ephemeral: true });
+        await interaction.reply({ content: 'You cannot kick yourself from your own channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     let kickedCount = 0;
@@ -276,12 +277,12 @@ async function handleBlockSelect(
     isTeamChannel: boolean = false
 ): Promise<void> {
     if (!channel || channel.type !== ChannelType.GuildVoice) {
-        await interaction.reply({ content: 'Channel not found.', ephemeral: true });
+        await interaction.reply({ content: 'Channel not found.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     const { users } = interaction;
     if (users.has(ownerId)) {
-        await interaction.reply({ content: 'You cannot block yourself from your own channel.', ephemeral: true });
+        await interaction.reply({ content: 'You cannot block yourself from your own channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     await updateVoicePermissions(channel, users, 'user', 'ban', { ViewChannel: false, Connect: false }, isTeamChannel);
@@ -304,7 +305,7 @@ async function handleUnblockSelect(
     isTeamChannel: boolean = false
 ): Promise<void> {
     if (!channel || channel.type !== ChannelType.GuildVoice) {
-        await interaction.reply({ content: 'Channel not found.', ephemeral: true });
+        await interaction.reply({ content: 'Channel not found.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     const { users } = interaction;
@@ -322,7 +323,7 @@ async function handleRegionSelect(
     channel: any
 ): Promise<void> {
     if (!channel || channel.type !== ChannelType.GuildVoice) {
-        await interaction.reply({ content: 'Channel not found.', ephemeral: true });
+        await interaction.reply({ content: 'Channel not found.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     const region = interaction.values[0];
@@ -347,13 +348,13 @@ async function handleTransferSelect(
     isTeamChannel: boolean = false
 ): Promise<void> {
     if (!channelId) {
-        await interaction.reply({ content: 'You do not own a private voice channel.', ephemeral: true });
+        await interaction.reply({ content: 'You do not own a private voice channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     const guild = interaction.guild!;
     const channel = guild.channels.cache.get(channelId);
     if (!channel || channel.type !== ChannelType.GuildVoice) {
-        await interaction.reply({ content: 'Channel not found.', ephemeral: true });
+        await interaction.reply({ content: 'Channel not found.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     const selectedUser = interaction.users.first();
@@ -362,7 +363,7 @@ async function handleTransferSelect(
         return;
     }
     if (selectedUser.id === interaction.user.id) {
-        await interaction.reply({ content: 'You cannot transfer ownership to yourself.', ephemeral: true });
+        await interaction.reply({ content: 'You cannot transfer ownership to yourself.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     const oldOwnerId = interaction.user.id;
@@ -383,7 +384,7 @@ async function handleAdminDeleteSelect(interaction: StringSelectMenuInteraction)
     const member = await guild.members.fetch(user.id);
     const hasAdminPerms = member.permissions.has('Administrator') || member.permissions.has('ManageGuild');
     if (!hasAdminPerms) {
-        await interaction.reply({ content: 'You do not have permission to do this.', ephemeral: true });
+        await interaction.reply({ content: 'You do not have permission to do this.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     const channelId = interaction.values[0];

@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits } from 'discord.js';
+import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits, MessageFlags } from 'discord.js';
 import { GiveawayService } from '../../services/GiveawayService';
 import { hasGiveawayPermissions } from '../../utils/giveaway/permissions';
 import { Emojis } from '../../utils/giveaway/emojis';
@@ -18,9 +18,9 @@ export default {
         try {
             const service = new GiveawayService(interaction.client);
             await service.cancelGiveaway(interaction.options.getString('message_id', true));
-            await interaction.reply({ content: `${Emojis.TICK} Giveaway cancelled.`, ephemeral: true });
+            await interaction.reply({ content: `${Emojis.TICK} Giveaway cancelled.`, flags: [MessageFlags.Ephemeral] });
         } catch (error: any) {
-            await interaction.reply({ content: `${Emojis.CROSS} ${error.message}`, ephemeral: true });
+            await interaction.reply({ content: `${Emojis.CROSS} ${error.message}`, flags: [MessageFlags.Ephemeral] });
         }
     },
 

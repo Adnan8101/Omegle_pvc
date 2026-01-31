@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits } from 'discord.js';
+import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits, MessageFlags } from 'discord.js';
 import { hasGiveawayPermissions } from '../../utils/giveaway/permissions';
 import { Emojis } from '../../utils/giveaway/emojis';
 import { prisma } from '../../utils/database';
@@ -28,21 +28,21 @@ export default {
             if (!giveaway) {
                 return interaction.reply({
                     content: `${Emojis.CROSS} Giveaway not found.`,
-                    ephemeral: true
+                    flags: [MessageFlags.Ephemeral]
                 });
             }
 
             if (giveaway.ended) {
                 return interaction.reply({
                     content: `${Emojis.CROSS} This giveaway has already ended.`,
-                    ephemeral: true
+                    flags: [MessageFlags.Ephemeral]
                 });
             }
 
             if (!(giveaway as any).paused) {
                 return interaction.reply({
                     content: `${Emojis.CROSS} This giveaway is not paused or pause feature not available.`,
-                    ephemeral: true
+                    flags: [MessageFlags.Ephemeral]
                 });
             }
 
@@ -63,12 +63,12 @@ export default {
 
             await interaction.reply({
                 content: `${Emojis.TICK} Giveaway resumed successfully. The end time has been extended.`,
-                ephemeral: true
+                flags: [MessageFlags.Ephemeral]
             });
         } catch (error: any) {
             await interaction.reply({
                 content: `${Emojis.CROSS} Failed to resume giveaway: ${error.message}`,
-                ephemeral: true
+                flags: [MessageFlags.Ephemeral]
             });
         }
     },

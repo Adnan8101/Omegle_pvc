@@ -286,22 +286,56 @@ class EnforcerService {
                 await this.kickMemberInstantly(member, channel.name, dbState.ownerId, 'blocked');
                 continue;
             }
-            if (!isLocked && !isHidden && !isFull) continue;
-            const isPermitted = permittedUserIds.has(memberId) ||
-                memberRoleIds.some(roleId => permittedRoleIds.has(roleId));
-            if (isPermitted) continue;
-            const hasPermanentAccess = stateStore.hasPermanentAccess(guild.id, dbState.ownerId, memberId);
-            if (hasPermanentAccess) continue;
-            const hasAdminPerm = member.permissions.has('Administrator') || member.permissions.has('ManageChannels');
-            if (!strictnessEnabled) {
-                if (hasAdminPerm) continue;
-            } else {
+            
+            // ADMIN STRICTNESS: When enabled, ONLY whitelisted users can stay in ANY channel
+            // Check strictness FIRST before any other access checks
+            if (strictnessEnabled) {
                 const isWhitelisted = whitelist.some(
                     w => w.targetId === memberId || memberRoleIds.includes(w.targetId)
                 );
-                if (isWhitelisted && hasAdminPerm) continue;
+                
+                console.log(`[Enforcer-Strictness] 🔍 Checking ${member.user.tag}:`, {
+                    memberId,
+                    isWhitelisted,
+                    whitelistCount: whitelist.length,
+                    memberRoles: memberRoleIds.length
+                });
+                
+                if (isWhitelisted) {
+                    // Whitelisted user - allow access
+                    console.log(`[Enforcer-Strictness] ✅ ${member.user.tag} is WHITELISTED - access ALLOWED`);
+                    continue;
+                }
+                
+                // NOT whitelisted + strictness ON = INSTANT KICK
+                console.log(`[Enforcer-Strictness] 🚨 ${member.user.tag} is NOT whitelisted - INSTANT KICK`);
+                await this.kickMemberInstantly(member, channel.name, dbState.ownerId, 'not whitelisted (admin strictness)');
+                continue;
             }
+            
+            // Strictness is OFF - apply normal access rules
+            // But STILL enforce locked/hidden/full - NO ONE bypasses without AU or permanent access
+            if (!isLocked && !isHidden && !isFull) {
+                console.log(`[Enforcer] ✅ Channel open - ${member.user.tag} allowed (strictness OFF)`);
+                continue;
+            }
+            
+            const isPermitted = permittedUserIds.has(memberId) ||
+                memberRoleIds.some(roleId => permittedRoleIds.has(roleId));
+            if (isPermitted) {
+                console.log(`[Enforcer] ✅ ${member.user.tag} has AU/permit - allowed`);
+                continue;
+            }
+            
+            const hasPermanentAccess = stateStore.hasPermanentAccess(guild.id, dbState.ownerId, memberId);
+            if (hasPermanentAccess) {
+                console.log(`[Enforcer] ✅ ${member.user.tag} has permanent access - allowed`);
+                continue;
+            }
+            
+            // NO admin bypass - even admins/server owner must have AU or permanent access
             const reason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
+            console.log(`[Enforcer] 🚫 KICKING ${member.user.tag} - channel is ${reason}, no AU or permanent access`);
             await this.kickMemberInstantly(member, channel.name, dbState.ownerId, reason);
         }
     }
@@ -311,7 +345,9 @@ class EnforcerService {
                 guild: member.guild,
                 channelId: member.voice.channelId,
                 userId: member.id,
-                reason: reason === 'globally blocked' ? 'Globally blocked' : reason === 'blocked' ? 'Blocked from channel' : 'Unauthorized access',
+                reason: reason === 'globally blocked' ? 'Globally blocked' : 
+                        reason === 'blocked' ? 'Blocked from channel' : 
+                        reason.includes('not whitelisted') ? 'Admin strictness: not whitelisted' : 'Unauthorized access',
                 isImmediate: true,
             });
         } catch (err) {
@@ -339,6 +375,16 @@ class EnforcerService {
                         `You cannot join this channel until you are unblocked.`
                     )
                     .setTimestamp();
+            } else if (reason.includes('not whitelisted')) {
+                embed = new EmbedBuilder()
+                    .setColor(0xFF0000)
+                    .setTitle('🚫 Access Denied - Admin Strictness')
+                    .setDescription(
+                        `You were **instantly disconnected** from **${channelName}** in **${member.guild.name}**.\n\n` +
+                        `**Reason:** Admin Strictness mode is enabled. Only authorized users can access voice channels.\n\n` +
+                        `Contact a server administrator if you believe this is an error.`
+                    )
+                    .setTimestamp();
             } else {
                 embed = new EmbedBuilder()
                     .setColor(0xFF6B6B)
@@ -351,6 +397,20 @@ class EnforcerService {
             }
             await member.send({ embeds: [embed] }).catch(() => {});
             console.log(`[Enforcer] Kicked ${member.user.tag} from channel INSTANTLY (${reason})`);
+            
+            // Log the action
+            const { logAction, LogAction } = await import('../utils/logger');
+            await logAction({
+                action: LogAction.USER_REMOVED,
+                guild: member.guild,
+                user: member.user,
+                channelName: channelName,
+                channelId: member.voice?.channelId || 'unknown',
+                details: reason.includes('not whitelisted') 
+                    ? `Admin strictness: User not whitelisted - instant kick`
+                    : `Unauthorized access: ${reason}`,
+                isTeamChannel: false,
+            }).catch(() => {});
         } catch (err) {
             console.error(`[Enforcer] Failed to send kick notification:`, err);
         }

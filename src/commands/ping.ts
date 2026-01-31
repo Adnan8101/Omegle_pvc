@@ -7,10 +7,11 @@ export const command = {
         .setDescription('Check bot latency and database connection'),
 
     async execute(interaction: ChatInputCommandInteraction) {
-        const sent = await interaction.deferReply({ fetchReply: true });
+        const response = await interaction.deferReply({ withResponse: true });
+        const sent = response.resource?.message;
         
         // API Latency
-        const apiLatency = sent.createdTimestamp - interaction.createdTimestamp;
+        const apiLatency = sent ? sent.createdTimestamp - interaction.createdTimestamp : 0;
         
         // WebSocket Latency
         const wsLatency = interaction.client.ws.ping;

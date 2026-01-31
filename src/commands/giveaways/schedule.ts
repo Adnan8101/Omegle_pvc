@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits, TextChannel, AutocompleteInteraction, EmbedBuilder, Message, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType, ButtonInteraction } from 'discord.js';
+import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits, TextChannel, AutocompleteInteraction, EmbedBuilder, Message, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType, ButtonInteraction, MessageFlags } from 'discord.js';
 import * as moment from 'moment-timezone';
 import { hasGiveawayPermissions } from '../../utils/giveaway/permissions';
 import { Emojis } from '../../utils/giveaway/emojis';
@@ -105,7 +105,7 @@ export default {
             return;
         }
 
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
         const timeStr = interaction.options.getString('time', true);
         const timezone = interaction.options.getString('timezone', true);
@@ -177,20 +177,20 @@ export default {
 
         const validation = validateDuration(durationStr);
         if (!validation.isValid) {
-            const msg = { content: `${Emojis.CROSS} ${validation.error}`, ephemeral: true };
+            const msg = { content: `${Emojis.CROSS} ${validation.error}`, flags: [MessageFlags.Ephemeral] };
             return await reply(msg);
         }
 
         const durationMs = parseDuration(durationStr);
         if (!durationMs) {
-            const msg = { content: `${Emojis.CROSS} Invalid duration format.`, ephemeral: true };
+            const msg = { content: `${Emojis.CROSS} Invalid duration format.`, flags: [MessageFlags.Ephemeral] };
             return await reply(msg);
         }
 
 
         const startTimeMs = getScheduledTime(timeStr, timezone);
         if (!startTimeMs) {
-            const msg = { content: `${Emojis.CROSS} Invalid time or timezone.\n**Time format**: HH:mm\n**Timezone**: Valid IANA Zone (e.g., Asia/Kolkata, UTC)\nYour input: ${timeStr} in ${timezone}`, ephemeral: true };
+            const msg = { content: `${Emojis.CROSS} Invalid time or timezone.\n**Time format**: HH:mm\n**Timezone**: Valid IANA Zone (e.g., Asia/Kolkata, UTC)\nYour input: ${timeStr} in ${timezone}`, flags: [MessageFlags.Ephemeral] };
             return await reply(msg);
         }
 
@@ -427,7 +427,7 @@ export default {
             await reply({ embeds: [successEmbed], components: [] });
 
         } catch (error) {
-            await reply({ content: `${Emojis.CROSS} Failed to schedule giveaway.`, ephemeral: true });
+            await reply({ content: `${Emojis.CROSS} Failed to schedule giveaway.`, flags: [MessageFlags.Ephemeral] });
         }
     }
 };

@@ -37,13 +37,13 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
                 'Please wait for an administrator to resume the system.'
             )
             .setTimestamp();
-        await interaction.reply({ embeds: [pauseEmbed], ephemeral: true });
+        await interaction.reply({ embeds: [pauseEmbed], flags: [MessageFlags.Ephemeral] });
         return;
     }
     if (customId.startsWith('list_permanent_')) {
         const targetUserId = customId.replace('list_permanent_', '');
         if (interaction.user.id !== targetUserId) {
-            await interaction.reply({ content: 'This button is not for you.', ephemeral: true });
+            await interaction.reply({ content: 'This button is not for you.', flags: [MessageFlags.Ephemeral] });
             return;
         }
         const permanentAccess = await prisma.ownerPermission.findMany({
@@ -72,7 +72,7 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
     if (customId.startsWith('list_normal_')) {
         const targetUserId = customId.replace('list_normal_', '');
         if (interaction.user.id !== targetUserId) {
-            await interaction.reply({ content: 'This button is not for you.', ephemeral: true });
+            await interaction.reply({ content: 'This button is not for you.', flags: [MessageFlags.Ephemeral] });
             return;
         }
         const pvc = await prisma.privateVoiceChannel.findFirst({
@@ -80,7 +80,7 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
             include: { permissions: true },
         });
         if (!pvc) {
-            await interaction.reply({ content: 'You do not have an active voice channel.', ephemeral: true });
+            await interaction.reply({ content: 'You do not have an active voice channel.', flags: [MessageFlags.Ephemeral] });
             return;
         }
         const channel = guild.channels.cache.get(pvc.channelId);
@@ -122,7 +122,7 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
     if (customId.startsWith('list_')) return;
     const userId = typeof member === 'string' ? member : member.user.id;
     if (customId === 'pvc_rename_approve' || customId === 'pvc_rename_reject') {
-        await interaction.reply({ content: 'Button approvals are no longer supported. React with ✅ instead.', ephemeral: true });
+        await interaction.reply({ content: 'Button approvals are no longer supported. React with ✅ instead.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     const guildMember = await guild.members.fetch(userId);
@@ -147,20 +147,20 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
         if (!voiceChannelId) {
             await interaction.reply({
                 content: 'You must be in a voice channel to use this button.',
-                ephemeral: true,
+                flags: [MessageFlags.Ephemeral],
             });
             return;
         }
         const voiceChannel = guild.channels.cache.get(voiceChannelId);
         if (!voiceChannel || voiceChannel.type !== ChannelType.GuildVoice) {
-            await interaction.reply({ content: 'Voice channel not found.', ephemeral: true });
+            await interaction.reply({ content: 'Voice channel not found.', flags: [MessageFlags.Ephemeral] });
             return;
         }
         const channelState = getChannelState(voiceChannelId) || getTeamChannelState(voiceChannelId);
         if (!channelState) {
             await interaction.reply({
                 content: 'This command only works in private voice channels.',
-                ephemeral: true,
+                flags: [MessageFlags.Ephemeral],
             });
             return;
         }
@@ -203,7 +203,7 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
         if (currentChannelPvc || currentChannelTeam) {
             await interaction.reply({
                 content: `⚠️ You can only use these controls in **your own** voice channel.\n\nThis channel belongs to <@${currentChannelPvc?.ownerId || currentChannelTeam?.ownerId}>.`,
-                ephemeral: true,
+                flags: [MessageFlags.Ephemeral],
             });
             return;
         }
@@ -225,13 +225,13 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
         const buttonName = buttonLabels[customId] || 'this feature';
         await interaction.reply({
             content: `⚠️ **${buttonName}** can only be used by the voice channel owner.\n\nYou currently do not own a private voice channel.`,
-            ephemeral: true,
+            flags: [MessageFlags.Ephemeral],
         });
         return;
     }
     const channel = await validateVoiceChannel(guild, targetChannelId);
     if (!channel) {
-        await interaction.reply({ content: 'Your voice channel could not be found.', ephemeral: true });
+        await interaction.reply({ content: 'Your voice channel could not be found.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     if (customId === 'pvc_limit' && isTeamChannel) {
@@ -243,7 +243,7 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
         }
         await interaction.reply({
             content: message,
-            ephemeral: true,
+            flags: [MessageFlags.Ephemeral],
         });
         return;
     }
@@ -285,7 +285,7 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
             await handleLimit(interaction);
             break;
         default:
-            await interaction.reply({ content: 'Unknown button.', ephemeral: true });
+            await interaction.reply({ content: 'Unknown button.', flags: [MessageFlags.Ephemeral] });
     }
 }
 async function updateChannelPermission(
@@ -296,10 +296,10 @@ async function updateChannelPermission(
 ): Promise<void> {
     const result = await safeEditPermissions(interaction.guild!, channel.id, interaction.guild!.id, permissionUpdates);
     if (!result.success) {
-        await interaction.reply({ content: `Failed: ${result.error}`, ephemeral: true });
+        await interaction.reply({ content: `Failed: ${result.error}`, flags: [MessageFlags.Ephemeral] });
         return;
     }
-    await interaction.reply({ content: successMessage, ephemeral: true });
+    await interaction.reply({ content: successMessage, flags: [MessageFlags.Ephemeral] });
 }
 async function handleLock(interaction: ButtonInteraction, channel: any): Promise<void> {
     const memberIds = channel.members.map((m: any) => m.id);
@@ -307,7 +307,7 @@ async function handleLock(interaction: ButtonInteraction, channel: any): Promise
         addTempPermittedUsers(channel.id, memberIds);
     }
     await VoiceStateService.setLock(channel.id, true);
-    await interaction.reply({ content: '🔒 Your voice channel has been locked.', ephemeral: true });
+    await interaction.reply({ content: '🔒 Your voice channel has been locked.', flags: [MessageFlags.Ephemeral] });
     await logAction({
         action: LogAction.CHANNEL_LOCKED,
         guild: interaction.guild!,
@@ -319,7 +319,7 @@ async function handleLock(interaction: ButtonInteraction, channel: any): Promise
 }
 async function handleUnlock(interaction: ButtonInteraction, channel: any): Promise<void> {
     await VoiceStateService.setLock(channel.id, false);
-    await interaction.reply({ content: '🔓 Your voice channel has been unlocked.', ephemeral: true });
+    await interaction.reply({ content: '🔓 Your voice channel has been unlocked.', flags: [MessageFlags.Ephemeral] });
     await logAction({
         action: LogAction.CHANNEL_UNLOCKED,
         guild: interaction.guild!,
@@ -339,7 +339,7 @@ async function handleAddUser(interaction: ButtonInteraction): Promise<void> {
     await interaction.reply({
         content: '**Select users to add to your voice channel:**',
         components: [row],
-        ephemeral: true,
+        flags: [MessageFlags.Ephemeral],
     });
 }
 async function handleRemoveUser(interaction: ButtonInteraction): Promise<void> {
@@ -352,7 +352,7 @@ async function handleRemoveUser(interaction: ButtonInteraction): Promise<void> {
     await interaction.reply({
         content: '**Select users to remove from your voice channel:**',
         components: [row],
-        ephemeral: true,
+        flags: [MessageFlags.Ephemeral],
     });
 }
 async function handleInvite(interaction: ButtonInteraction): Promise<void> {
@@ -365,7 +365,7 @@ async function handleInvite(interaction: ButtonInteraction): Promise<void> {
     await interaction.reply({
         content: '**Select users to invite to your voice channel:**\n*They will receive a DM with an invite link.*',
         components: [row],
-        ephemeral: true,
+        flags: [MessageFlags.Ephemeral],
     });
 }
 async function handleRename(interaction: ButtonInteraction): Promise<void> {
@@ -386,7 +386,7 @@ async function handleRename(interaction: ButtonInteraction): Promise<void> {
 async function handleKick(interaction: ButtonInteraction, channel: any): Promise<void> {
     const membersInChannel = channel.members.filter((m: any) => m.id !== interaction.user.id);
     if (membersInChannel.size === 0) {
-        await interaction.reply({ content: 'There are no other users in your channel to kick.', ephemeral: true });
+        await interaction.reply({ content: 'There are no other users in your channel to kick.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     const userSelect = new UserSelectMenuBuilder()
@@ -398,7 +398,7 @@ async function handleKick(interaction: ButtonInteraction, channel: any): Promise
     await interaction.reply({
         content: '**Select users to kick from your voice channel:**',
         components: [row],
-        ephemeral: true,
+        flags: [MessageFlags.Ephemeral],
     });
 }
 async function handleRegion(interaction: ButtonInteraction): Promise<void> {
@@ -428,7 +428,7 @@ async function handleRegion(interaction: ButtonInteraction): Promise<void> {
     await interaction.reply({
         content: '**Select a voice region:**',
         components: [row],
-        ephemeral: true,
+        flags: [MessageFlags.Ephemeral],
     });
 }
 async function handleBlock(interaction: ButtonInteraction): Promise<void> {
@@ -441,7 +441,7 @@ async function handleBlock(interaction: ButtonInteraction): Promise<void> {
     await interaction.reply({
         content: '**Select users to block from your voice channel:**\n*Blocked users cannot join by any means.*',
         components: [row],
-        ephemeral: true,
+        flags: [MessageFlags.Ephemeral],
     });
 }
 async function handleUnblock(interaction: ButtonInteraction): Promise<void> {
@@ -463,7 +463,7 @@ async function handleUnblock(interaction: ButtonInteraction): Promise<void> {
         isTeamChannel = Boolean(teamData);
     }
     if (!ownedChannelId) {
-        await interaction.reply({ content: 'You do not own a voice channel.', ephemeral: true });
+        await interaction.reply({ content: 'You do not own a voice channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     const blockedUsers = isTeamChannel
@@ -474,7 +474,7 @@ async function handleUnblock(interaction: ButtonInteraction): Promise<void> {
             where: { channelId: ownedChannelId, permission: 'ban' },
         });
     if (blockedUsers.length === 0) {
-        await interaction.reply({ content: 'No users are currently blocked from your channel.', ephemeral: true });
+        await interaction.reply({ content: 'No users are currently blocked from your channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     const userSelect = new UserSelectMenuBuilder()
@@ -486,7 +486,7 @@ async function handleUnblock(interaction: ButtonInteraction): Promise<void> {
     await interaction.reply({
         content: '**Select users to unblock:**',
         components: [row],
-        ephemeral: true,
+        flags: [MessageFlags.Ephemeral],
     });
 }
 async function handleTransfer(interaction: ButtonInteraction): Promise<void> {
@@ -499,7 +499,7 @@ async function handleTransfer(interaction: ButtonInteraction): Promise<void> {
     await interaction.reply({
         content: '**Select a user to transfer ownership to:**',
         components: [row],
-        ephemeral: true,
+        flags: [MessageFlags.Ephemeral],
     });
 }
 async function handleClaim(
@@ -507,23 +507,23 @@ async function handleClaim(
     voiceChannelId: string | null
 ): Promise<void> {
     if (!voiceChannelId) {
-        await interaction.reply({ content: 'You must be in a voice channel to claim it.', ephemeral: true });
+        await interaction.reply({ content: 'You must be in a voice channel to claim it.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     const channelState = getChannelState(voiceChannelId);
     if (!channelState) {
-        await interaction.reply({ content: 'This is not a private voice channel.', ephemeral: true });
+        await interaction.reply({ content: 'This is not a private voice channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     const userId = interaction.user.id;
     const guild = interaction.guild!;
     const channel = guild.channels.cache.get(voiceChannelId);
     if (!channel || channel.type !== ChannelType.GuildVoice) {
-        await interaction.reply({ content: 'Channel not found.', ephemeral: true });
+        await interaction.reply({ content: 'Channel not found.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     if (channel.members.has(channelState.ownerId)) {
-        await interaction.reply({ content: 'The owner is still in the channel. You cannot claim it.', ephemeral: true });
+        await interaction.reply({ content: 'The owner is still in the channel. You cannot claim it.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     transferOwnership(voiceChannelId, userId);
@@ -549,7 +549,7 @@ async function handleClaim(
         where: { channelId: voiceChannelId },
         data: { ownerId: userId },
     });
-    await interaction.reply({ content: '👑 You have claimed ownership of this voice channel.', ephemeral: true });
+    await interaction.reply({ content: '👑 You have claimed ownership of this voice channel.', flags: [MessageFlags.Ephemeral] });
 }
 async function handleDelete(interaction: ButtonInteraction): Promise<void> {
     const { guild, user } = interaction;
@@ -586,7 +586,7 @@ async function handleDelete(interaction: ButtonInteraction): Promise<void> {
             .setColor(0xFF6B6B)
             .setTitle('Delete Voice Channel')
             .setDescription(`Are you sure you want to delete **${channelName}**?\n\nThis action cannot be undone.`);
-        await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
+        await interaction.reply({ embeds: [embed], components: [row], flags: [MessageFlags.Ephemeral] });
         return;
     }
     const member = await guild.members.fetch(user.id);
@@ -594,7 +594,7 @@ async function handleDelete(interaction: ButtonInteraction): Promise<void> {
     if (!hasAdminPerms) {
         await interaction.reply({
             content: 'You do not own a private voice channel.',
-            ephemeral: true,
+            flags: [MessageFlags.Ephemeral],
         });
         return;
     }
@@ -602,7 +602,7 @@ async function handleDelete(interaction: ButtonInteraction): Promise<void> {
     if (allPVCs.length === 0) {
         await interaction.reply({
             content: 'There are no active private voice channels.',
-            ephemeral: true,
+            flags: [MessageFlags.Ephemeral],
         });
         return;
     }
@@ -625,7 +625,7 @@ async function handleDelete(interaction: ButtonInteraction): Promise<void> {
         .setColor(0xFF6B6B)
         .setTitle('Admin: Delete Voice Channel')
         .setDescription(`Select a private voice channel to delete.\n\n**Active PVCs:** ${allPVCs.length}`);
-    await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
+    await interaction.reply({ embeds: [embed], components: [row], flags: [MessageFlags.Ephemeral] });
 }
 async function handleDeleteConfirm(interaction: ButtonInteraction): Promise<void> {
     const { guild, customId } = interaction;
@@ -701,7 +701,7 @@ async function handleAdminDelete(interaction: ButtonInteraction): Promise<void> 
     const member = await guild.members.fetch(user.id);
     const hasAdminPerms = member.permissions.has('Administrator') || member.permissions.has('ManageGuild');
     if (!hasAdminPerms) {
-        await interaction.reply({ content: 'You do not have permission to do this.', ephemeral: true });
+        await interaction.reply({ content: 'You do not have permission to do this.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     const channelId = customId.replace('pvc_admin_delete:', '');
@@ -751,7 +751,7 @@ async function handleChat(interaction: ButtonInteraction, channel: any): Promise
     const vcTextChatUrl = `https://discord.com/channels/${interaction.guild!.id}/${channel.id}`;
     await interaction.reply({
         content: `💬 **Voice Channel Chat**\n\nClick the link below to open your voice channel's text chat:\n${vcTextChatUrl}`,
-        ephemeral: true,
+        flags: [MessageFlags.Ephemeral],
     });
 }
 async function handleInfo(interaction: ButtonInteraction, channel: any): Promise<void> {
@@ -766,7 +766,7 @@ async function handleInfo(interaction: ButtonInteraction, channel: any): Promise
         }
     }
     if (!channelState) {
-        await interaction.reply({ content: 'Could not retrieve channel information.', ephemeral: true });
+        await interaction.reply({ content: 'Could not retrieve channel information.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     const owner = await guild.members.fetch(channelState.ownerId).catch(() => null);
@@ -794,7 +794,7 @@ async function handleInfo(interaction: ButtonInteraction, channel: any): Promise
         .setTimestamp();
     await interaction.reply({
         embeds: [embed],
-        ephemeral: true,
+        flags: [MessageFlags.Ephemeral],
     });
 }
 async function handleLimit(interaction: ButtonInteraction): Promise<void> {

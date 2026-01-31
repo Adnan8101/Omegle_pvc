@@ -1,6 +1,6 @@
 import { prisma } from '../../utils/database';
 
-import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits, ChannelType, TextChannel, EmbedBuilder } from 'discord.js';
+import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits, ChannelType, TextChannel, EmbedBuilder, MessageFlags } from 'discord.js';
 import { createGiveawayEmbed } from '../../utils/giveaway/embeds';
 import { hasGiveawayPermissions } from '../../utils/giveaway/permissions';
 import { Emojis } from '../../utils/giveaway/emojis';
@@ -96,7 +96,7 @@ export default {
         if (!validation.isValid) {
             return interaction.reply({
                 content: `${Emojis.CROSS} ${validation.error}`,
-                ephemeral: true
+                flags: [MessageFlags.Ephemeral]
             });
         }
 
@@ -105,12 +105,12 @@ export default {
         if (!endTimeMs) {
             return interaction.reply({
                 content: `${Emojis.CROSS} Invalid duration format. Use: 30s, 2m, 1h, 7d`,
-                ephemeral: true
+                flags: [MessageFlags.Ephemeral]
             });
         }
 
         if (winners < 1) {
-            return interaction.reply({ content: `${Emojis.CROSS} Invalid number of winners.`, ephemeral: true });
+            return interaction.reply({ content: `${Emojis.CROSS} Invalid number of winners.`, flags: [MessageFlags.Ephemeral] });
         }
 
 
@@ -133,7 +133,7 @@ export default {
         if (increaseChance && (increaseChance === 'role' || increaseChance === 'role_booster') && !increaseChanceRole) {
             return interaction.reply({
                 content: `${Emojis.CROSS} You must select a role for \`increase_chance_role\` when using role-based increased chances.`,
-                ephemeral: true
+                flags: [MessageFlags.Ephemeral]
             });
         }
 
@@ -162,7 +162,7 @@ export default {
         };
 
         try {
-            await interaction.deferReply({ ephemeral: true });
+            await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
             const gForEmbed: any = { ...giveawayData, messageId: "", id: 0 };
             const embed = createGiveawayEmbed(gForEmbed, 0);

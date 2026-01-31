@@ -234,6 +234,37 @@ export class VCNSBridge {
             guildId = guildIdOrOptions;
             targetChannelId = channelId!;
         }
+        // Check system health to decide routing
+        const systemState = stateStore.getSystemState();
+        const isHealthy = !systemState.circuitBreakerOpen && vcns.isActive();
+        
+        if (isHealthy) {
+            // Route through intent system when healthy - proper queue management
+            console.log(`[Bridge] 📤 Submitting VC delete intent for channel ${targetChannelId}`);
+            const result = vcns.requestVCDelete(guildId, targetChannelId, reason);
+            
+            if (result.queued && result.intentId) {
+                // Wait for intent completion
+                try {
+                    const outcome = await waitForIntent(result.intentId, 30000);
+                    stateStore.unregisterChannel(targetChannelId);
+                    return {
+                        success: outcome.success,
+                        queued: true,
+                        intentId: result.intentId,
+                        error: outcome.error,
+                    };
+                } catch (error: any) {
+                    console.error(`[Bridge] Delete intent timeout for ${targetChannelId}:`, error.message);
+                    return { success: false, queued: true, intentId: result.intentId, error: error.message };
+                }
+            }
+            
+            return { success: false, queued: false, error: 'Failed to queue delete intent' };
+        }
+        
+        // Fallback: System is degraded - use direct deletion
+        console.warn(`[Bridge] ⚠️ System degraded - using fallback delete for ${targetChannelId}`);
         try {
             if (guild) {
                 // Try cache first, then fetch if not found
@@ -248,12 +279,12 @@ export class VCNSBridge {
                 }
                 
                 if (channel) {
-                    // Delete operations are critical for cleanup - allow when healthy
+                    // Only use fallback when system is degraded (allowWhenHealthy=false)
                     await this.executeFallback(
                         `vc:delete:${guildId}`,
                         async () => channel!.delete(reason),
                         IntentPriority.HIGH,
-                        true, // allowWhenHealthy - deletion is critical for cleanup
+                        false, // SAFETY: Only allowed when system is NOT healthy
                     );
                     rateGovernor.recordAction(IntentAction.VC_DELETE, 25);
                 }

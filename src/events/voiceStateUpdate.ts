@@ -243,10 +243,60 @@ async function handleAccessProtection(
         isTeamChannel
     });
     
-    if (strictnessEnabled && isWhitelisted && hasAdminPerm) {
-        console.log(`[VCNS-ACCESS] ✅ Admin ${member.user.tag} is WHITELISTED with strictness ON - access granted`);
-        return false; 
+    // ADMIN STRICTNESS: When enabled, ONLY whitelisted users can access ANY channel
+    // Non-whitelisted users are INSTANTLY kicked regardless of channel state (locked/unlocked)
+    if (strictnessEnabled) {
+        if (isWhitelisted) {
+            console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} is WHITELISTED - access granted (strictness ON)`);
+            return false; 
+        }
+        
+        // NOT whitelisted + strictness ON = INSTANT KICK + DM + LOG
+        console.log(`[VCNS-ACCESS] 🚨 STRICTNESS VIOLATION: ${member.user.tag} is NOT whitelisted - INSTANT KICK`);
+        
+        const channelTypeName = isTeamChannel ? 'team voice channel' : 'voice channel';
+        
+        // INSTANT KICK - bypass queue for immediate enforcement
+        try {
+            await vcnsBridge.kickUser({
+                guild,
+                channelId: newChannelId,
+                userId: member.id,
+                reason: 'Admin strictness: not whitelisted',
+                isImmediate: true, // IMMEDIATE - strictness violations must be instant
+            });
+        } catch (err) {
+            console.error(`[VCNS-ACCESS] ❌ Failed to kick non-whitelisted user ${member.id}:`, err);
+        }
+        
+        console.log(`[VCNS-ACCESS] ✅ Strictness enforcement - ${member.user.tag} KICKED (not whitelisted)`);
+        
+        // DM the user
+        const embed = new EmbedBuilder()
+            .setColor(0xFF0000)
+            .setTitle('🚫 Access Denied - Admin Strictness')
+            .setDescription(
+                `You were **instantly disconnected** from **${channel.name}** in **${guild.name}**.\n\n` +
+                `**Reason:** Admin Strictness mode is enabled. Only authorized users can access voice channels.\n\n` +
+                `Contact a server administrator if you believe this is an error.`
+            )
+            .setTimestamp();
+        member.send({ embeds: [embed] }).catch(() => { });
+        
+        // Log the action
+        logAction({
+            action: LogAction.USER_REMOVED,
+            guild: guild,
+            user: member.user,
+            channelName: channel.name,
+            channelId: newChannelId,
+            details: `Admin strictness: User not whitelisted - instant kick`,
+            isTeamChannel: isTeamChannel,
+        }).catch(() => { });
+        
+        return true;
     }
+    
     const isLocked = dbState.isLocked;
     const isHidden = dbState.isHidden;
     
@@ -302,11 +352,8 @@ async function handleAccessProtection(
         return false;
     }
     if (isFull) {
-        if (!strictnessEnabled && hasAdminPerm) {
-            console.log(`[VCNS-ACCESS] ✅ Channel is full but admin ${member.user.tag} has bypass (strictness OFF) - access granted`);
-            return false;
-        }
-        console.log(`[VCNS-ACCESS] 🚫 Channel is FULL - kicking ${member.user.tag} (Admin bypass: ${!strictnessEnabled && hasAdminPerm})`);
+        // NO BYPASS - even admins/server owner need AU or permanent access
+        console.log(`[VCNS-ACCESS] 🚫 Channel is FULL - kicking ${member.user.tag} (no AU or permanent access)`);
         const reason = 'at capacity';
         const channelTypeName = isTeamChannel ? 'team voice channel' : 'voice channel';
         try {
@@ -349,13 +396,9 @@ async function handleAccessProtection(
         return false;
     }
     
-    if (!strictnessEnabled && hasAdminPerm) {
-        console.log(`[VCNS-ACCESS] ✅ Admin ${member.user.tag} bypassing restrictions (strictness OFF) - access granted`);
-        return false;
-    }
-    
+    // NO ADMIN BYPASS - even admins/server owner must have AU or permanent access to join locked/hidden channels
     const reason = isLocked ? 'locked' : 'hidden';
-    console.log(`[VCNS-ACCESS] 🚫 FINAL DECISION: Kicking ${member.user.tag} - Channel is ${reason}, Admin strictness: ${strictnessEnabled}, Admin perm: ${hasAdminPerm}, Whitelisted: ${isWhitelisted}`);
+    console.log(`[VCNS-ACCESS] 🚫 FINAL DECISION: Kicking ${member.user.tag} - Channel is ${reason}, no AU or permanent access`);
     const channelTypeName = isTeamChannel ? 'team voice channel' : 'voice channel';
     try {
         // FLOOD PROTECTION: Route through intent queue to prevent API rate limits
