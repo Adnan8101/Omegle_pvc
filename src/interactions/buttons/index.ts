@@ -174,15 +174,25 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
         }
     }
     const messageChannel = interaction.channel;
+    
+    // First check memory state (faster and handles race condition when DB write is in background)
+    let memoryPvcChannel = getChannelByOwner(guild.id, userId);
+    let memoryTeamChannel = getTeamChannelByOwner(guild.id, userId);
+    
+    // Then check database as fallback
     const dbPvc = await prisma.privateVoiceChannel.findFirst({ where: { guildId: guild.id, ownerId: userId } });
     const dbTeam = !dbPvc ? await prisma.teamVoiceChannel.findFirst({ where: { guildId: guild.id, ownerId: userId } }) : null;
-    const ownedChannelId = dbPvc?.channelId || dbTeam?.channelId;
-    let isTeamChannel = Boolean(dbTeam);
+    
+    // Use memory state first, then DB
+    const ownedChannelId = memoryPvcChannel || memoryTeamChannel || dbPvc?.channelId || dbTeam?.channelId;
+    let isTeamChannel = Boolean(memoryTeamChannel || dbTeam);
     let targetChannelId = ownedChannelId;
-    if (dbPvc) {
+    
+    // Register in memory if found from DB but not in memory
+    if (dbPvc && !memoryPvcChannel) {
         const { registerChannel } = await import('../../utils/voiceManager');
         registerChannel(dbPvc.channelId, dbPvc.guildId, dbPvc.ownerId);
-    } else if (dbTeam) {
+    } else if (dbTeam && !memoryTeamChannel) {
         const { registerTeamChannel } = await import('../../utils/voiceManager');
         const teamType = dbTeam.teamType.toLowerCase() as 'duo' | 'trio' | 'squad';
         registerTeamChannel(dbTeam.channelId, dbTeam.guildId, dbTeam.ownerId, teamType);

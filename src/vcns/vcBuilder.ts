@@ -76,7 +76,7 @@ export async function buildVC(options: VCBuildOptions): Promise<VCBuildResult> {
             channelId: channel.id,
             guildId,
             ownerId,
-            isLocked: true,
+            isLocked: false, // OPEN by default - everyone can join
             isHidden: false,
             isTeamChannel,
             teamType,
@@ -102,11 +102,9 @@ export async function buildVC(options: VCBuildOptions): Promise<VCBuildResult> {
     }
 }
 function buildDefaultPermissions(guild: Guild, ownerId: string): OverwriteResolvable[] {
+    // Channel is OPEN by default - everyone can join
+    // User can lock/hide it later using the interface
     return [
-        {
-            id: guild.id,
-            deny: [PermissionFlagsBits.Connect],
-        },
         {
             id: ownerId,
             allow: [
@@ -143,7 +141,7 @@ async function writeToDatabase(
                     guildId,
                     ownerId,
                     teamType: teamType!,
-                    isLocked: true,
+                    isLocked: false, // OPEN by default
                     isHidden: false,
                 },
             });
@@ -153,7 +151,7 @@ async function writeToDatabase(
                     channelId,
                     guildId,
                     ownerId,
-                    isLocked: true,
+                    isLocked: false, // OPEN by default
                     isHidden: false,
                 },
             });
