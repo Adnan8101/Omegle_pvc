@@ -248,10 +248,12 @@ export class VCNSBridge {
                 }
                 
                 if (channel) {
+                    // Delete operations are critical for cleanup - allow when healthy
                     await this.executeFallback(
                         `vc:delete:${guildId}`,
                         async () => channel!.delete(reason),
                         IntentPriority.HIGH,
+                        true, // allowWhenHealthy - deletion is critical for cleanup
                     );
                     rateGovernor.recordAction(IntentAction.VC_DELETE, 25);
                 }
