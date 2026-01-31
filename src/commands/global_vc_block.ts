@@ -9,8 +9,8 @@ import {
 import prisma from '../utils/database';
 import type { Command } from '../client';
 import { canRunAdminCommand } from '../utils/permissions';
-import { Priority, executeWithRateLimit } from '../utils/rateLimit';
-
+import { vcnsBridge } from '../vcns/bridge';
+import { stateStore } from '../vcns/index';
 const data: SlashCommandSubcommandsOnlyBuilder = new SlashCommandBuilder()
     .setName('global_vc_block')
     .setDescription('Manage global voice channel blocks (prevents users from joining ANY VC)')
@@ -49,21 +49,16 @@ const data: SlashCommandSubcommandsOnlyBuilder = new SlashCommandBuilder()
             .setName('show')
             .setDescription('Show all globally blocked users')
     );
-
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guild) {
         await interaction.reply({ content: 'This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-
-    // Only bot owner, developer, or admins with higher role than bot can use this
     if (!await canRunAdminCommand(interaction)) {
         await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-
     const subcommand = interaction.options.getSubcommand();
-
     try {
         if (subcommand === 'add') {
             await handleAdd(interaction);
@@ -82,17 +77,13 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
 }
-
 async function handleAdd(interaction: ChatInputCommandInteraction): Promise<void> {
     const user = interaction.options.getUser('user', true);
     const reason = interaction.options.getString('reason') || 'No reason provided';
-
     if (user.bot) {
         await interaction.reply({ content: '❌ Cannot block bots.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-
-    // Check if already blocked
     const existing = await prisma.globalVCBlock.findUnique({
         where: {
             guildId_userId: {
@@ -101,13 +92,10 @@ async function handleAdd(interaction: ChatInputCommandInteraction): Promise<void
             },
         },
     });
-
     if (existing) {
         await interaction.reply({ content: `❌ ${user.tag} is already globally blocked.`, flags: [MessageFlags.Ephemeral] });
         return;
     }
-
-    // Add block
     await prisma.globalVCBlock.create({
         data: {
             guildId: interaction.guild!.id,
@@ -116,19 +104,21 @@ async function handleAdd(interaction: ChatInputCommandInteraction): Promise<void
             reason,
         },
     });
-
-    // Kick the user from all voice channels they're currently in
+    stateStore.addGlobalBlock(interaction.guild!.id, user.id, reason);
     const member = await interaction.guild!.members.fetch(user.id).catch(() => null);
     if (member?.voice.channelId) {
-        await executeWithRateLimit(
-            `kick:${member.id}`,
-            () => member.voice.disconnect('Globally blocked from all voice channels'),
-            Priority.IMMEDIATE
-        ).catch(err => {
+        try {
+            await vcnsBridge.kickUser({
+                guild: interaction.guild!,
+                channelId: member.voice.channelId,
+                userId: member.id,
+                reason: 'Globally blocked from all voice channels',
+                isImmediate: true,
+            });
+        } catch (err) {
             console.error(`[GlobalVCBlock] Failed to kick ${user.id}:`, err);
-        });
+        }
     }
-
     const embed = new EmbedBuilder()
         .setColor(0xff0000)
         .setTitle('🚫 Global VC Block Added')
@@ -139,14 +129,10 @@ async function handleAdd(interaction: ChatInputCommandInteraction): Promise<void
             { name: 'Reason', value: reason, inline: false }
         )
         .setTimestamp();
-
     await interaction.reply({ embeds: [embed], flags: [MessageFlags.Ephemeral] });
 }
-
 async function handleRemove(interaction: ChatInputCommandInteraction): Promise<void> {
     const user = interaction.options.getUser('user', true);
-
-    // Check if blocked
     const existing = await prisma.globalVCBlock.findUnique({
         where: {
             guildId_userId: {
@@ -155,13 +141,10 @@ async function handleRemove(interaction: ChatInputCommandInteraction): Promise<v
             },
         },
     });
-
     if (!existing) {
         await interaction.reply({ content: `❌ ${user.tag} is not globally blocked.`, flags: [MessageFlags.Ephemeral] });
         return;
     }
-
-    // Remove block
     await prisma.globalVCBlock.delete({
         where: {
             guildId_userId: {
@@ -170,7 +153,7 @@ async function handleRemove(interaction: ChatInputCommandInteraction): Promise<v
             },
         },
     });
-
+    stateStore.removeGlobalBlock(interaction.guild!.id, user.id);
     const embed = new EmbedBuilder()
         .setColor(0x00ff00)
         .setTitle('✅ Global VC Block Removed')
@@ -180,41 +163,31 @@ async function handleRemove(interaction: ChatInputCommandInteraction): Promise<v
             { name: 'Unblocked By', value: `<@${interaction.user.id}>`, inline: true }
         )
         .setTimestamp();
-
     await interaction.reply({ embeds: [embed], flags: [MessageFlags.Ephemeral] });
 }
-
 async function handleShow(interaction: ChatInputCommandInteraction): Promise<void> {
     const blocks = await prisma.globalVCBlock.findMany({
         where: { guildId: interaction.guild!.id },
         orderBy: { createdAt: 'desc' },
     });
-
     if (blocks.length === 0) {
         await interaction.reply({ content: '✅ No users are currently globally blocked.' });
         return;
     }
-
-    // Build description with user mentions to ping them
     let description = `**Total:** ${blocks.length} user${blocks.length !== 1 ? 's' : ''}\n\n`;
-    
-    for (const block of blocks.slice(0, 25)) { // Discord limit: 25 fields
+    for (const block of blocks.slice(0, 25)) { 
         const reason = block.reason || 'No reason provided';
         const timestamp = `<t:${Math.floor(block.createdAt.getTime() / 1000)}:R>`;
         description += `<@${block.userId}>\n• **Reason:** ${reason}\n• **Blocked:** ${timestamp}\n• **By:** <@${block.blockedBy}>\n\n`;
     }
-
     if (blocks.length > 25) {
         description += `\n*Showing 25 of ${blocks.length} blocked users*`;
     }
-
     const embed = new EmbedBuilder()
         .setColor(0xff0000)
         .setTitle('🚫 Globally Blocked Users')
         .setDescription(description)
         .setTimestamp();
-
     await interaction.reply({ embeds: [embed] });
 }
-
 export const command: Command = { data: data as any, execute };

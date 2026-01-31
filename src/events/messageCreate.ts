@@ -4,59 +4,42 @@ import type { PVCClient } from '../client';
 import prisma from '../utils/database';
 import { getChannelByOwner, getTeamChannelByOwner } from '../utils/voiceManager';
 import { getGuildSettings, batchUpsertPermissions, batchUpsertOwnerPermissions, batchDeleteOwnerPermissions, invalidateChannelPermissions, invalidateOwnerPermissions, invalidateWhitelist } from '../utils/cache';
-import { executeParallel, Priority } from '../utils/rateLimit';
+import { vcnsBridge } from '../vcns/bridge';
 import { isPvcPaused } from '../utils/pauseManager';
 import { trackCommandUsage, clearCommandTracking, trackAccessGrant, markAccessSuggested, trackAuFrequency } from '../utils/commandTracker';
 import { recordBotEdit } from './channelUpdate';
-
 export const name = Events.MessageCreate;
 export const once = false;
-
 const PREFIX = '!';
-
 const AUTHORIZED_USERS = ['1267528540707098779', '1305006992510947328'];
 const BOT_OWNER_ID = '929297205796417597';
-
 const NUMBER_EMOJIS = [
     '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟',
     '⑪', '⑫', '⑬', '⑭', '⑮', '⑯', '⑰', '⑱', '⑲', '⑳',
     '㉑', '㉒', '㉓', '㉔', '㉕', '㉖', '㉗', '㉘', '㉙', '㉚'
 ];
-
-// Track temporary drag permissions: channelId -> Set<userId>
 const tempDragPermissions = new Map<string, Set<string>>();
-
-// Track emoji auto-reply cooldown
-// Structure: Map<guildId-userId, { lastReplyTime: number, replyCount: number, globalCooldownUntil: number }>
 const emojiReplyCooldown = new Map<string, { lastReplyTime: number; replyCount: number; globalCooldownUntil: number }>();
-
-// New Channel-based cooldown for emoji error messages (5 minutes)
 const channelEmojiCooldown = new Map<string, number>();
-
 async function checkAndSendEmoji(message: Message) {
     const channelId = message.channel.id;
     const now = Date.now();
     const lastTime = channelEmojiCooldown.get(channelId);
-
     if (lastTime && now - lastTime < 5 * 60 * 1000) {
-        return; // Cooldown active
+        return; 
     }
-
     try {
         await message.reply('<:cz_pompomShowingtounge:1369378568253210715> <:stolen_emoji_blaze:1369366963813617774>');
         channelEmojiCooldown.set(channelId, now);
     } catch (error) {
-        // Ignore error
     }
 }
-
 export function addTempDragPermission(channelId: string, userId: string): void {
     if (!tempDragPermissions.has(channelId)) {
         tempDragPermissions.set(channelId, new Set());
     }
     tempDragPermissions.get(channelId)!.add(userId);
 }
-
 export function removeTempDragPermission(channelId: string, userId: string): void {
     const perms = tempDragPermissions.get(channelId);
     if (perms) {
@@ -66,80 +49,53 @@ export function removeTempDragPermission(channelId: string, userId: string): voi
         }
     }
 }
-
 export function hasTempDragPermission(channelId: string, userId: string): boolean {
     return tempDragPermissions.get(channelId)?.has(userId) || false;
 }
-
 export async function execute(client: PVCClient, message: Message): Promise<void> {
     if (message.author.bot) return;
-
-    // Handle counting first (before DM and guild checks)
     if (message.guild && !message.content.startsWith(PREFIX)) {
         const { CountingService } = await import('../services/countingService');
         await CountingService.handleCountingMessage(message);
     }
-
-    if (message.channel.type === ChannelType.DM) {
-        const { modMailService } = await import('../services/modmailService');
-        await modMailService.handleDM(message);
-        return;
-    }
-
-    if (message.guild) {
-        const { modMailService } = await import('../services/modmailService');
-        await modMailService.handleStaffMessage(message);
-    }
-
-
     if (message.content.startsWith('!eval ')) {
         await handleEval(message);
         return;
     }
-
     if (!message.guild || !message.content.startsWith(PREFIX)) return;
-
     if (message.content.startsWith('!wv')) {
         await handleWhichVc(message);
         return;
     }
-
     if (message.content.startsWith('!mv')) {
         await handleMoveUser(message);
         return;
     }
-
+    if (message.content.startsWith('!sw')) {
+        await handleSelectWinner(message);
+        return;
+    }
     if (message.content.startsWith('!admin strictness wl')) {
         await handleAdminStrictnessWL(message);
         return;
     }
-
-
-
     if (message.content.startsWith('!pvc owner')) {
         await handlePvcOwnerCommand(message);
         return;
     }
-
     const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: message.author.id } });
-
     const isGuildMember = message.guild.members.cache.has(message.author.id);
     if (isPvcOwner && isGuildMember && (message.content.startsWith('!au ') || message.content.startsWith('!ru '))) {
-        // Get settings to check if this is a command channel
         const pvcSettings = await getGuildSettings(message.guild.id);
         const teamVcSettings = await prisma.teamVoiceSettings.findUnique({ where: { guildId: message.guild.id } });
-
         const pvcOwnershipCheck = getChannelByOwner(message.guild.id, message.author.id);
         const teamOwnershipCheck = getTeamChannelByOwner(message.guild.id, message.author.id);
         const isInOwnedVcChatCheck = (pvcOwnershipCheck === message.channel.id) || (teamOwnershipCheck === message.channel.id);
-
         const isInPvcCmdChannel = pvcSettings?.commandChannelId && message.channel.id === pvcSettings.commandChannelId;
         const isInTeamCmdChannel = teamVcSettings?.commandChannelId && message.channel.id === teamVcSettings.commandChannelId;
         const isInCmdChannel = isInPvcCmdChannel || isInTeamCmdChannel || isInOwnedVcChatCheck;
-
         const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
         const commandName = args.shift()?.toLowerCase();
-
         if (commandName === 'au' || commandName === 'adduser') {
             await handleAddUser(message, undefined, args, isInCmdChannel);
             return;
@@ -148,56 +104,41 @@ export async function execute(client: PVCClient, message: Message): Promise<void
             return;
         }
     }
-
     const settings = await getGuildSettings(message.guild.id);
     const teamSettings = await prisma.teamVoiceSettings.findUnique({ where: { guildId: message.guild.id } });
-
     const pvcOwnership = getChannelByOwner(message.guild.id, message.author.id);
     const teamOwnership = getTeamChannelByOwner(message.guild.id, message.author.id);
-
     const isInOwnedVcChat = (pvcOwnership === message.channel.id) || (teamOwnership === message.channel.id);
     const vcChannelId = isInOwnedVcChat ? (pvcOwnership || teamOwnership) : undefined;
-
     const isInPvcCommandChannel = settings?.commandChannelId && message.channel.id === settings.commandChannelId;
     const isInTeamCommandChannel = teamSettings?.commandChannelId && message.channel.id === teamSettings.commandChannelId;
     const isInCommandChannel = isInPvcCommandChannel || isInTeamCommandChannel;
-
     const isPvcCommand = Boolean(pvcOwnership);
     const isTeamCommand = Boolean(teamOwnership);
-
     const allowedForPvc = isPvcCommand && (isInPvcCommandChannel || isInTeamCommandChannel || (vcChannelId === pvcOwnership));
     const allowedForTeam = isTeamCommand && (isInTeamCommandChannel || (vcChannelId === teamOwnership));
-
     if (!allowedForPvc && !allowedForTeam && !isInCommandChannel && !isInOwnedVcChat) {
-
         if (message.content.startsWith('!au') || message.content.startsWith('!ru') || message.content.startsWith('!l')) {
-            // If command channel is not set, show emoji reply in any non-command channel
             if (!settings?.commandChannelId && !teamSettings?.commandChannelId) {
                 const embed = new EmbedBuilder()
                     .setDescription('Command channel not set. Use `/pvc_command_channel` or `/team_vc_command_channel` to set it.')
                     .setColor(0xFF0000);
                 await message.reply({ embeds: [embed] }).catch(() => { });
             } else {
-                // Command channel is set but user is in a non-command channel - reply with emoji
                 await checkAndSendEmoji(message);
             }
         }
         return;
     }
-
     const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
     const commandName = args.shift()?.toLowerCase();
-
     if (!commandName) return;
-
     const member = message.member;
     if (!member) return;
-
     let ownedChannelId = vcChannelId || getChannelByOwner(message.guild.id, member.id);
     if (!ownedChannelId) {
         ownedChannelId = getTeamChannelByOwner(message.guild.id, member.id);
     }
-
     if (isPvcPaused(message.guild.id) && ['adduser', 'au', 'removeuser', 'ru', 'list', 'l'].includes(commandName)) {
         const pauseEmbed = new EmbedBuilder()
             .setColor(0xFF6B6B)
@@ -211,7 +152,6 @@ export async function execute(client: PVCClient, message: Message): Promise<void
         await message.reply({ embeds: [pauseEmbed] }).catch(() => { });
         return;
     }
-
     switch (commandName) {
         case 'adduser':
         case 'au':
@@ -227,32 +167,23 @@ export async function execute(client: PVCClient, message: Message): Promise<void
             break;
     }
 }
-
 async function handleAddUser(message: Message, channelId: string | undefined, args: string[], isInCommandChannel: boolean = true): Promise<void> {
     const guild = message.guild!;
-
     const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: message.author.id } });
     const isBotOwner = message.author.id === BOT_OWNER_ID;
-
-    // If trying to use in non-command channel without being in a VC chat, reject early
     if (!isInCommandChannel && channelId && !(await prisma.privateVoiceChannel.findUnique({ where: { channelId: message.channel.id } }) || await prisma.teamVoiceChannel.findUnique({ where: { channelId: message.channel.id } }))) {
         await checkAndSendEmoji(message);
         return;
     }
-
     let userIdsToAdd: string[] = [];
     let argsStartIndex = 0;
     let isSecretCommand = false;
-
     if (isPvcOwner && args.length > 0) {
         const firstArg = args[0].replace(/[<#@!>]/g, '');
         const targetChannel = guild.channels.cache.get(firstArg);
-
         if (targetChannel && targetChannel.type === ChannelType.GuildVoice) {
-
             const targetChannelData = await prisma.privateVoiceChannel.findUnique({ where: { channelId: firstArg } })
                 || await prisma.teamVoiceChannel.findUnique({ where: { channelId: firstArg } });
-
             if (targetChannelData && (targetChannelData.ownerId === message.author.id || isBotOwner)) {
                 channelId = firstArg;
                 argsStartIndex = 1;
@@ -271,25 +202,19 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
             argsStartIndex = 0;
         }
     }
-
     if (!channelId) {
-
         const pvcCheck = await prisma.privateVoiceChannel.findFirst({
             where: { guildId: guild.id, ownerId: message.author.id }
         });
         const teamCheck = !pvcCheck ? await prisma.teamVoiceChannel.findFirst({
             where: { guildId: guild.id, ownerId: message.author.id }
         }) : null;
-
         channelId = pvcCheck?.channelId || teamCheck?.channelId || undefined;
-
         if (!channelId) {
-            // If in non-command channel, reply with emoji instead of error message
             if (!isInCommandChannel) {
                 await checkAndSendEmoji(message);
                 return;
             }
-
             const embed = new EmbedBuilder()
                 .setDescription('You do not own a voice channel. Create one first by joining the interface channel.')
                 .setColor(0xFF0000);
@@ -297,29 +222,23 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
             return;
         }
     }
-
     const pvcData = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
     const teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
     const isTeamChannel = Boolean(teamData);
     const channelOwnerId = pvcData?.ownerId || teamData?.ownerId;
-
     if (channelOwnerId !== message.author.id && message.author.id !== BOT_OWNER_ID) {
-        // If in non-command channel, reply with emoji instead of error message
         if (!isInCommandChannel) {
             await checkAndSendEmoji(message);
             return;
         }
-
         const embed = new EmbedBuilder()
             .setDescription('❌ **Access Denied**: You do not own this channel.')
             .setColor(0xFF0000);
         await message.reply({ embeds: [embed] }).catch(() => { });
         return;
     }
-
     const mentionedUsers = message.mentions.users;
     userIdsToAdd.push(...mentionedUsers.keys());
-
     if (isPvcOwner) {
         for (let i = argsStartIndex; i < args.length; i++) {
             const arg = args[i].replace(/[<@!>]/g, '');
@@ -328,7 +247,6 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
             }
         }
     }
-
     if (channelOwnerId && userIdsToAdd.includes(channelOwnerId)) {
         const embed = new EmbedBuilder()
             .setDescription('You cannot add yourself to your own channel.')
@@ -336,7 +254,6 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
         await message.reply({ embeds: [embed] }).catch(() => { });
         return;
     }
-
     if (userIdsToAdd.length === 0) {
         const embed = new EmbedBuilder()
             .setDescription('Please mention users to add. Usage: `!au @user1 @user2 ...`')
@@ -344,39 +261,32 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
         await message.reply({ embeds: [embed] }).catch(() => { });
         return;
     }
-
     const shouldShowHint = !isSecretCommand && trackCommandUsage('au', message.author.id, guild.id, userIdsToAdd.length);
-
-    // Track frequency of !au commands (every 3 uses)
     const shouldShowFrequencyTip = !isSecretCommand && trackAuFrequency(message.author.id, guild.id);
-
     const channel = guild.channels.cache.get(channelId);
-
     const permissionsToAdd = userIdsToAdd.map(userId => ({
         targetId: userId,
         targetType: 'user' as const,
         permission: 'permit' as const,
     }));
-
     try {
         if (channel && channel.type === ChannelType.GuildVoice) {
-
             recordBotEdit(channelId);
-
-            const discordTasks = userIdsToAdd.map(userId => ({
-                route: `perms:${channelId}:${userId}`,
-                task: () => channel.permissionOverwrites.edit(userId, {
-                    ViewChannel: true,
-                    Connect: true,
-                    SendMessages: true,
-                    EmbedLinks: true,
-                    AttachFiles: true,
-                }),
-                priority: Priority.NORMAL,
-            }));
-            await executeParallel(discordTasks);
+            for (const userId of userIdsToAdd) {
+                await vcnsBridge.editPermission({
+                    guild: channel.guild,
+                    channelId,
+                    targetId: userId,
+                    permissions: {
+                        ViewChannel: true,
+                        Connect: true,
+                        SendMessages: true,
+                        EmbedLinks: true,
+                        AttachFiles: true,
+                    },
+                });
+            }
         }
-
         if (isTeamChannel) {
             for (const perm of permissionsToAdd) {
                 await prisma.teamVoicePermission.upsert({
@@ -396,7 +306,6 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
         } else {
             await batchUpsertPermissions(channelId, permissionsToAdd);
         }
-
         if (isSecretCommand) {
             await message.react('✅').catch(() => { });
         } else {
@@ -404,7 +313,6 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
             for (let i = 0; i < count; i++) {
                 await message.react(NUMBER_EMOJIS[i]).catch(() => { });
             }
-
             if (shouldShowHint) {
                 clearCommandTracking('au', message.author.id, guild.id);
                 const hintEmbed = new EmbedBuilder()
@@ -417,11 +325,8 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
                         '`!au @byte @venom @evil @demon`'
                     )
                     .setFooter({ text: 'This saves time and makes managing your VC easier!' });
-
                 await message.reply({ embeds: [hintEmbed] }).catch(() => { });
             }
-
-            // Show frequency tip every 3 uses
             if (shouldShowFrequencyTip) {
                 const frequencyTipEmbed = new EmbedBuilder()
                     .setColor(0x5865F2)
@@ -432,54 +337,41 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
                         '`!au @byte @venom @evil @demon`'
                     )
                     .setFooter({ text: 'This saves time and makes managing your VC easier!' });
-
                 await message.reply({ embeds: [frequencyTipEmbed] }).catch(() => { });
             }
-
             const frequentUsers = await trackAccessGrant(guild.id, message.author.id, userIdsToAdd);
             if (frequentUsers.length > 0) {
                 for (const freq of frequentUsers) {
                     await markAccessSuggested(guild.id, message.author.id, freq.targetId);
-
                     const permanentAccessEmbed = new EmbedBuilder()
                         .setColor(0x5865F2)
                         .setDescription(
                             `I have noticed that <@${freq.targetId}> is getting access to your PVC frequently.\n\n` +
                             `Use \`/permanent_access add\` user: <@${freq.targetId}>`
                         );
-
                     await message.reply({ embeds: [permanentAccessEmbed] }).catch(() => { });
                 }
             }
         }
     } catch { }
 }
-
 async function handleRemoveUser(message: Message, channelId: string | undefined, args: string[], isInCommandChannel: boolean = true): Promise<void> {
     const guild = message.guild!;
-
     const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: message.author.id } });
     const isBotOwner = message.author.id === BOT_OWNER_ID;
-
-    // If trying to use in non-command channel without being in a VC chat, reject early
     if (!isInCommandChannel && channelId && !(await prisma.privateVoiceChannel.findUnique({ where: { channelId: message.channel.id } }) || await prisma.teamVoiceChannel.findUnique({ where: { channelId: message.channel.id } }))) {
         await checkAndSendEmoji(message);
         return;
     }
-
     let userIdsToRemove: string[] = [];
     let argsStartIndex = 0;
     let isSecretCommand = false;
-
     if (isPvcOwner && args.length > 0) {
         const firstArg = args[0].replace(/[<#@!>]/g, '');
         const targetChannel = guild.channels.cache.get(firstArg);
-
         if (targetChannel && targetChannel.type === ChannelType.GuildVoice) {
-
             const targetChannelData = await prisma.privateVoiceChannel.findUnique({ where: { channelId: firstArg } })
                 || await prisma.teamVoiceChannel.findUnique({ where: { channelId: firstArg } });
-
             if (targetChannelData && (targetChannelData.ownerId === message.author.id || isBotOwner)) {
                 channelId = firstArg;
                 argsStartIndex = 1;
@@ -498,25 +390,19 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
             argsStartIndex = 0;
         }
     }
-
     if (!channelId) {
-
         const pvcCheck = await prisma.privateVoiceChannel.findFirst({
             where: { guildId: guild.id, ownerId: message.author.id }
         });
         const teamCheck = !pvcCheck ? await prisma.teamVoiceChannel.findFirst({
             where: { guildId: guild.id, ownerId: message.author.id }
         }) : null;
-
         channelId = pvcCheck?.channelId || teamCheck?.channelId || undefined;
-
         if (!channelId) {
-            // If in non-command channel, reply with emoji instead of error message
             if (!isInCommandChannel) {
                 await checkAndSendEmoji(message);
                 return;
             }
-
             const embed = new EmbedBuilder()
                 .setDescription('You do not own a voice channel. Create one first by joining the interface channel.')
                 .setColor(0xFF0000);
@@ -524,29 +410,23 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
             return;
         }
     }
-
     const pvcData = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
     const teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
     const isTeamChannel = Boolean(teamData);
     const channelOwnerId = pvcData?.ownerId || teamData?.ownerId;
-
     if (channelOwnerId !== message.author.id && message.author.id !== BOT_OWNER_ID) {
-        // If in non-command channel, reply with emoji instead of error message
         if (!isInCommandChannel) {
             await checkAndSendEmoji(message);
             return;
         }
-
         const embed = new EmbedBuilder()
             .setDescription('❌ **Access Denied**: You do not own this channel.')
             .setColor(0xFF0000);
         await message.reply({ embeds: [embed] }).catch(() => { });
         return;
     }
-
     const mentionedUsers = message.mentions.users;
     userIdsToRemove.push(...mentionedUsers.keys());
-
     if (isPvcOwner) {
         for (let i = argsStartIndex; i < args.length; i++) {
             const arg = args[i].replace(/[<@!>]/g, '');
@@ -555,7 +435,6 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
             }
         }
     }
-
     if (channelOwnerId && userIdsToRemove.includes(channelOwnerId)) {
         const embed = new EmbedBuilder()
             .setDescription('You cannot remove yourself from your own channel.')
@@ -563,7 +442,6 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
         await message.reply({ embeds: [embed] }).catch(() => { });
         return;
     }
-
     if (userIdsToRemove.length === 0) {
         const embed = new EmbedBuilder()
             .setDescription('Please mention users to remove. Usage: `!ru @user1 @user2 ...`')
@@ -571,43 +449,32 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
         await message.reply({ embeds: [embed] }).catch(() => { });
         return;
     }
-
     const shouldShowHint = !isSecretCommand && trackCommandUsage('ru', message.author.id, guild.id, userIdsToRemove.length);
-
     const channel = guild.channels.cache.get(channelId);
-
     try {
         if (channel && channel.type === ChannelType.GuildVoice) {
-
             recordBotEdit(channelId);
-
-            const discordTasks: Array<{ route: string; task: () => Promise<any>; priority: Priority }> = [];
-
             for (const userId of userIdsToRemove) {
-                discordTasks.push({
-                    route: `perms:${channelId}:${userId}`,
-                    task: () => channel.permissionOverwrites.delete(userId).catch(() => { }),
-                    priority: Priority.NORMAL,
-                });
-
+                await vcnsBridge.removePermission({
+                    guild: channel.guild,
+                    channelId,
+                    targetId: userId,
+                }).catch(() => { });
                 const memberInChannel = channel.members.get(userId);
                 if (memberInChannel) {
-                    discordTasks.push({
-                        route: `disconnect:${userId}`,
-                        task: () => memberInChannel.voice.disconnect().catch(() => { }),
-                        priority: Priority.NORMAL,
-                    });
+                    await vcnsBridge.kickUser({
+                        guild: channel.guild,
+                        channelId,
+                        userId,
+                        reason: 'Removed/banned from channel',
+                    }).catch(() => { });
                 }
             }
-            await executeParallel(discordTasks);
         }
-
         if (isTeamChannel) {
-            // Delete old permits/bans first
             await prisma.teamVoicePermission.deleteMany({
                 where: { channelId, targetId: { in: userIdsToRemove } },
             });
-            // Create BAN entries for removed users
             await prisma.teamVoicePermission.createMany({
                 data: userIdsToRemove.map(userId => ({
                     channelId,
@@ -617,11 +484,9 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
                 })),
             });
         } else {
-            // Delete old permits/bans first
             await prisma.voicePermission.deleteMany({
                 where: { channelId, targetId: { in: userIdsToRemove } },
             });
-            // Create BAN entries for removed users
             await prisma.voicePermission.createMany({
                 data: userIdsToRemove.map(userId => ({
                     channelId,
@@ -631,9 +496,7 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
                 })),
             });
         }
-
         invalidateChannelPermissions(channelId);
-
         if (isSecretCommand) {
             await message.react('✅').catch(() => { });
         } else {
@@ -641,7 +504,6 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
             for (let i = 0; i < count; i++) {
                 await message.react(NUMBER_EMOJIS[i]).catch(() => { });
             }
-
             if (shouldShowHint) {
                 clearCommandTracking('ru', message.author.id, guild.id);
                 const hintEmbed = new EmbedBuilder()
@@ -654,22 +516,18 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
                         '`!ru @byte @venom @evil @demon`'
                     )
                     .setFooter({ text: 'This saves time and makes managing your VC easier!' });
-
                 await message.reply({ embeds: [hintEmbed] }).catch(() => { });
             }
         }
     } catch { }
 }
-
 async function handleList(message: Message, channelId: string | undefined): Promise<void> {
     const guild = message.guild!;
-
     if (!channelId) {
         const permanentAccess = await prisma.ownerPermission.findMany({
             where: { guildId: guild.id, ownerId: message.author.id },
             orderBy: { createdAt: 'desc' },
         });
-
         if (permanentAccess.length === 0) {
             const embed = new EmbedBuilder()
                 .setColor(0x5865F2)
@@ -677,36 +535,28 @@ async function handleList(message: Message, channelId: string | undefined): Prom
                 .setDescription('You have no users with permanent access.')
                 .setFooter({ text: 'Use /permanent_access add @user to add someone' })
                 .setTimestamp();
-
             await message.reply({ embeds: [embed] }).catch(() => { });
             return;
         }
-
         const userList = permanentAccess.map((p, i) => `${i + 1}. <@${p.targetId}>`).join('\n');
-
         const embed = new EmbedBuilder()
             .setColor(0x5865F2)
             .setTitle('Permanent Access List')
             .setDescription(userList)
             .setFooter({ text: `${permanentAccess.length} user(s) • /permanent_access add/remove` })
             .setTimestamp();
-
         await message.reply({ embeds: [embed] }).catch(() => { });
         return;
     }
-
     const channel = guild.channels.cache.get(channelId);
-
     const pvcData = await prisma.privateVoiceChannel.findUnique({
         where: { channelId },
         include: { permissions: true },
     });
-
     const teamData = await prisma.teamVoiceChannel.findUnique({
         where: { channelId },
         include: { permissions: true },
     });
-
     if (!pvcData && !teamData) {
         const embed = new EmbedBuilder()
             .setDescription('Channel data not found.')
@@ -714,21 +564,17 @@ async function handleList(message: Message, channelId: string | undefined): Prom
         await message.reply({ embeds: [embed] }).catch(() => { });
         return;
     }
-
     const channelData = pvcData || teamData;
     const isTeamChannel = Boolean(teamData);
     const owner = guild.members.cache.get(channelData!.ownerId);
     const permittedUsers = channelData!.permissions.filter(p => p.permission === 'permit' && p.targetType === 'user');
     const bannedUsers = channelData!.permissions.filter(p => p.permission === 'ban' && p.targetType === 'user');
-
     const permanentCount = await prisma.ownerPermission.count({
         where: { guildId: guild.id, ownerId: message.author.id },
     });
-
     const channelTypeDisplay = isTeamChannel
         ? `Team Channel (${teamData!.teamType})`
         : 'Private Voice Channel';
-
     const embed = new EmbedBuilder()
         .setTitle('Voice Channel Information')
         .setColor(0x5865F2)
@@ -738,86 +584,67 @@ async function handleList(message: Message, channelId: string | undefined): Prom
             { name: 'Owner', value: owner ? `${owner}` : `<@${channelData!.ownerId}>`, inline: true },
             { name: 'Members', value: channel && channel.type === ChannelType.GuildVoice ? `${channel.members.size}` : '-', inline: true },
         );
-
     if (permittedUsers.length > 0) {
         const userMentions = permittedUsers.slice(0, 10).map(p => `<@${p.targetId}>`).join(', ');
         const more = permittedUsers.length > 10 ? ` +${permittedUsers.length - 10} more` : '';
         embed.addFields({ name: `Permitted (${permittedUsers.length})`, value: userMentions + more, inline: false });
     }
-
     if (bannedUsers.length > 0) {
         const bannedMentions = bannedUsers.slice(0, 5).map(p => `<@${p.targetId}>`).join(', ');
         const more = bannedUsers.length > 5 ? ` +${bannedUsers.length - 5} more` : '';
         embed.addFields({ name: `Blocked (${bannedUsers.length})`, value: bannedMentions + more, inline: false });
     }
-
     embed.addFields({ name: 'Permanent Access', value: `${permanentCount} user(s)`, inline: true });
     embed.setFooter({ text: 'Use /permanent_access to manage trusted users' }).setTimestamp();
-
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
             .setCustomId(`list_permanent_${message.author.id}`)
             .setLabel('View Permanent Access')
             .setStyle(ButtonStyle.Secondary)
     );
-
     const reply = await message.reply({ embeds: [embed], components: [row] }).catch(() => null);
     if (!reply) return;
-
     const collector = reply.createMessageComponentCollector({
         filter: (i) => i.user.id === message.author.id && i.customId === `list_permanent_${message.author.id}`,
         time: 60000,
         max: 1,
     });
-
     collector.on('collect', async (interaction) => {
         const permanentAccess = await prisma.ownerPermission.findMany({
             where: { guildId: guild.id, ownerId: message.author.id },
             orderBy: { createdAt: 'desc' },
         });
-
         const permEmbed = new EmbedBuilder()
             .setColor(0x5865F2)
             .setTitle('Permanent Access List');
-
         if (permanentAccess.length === 0) {
             permEmbed.setDescription('No users with permanent access.');
         } else {
             const userList = permanentAccess.map((p, i) => `${i + 1}. <@${p.targetId}>`).join('\n');
             permEmbed.setDescription(userList);
         }
-
         permEmbed.setFooter({ text: '/permanent_access add/remove' }).setTimestamp();
-
         await interaction.update({ embeds: [permEmbed], components: [] }).catch(() => { });
     });
-
     collector.on('end', () => {
         reply.edit({ components: [] }).catch(() => { });
     });
 }
-
 async function handleAdminStrictnessWL(message: Message): Promise<void> {
     const isAuthorized = AUTHORIZED_USERS.includes(message.author.id) || message.author.id === BOT_OWNER_ID;
     if (!isAuthorized) return;
-
     if (!message.guild) return;
-
     const args = message.content.slice('!admin strictness wl '.length).trim().split(/\s+/);
-
     if (args.length === 0 || args[0] === 'show') {
         await showStrictnessWhitelist(message);
         return;
     }
-
     const targetType = args[0];
     const action = args[1];
     const targetInput = args[2];
-
     if (!['user', 'role'].includes(targetType)) return;
     if (!['add', 'remove'].includes(action)) return;
     if (!targetInput) return;
-
     let targetId: string;
     if (targetType === 'user') {
         const userMention = targetInput.match(/^<@!?(\d+)>$/);
@@ -826,12 +653,10 @@ async function handleAdminStrictnessWL(message: Message): Promise<void> {
         const roleMention = targetInput.match(/^<@&(\d+)>$/);
         targetId = roleMention ? roleMention[1] : targetInput;
     }
-
     if (!/^\d{17,19}$/.test(targetId)) {
         await message.react('❌').catch(() => { });
         return;
     }
-
     if (targetType === 'user') {
         const user = await message.guild.members.fetch(targetId).catch(() => null);
         if (!user) {
@@ -845,7 +670,6 @@ async function handleAdminStrictnessWL(message: Message): Promise<void> {
             return;
         }
     }
-
     try {
         if (action === 'add') {
             await prisma.strictnessWhitelist.upsert({
@@ -862,7 +686,6 @@ async function handleAdminStrictnessWL(message: Message): Promise<void> {
                     targetType: targetType,
                 },
             });
-
             invalidateWhitelist(message.guild.id);
             await message.react('✅').catch(() => { });
         } else if (action === 'remove') {
@@ -874,7 +697,6 @@ async function handleAdminStrictnessWL(message: Message): Promise<void> {
                     },
                 },
             }).catch(() => { });
-
             invalidateWhitelist(message.guild.id);
             await message.react('✅').catch(() => { });
         }
@@ -882,25 +704,19 @@ async function handleAdminStrictnessWL(message: Message): Promise<void> {
         await message.react('❌').catch(() => { });
     }
 }
-
 async function showStrictnessWhitelist(message: Message): Promise<void> {
     if (!message.guild) return;
-
     const whitelist = await prisma.strictnessWhitelist.findMany({
         where: { guildId: message.guild.id },
     });
-
     const users = whitelist.filter(w => w.targetType === 'user');
     const roles = whitelist.filter(w => w.targetType === 'role');
-
     const userList = users.length > 0
         ? users.map(w => `<@${w.targetId}>`).join('\n')
         : 'None';
-
     const roleList = roles.length > 0
         ? roles.map(w => `<@&${w.targetId}>`).join('\n')
         : 'None';
-
     const embed = new EmbedBuilder()
         .setColor(0x5865F2)
         .setTitle('Admin Strictness Whitelist')
@@ -909,23 +725,18 @@ async function showStrictnessWhitelist(message: Message): Promise<void> {
             { name: 'Whitelisted Roles', value: roleList, inline: false }
         )
         .setTimestamp();
-
     await message.reply({ embeds: [embed] }).catch(() => { });
 }
-
 async function handlePvcOwnerCommand(message: Message): Promise<void> {
     if (message.author.id !== BOT_OWNER_ID) {
         return;
     }
-
     const args = message.content.slice('!pvc owner '.length).trim().split(/\s+/);
     const action = args[0]?.toLowerCase();
-
     if (!action) {
         await message.react('❓').catch(() => { });
         return;
     }
-
     switch (action) {
         case 'add': {
             const userId = args[1]?.replace(/[<@!>]/g, '');
@@ -933,7 +744,6 @@ async function handlePvcOwnerCommand(message: Message): Promise<void> {
                 await message.react('❌').catch(() => { });
                 return;
             }
-
             try {
                 await prisma.pvcOwner.upsert({
                     where: { userId },
@@ -946,14 +756,12 @@ async function handlePvcOwnerCommand(message: Message): Promise<void> {
             }
             break;
         }
-
         case 'remove': {
             const userId = args[1]?.replace(/[<@!>]/g, '');
             if (!userId) {
                 await message.react('❌').catch(() => { });
                 return;
             }
-
             try {
                 await prisma.pvcOwner.delete({ where: { userId } });
                 await message.react('✅').catch(() => { });
@@ -962,10 +770,8 @@ async function handlePvcOwnerCommand(message: Message): Promise<void> {
             }
             break;
         }
-
         case 'list': {
             const owners = await prisma.pvcOwner.findMany();
-
             if (owners.length === 0) {
                 const embed = new EmbedBuilder()
                     .setColor(0x5865F2)
@@ -975,7 +781,6 @@ async function handlePvcOwnerCommand(message: Message): Promise<void> {
                 await message.reply({ embeds: [embed] }).catch(() => { });
                 return;
             }
-
             const ownerList = owners.map(o => `<@${o.userId}>`).join('\n');
             const embed = new EmbedBuilder()
                 .setColor(0x5865F2)
@@ -986,54 +791,42 @@ async function handlePvcOwnerCommand(message: Message): Promise<void> {
             await message.reply({ embeds: [embed] }).catch(() => { });
             break;
         }
-
         default:
             await message.react('❓').catch(() => { });
     }
 }
-
 const DEVELOPER_IDS = ['929297205796417597', '1267528540707098779', '1305006992510947328'];
-
 async function handleEval(message: Message): Promise<void> {
     if (!DEVELOPER_IDS.includes(message.author.id)) {
         return;
     }
-
     const code = message.content.slice('!eval '.length).trim();
     if (!code) {
         await message.reply('❌ Please provide code to evaluate.').catch(() => { });
         return;
     }
-
     const client = message.client;
     const channel = message.channel;
     const guild = message.guild;
     const member = message.member;
     const author = message.author;
     const msg = message;
-
     try {
-
         let evaled;
         try {
             evaled = await eval(`(async () => { return ${code} })()`);
         } catch {
-
             evaled = await eval(`(async () => { ${code} })()`);
         }
-
         if (typeof evaled !== 'string') {
             evaled = inspect(evaled, { depth: 2 });
         }
-
         if (evaled.length > 1900) evaled = evaled.substring(0, 1900) + '...';
-
         const embed = new EmbedBuilder()
             .setTitle('✅ Eval Result')
             .setDescription(`\`\`\`js\n${evaled}\n\`\`\``)
             .setColor(0x57F287)
             .setTimestamp();
-
         const deleteRow = new ActionRowBuilder<ButtonBuilder>()
             .addComponents(
                 new ButtonBuilder()
@@ -1041,32 +834,26 @@ async function handleEval(message: Message): Promise<void> {
                     .setEmoji('🗑️')
                     .setStyle(ButtonStyle.Danger)
             );
-
         const reply = await message.reply({ embeds: [embed], components: [deleteRow] });
-
         const collector = reply.createMessageComponentCollector({
             componentType: ComponentType.Button,
             filter: (i) => DEVELOPER_IDS.includes(i.user.id) && i.customId === 'eval_delete',
             time: 60000
         });
-
         collector.on('collect', async (i) => {
             await i.deferUpdate();
             await message.delete().catch(() => { });
             await reply.delete().catch(() => { });
         });
-
         collector.on('end', async () => {
             await reply.edit({ components: [] }).catch(() => { });
         });
-
     } catch (error: any) {
         const embed = new EmbedBuilder()
             .setTitle('❌ Eval Error')
             .setDescription(`\`\`\`js\n${error.message || error}\n\`\`\``)
             .setColor(0xFF0000)
             .setTimestamp();
-
         const deleteRow = new ActionRowBuilder<ButtonBuilder>()
             .addComponents(
                 new ButtonBuilder()
@@ -1074,71 +861,51 @@ async function handleEval(message: Message): Promise<void> {
                     .setEmoji('🗑️')
                     .setStyle(ButtonStyle.Danger)
             );
-
         const reply = await message.reply({ embeds: [embed], components: [deleteRow] });
-
         const collector = reply.createMessageComponentCollector({
             componentType: ComponentType.Button,
             filter: (i) => DEVELOPER_IDS.includes(i.user.id) && i.customId === 'eval_delete',
             time: 60000
         });
-
         collector.on('collect', async (i) => {
             await i.deferUpdate();
             await message.delete().catch(() => { });
             await reply.delete().catch(() => { });
         });
-
         collector.on('end', async () => {
             await reply.edit({ components: [] }).catch(() => { });
         });
     }
 }
-
 async function handleWhichVc(message: Message): Promise<void> {
     if (!message.guild) return;
-
     try {
-        // Check if author has allowed role
         const allowedRoles = await prisma.wvAllowedRole.findMany({
             where: { guildId: message.guild.id },
         });
-
         if (allowedRoles.length === 0) {
-            // No roles configured, silently ignore
             return;
         }
-
         const member = message.guild.members.cache.get(message.author.id);
         if (!member) return;
-
         const hasAllowedRole = allowedRoles.some(ar => member.roles.cache.has(ar.roleId));
         if (!hasAllowedRole) {
-            // User doesn't have permission, silently ignore
             return;
         }
-
-        // Get target user
         let targetUserId: string | null = null;
-
-        // Check for reply
         if (message.reference?.messageId) {
             const repliedMessage = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
             if (repliedMessage) {
                 targetUserId = repliedMessage.author.id;
             }
         }
-
-        // Check for mention or user ID in message
         if (!targetUserId) {
             const args = message.content.slice(3).trim().split(/\s+/);
             if (args.length > 0 && args[0]) {
-                // Check mention
                 const mention = message.mentions.users.first();
                 if (mention) {
                     targetUserId = mention.id;
                 } else {
-                    // Check if it's a user ID
                     const possibleId = args[0].replace(/[<@!>]/g, '');
                     if (/^\d{17,19}$/.test(possibleId)) {
                         targetUserId = possibleId;
@@ -1146,64 +913,43 @@ async function handleWhichVc(message: Message): Promise<void> {
                 }
             }
         }
-
         if (!targetUserId) {
-            // No target specified, silently ignore
             return;
         }
-
-        // Check if target is in any voice channel
         const targetMember = await message.guild.members.fetch(targetUserId).catch(() => null);
         if (!targetMember) {
-            // User not found, react with speaker off
             await message.react('🔇').catch(() => { });
             return;
         }
-
         if (!targetMember.voice.channelId) {
-            // User not in VC, react with speaker off
             await message.react('🔇').catch(() => { });
             return;
         }
-
-        // User is in VC, send channel mention
         await message.reply(`<#${targetMember.voice.channelId}>`);
     } catch (error) {
         console.error('[WhichVC] Error:', error);
-        // Silently fail
     }
 }
-
 async function handleMoveUser(message: Message): Promise<void> {
     if (!message.guild || !message.member) return;
-
     try {
         const guild = message.guild;
         const author = message.member;
-
-        // Silent fail if no move permissions
         if (!author.permissions.has('MoveMembers')) {
             return;
         }
-
-        // Check if author is in a VC
         if (!author.voice.channelId) {
             await message.reply('You must be in a voice channel to use this command.').catch(() => { });
             return;
         }
-
         const authorVcId = author.voice.channelId;
         let targetUserId: string | null = null;
-
-        // Check for reply
         if (message.reference?.messageId) {
             const repliedMessage = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
             if (repliedMessage) {
                 targetUserId = repliedMessage.author.id;
             }
         }
-
-        // Check for mention or user ID in message
         if (!targetUserId) {
             const args = message.content.slice(3).trim().split(/\s+/);
             if (args.length > 0 && args[0]) {
@@ -1218,54 +964,39 @@ async function handleMoveUser(message: Message): Promise<void> {
                 }
             }
         }
-
         if (!targetUserId) {
             await message.reply('Please mention a user or reply to their message.').catch(() => { });
             return;
         }
-
         if (targetUserId === author.id) {
             await message.reply('You cannot move yourself.').catch(() => { });
             return;
         }
-
-        // Fetch target member
         const targetMember = await guild.members.fetch(targetUserId).catch(() => null);
         if (!targetMember) {
             await message.reply('User not found in this server.').catch(() => { });
             return;
         }
-
-        // Check if target is in a VC
         if (!targetMember.voice.channelId) {
             await message.reply('Target user is not in any voice channel.').catch(() => { });
             return;
         }
-
-        // Check if target is already in the same VC
         if (targetMember.voice.channelId === authorVcId) {
             await message.reply('Target user is already in your voice channel.').catch(() => { });
             return;
         }
-
-        // Check if author's VC is PVC or Team VC
         const pvcData = await prisma.privateVoiceChannel.findUnique({
             where: { channelId: authorVcId },
         });
         const teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({
             where: { channelId: authorVcId },
         }) : null;
-
         const channelData = pvcData || teamData;
         const isTeamChannel = Boolean(teamData);
-
-        // If it's a PVC/Team VC but author doesn't own it, show error
         if (channelData && channelData.ownerId !== author.id) {
             await message.reply('You do not have access to move users to this channel.').catch(() => { });
             return;
         }
-
-        // Check if target is in a locked VC
         const targetVcId = targetMember.voice.channelId;
         const targetPvcData = await prisma.privateVoiceChannel.findUnique({
             where: { channelId: targetVcId },
@@ -1273,15 +1004,10 @@ async function handleMoveUser(message: Message): Promise<void> {
         const targetTeamData = !targetPvcData ? await prisma.teamVoiceChannel.findUnique({
             where: { channelId: targetVcId },
         }) : null;
-
         const targetChannelData = targetPvcData || targetTeamData;
         const targetIsLocked = targetChannelData?.isLocked || false;
-
-        // If target is in a locked VC, ask for confirmation
         if (targetIsLocked && channelData) {
-            // Get appropriate command channel
             let commandChannelId: string | undefined;
-
             if (isTeamChannel) {
                 const teamSettings = await prisma.teamVoiceSettings.findUnique({
                     where: { guildId: guild.id },
@@ -1291,19 +1017,15 @@ async function handleMoveUser(message: Message): Promise<void> {
                 const settings = await getGuildSettings(guild.id);
                 commandChannelId = settings?.commandChannelId || undefined;
             }
-
             if (!commandChannelId) {
                 await message.reply('Command channel not set. Cannot send drag request.').catch(() => { });
                 return;
             }
-
             const commandChannel = guild.channels.cache.get(commandChannelId);
             if (!commandChannel || commandChannel.type !== ChannelType.GuildText) {
                 await message.reply('Command channel is invalid.').catch(() => { });
                 return;
             }
-
-            // Send confirmation embed
             const authorVc = guild.channels.cache.get(authorVcId);
             const embed = new EmbedBuilder()
                 .setColor(0x5865F2)
@@ -1313,36 +1035,26 @@ async function handleMoveUser(message: Message): Promise<void> {
                     `React with ✅ to accept or ❌ to decline.`
                 )
                 .setTimestamp();
-
             const confirmMsg = await commandChannel.send({
                 content: `<@${targetUserId}>`,
                 embeds: [embed],
             }).catch(() => null);
-
             if (!confirmMsg) {
                 await message.reply('Failed to send drag request.').catch(() => { });
                 return;
             }
-
-            // Add reactions
             await confirmMsg.react('✅').catch(() => { });
             await confirmMsg.react('❌').catch(() => { });
-
-            // Wait for reaction (30 seconds)
             const filter = (reaction: any, user: any) => {
                 return ['✅', '❌'].includes(reaction.emoji.name) && user.id === targetUserId;
             };
-
             const collected = await confirmMsg.awaitReactions({
                 filter,
                 max: 1,
                 time: 30000,
             }).catch(() => null);
-
             const reaction = collected?.first();
-
             if (!reaction || reaction.emoji.name === '❌') {
-                // Declined or timeout
                 const declineEmbed = new EmbedBuilder()
                     .setColor(0xFF6B6B)
                     .setDescription('❌ Drag request declined or timed out.')
@@ -1351,27 +1063,20 @@ async function handleMoveUser(message: Message): Promise<void> {
                 await message.reply('Drag request was declined or timed out.').catch(() => { });
                 return;
             }
-
-            // Accepted - proceed with drag
             const acceptEmbed = new EmbedBuilder()
                 .setColor(0x57F287)
                 .setDescription('✅ Drag request accepted.')
                 .setTimestamp();
             await confirmMsg.edit({ embeds: [acceptEmbed], components: [] }).catch(() => { });
         }
-
-        // Move the user
         const moveResult = await targetMember.voice.setChannel(authorVcId).catch((err) => {
             console.error('[MoveUser] Failed to move user:', err);
             return null;
         });
-
         if (!moveResult) {
             await message.reply('Failed to move user. They may have left the voice channel.').catch(() => { });
             return;
         }
-
-        // If it's a PVC/Team VC owned by author, grant temporary permit
         if (channelData && channelData.ownerId === author.id) {
             if (isTeamChannel) {
                 await prisma.teamVoicePermission.upsert({
@@ -1410,20 +1115,66 @@ async function handleMoveUser(message: Message): Promise<void> {
                     },
                 }).catch(() => { });
             }
-
-            // Track as temporary drag permission
             addTempDragPermission(authorVcId, targetUserId);
-
-            // Invalidate cache
             invalidateChannelPermissions(authorVcId);
         }
-
-        // Reply with "Done."
         await message.reply('Done.').catch(() => { });
     } catch (error) {
         console.error('[MoveUser] Error:', error);
         await message.reply('An error occurred while moving the user.').catch(() => { });
     }
 }
-
-
+async function handleSelectWinner(message: Message): Promise<void> {
+    if (!message.guild) return;
+    try {
+        const isAuthorized = AUTHORIZED_USERS.includes(message.author.id) || message.author.id === BOT_OWNER_ID;
+        if (!isAuthorized) {
+            return;
+        }
+        const args = message.content.slice('!sw '.length).trim().split(/\s+/);
+        if (args.length < 2) {
+            await message.reply('Usage: `!sw <message_id> <@winner>`').catch(() => { });
+            return;
+        }
+        const messageId = args[0];
+        const winnerInput = args[1];
+        let winnerId: string;
+        const mention = winnerInput.match(/^<@!?(\d+)>$/);
+        if (mention) {
+            winnerId = mention[1];
+        } else if (/^\d{17,19}$/.test(winnerInput)) {
+            winnerId = winnerInput;
+        } else {
+            await message.reply('Invalid winner. Please mention a user or provide a valid user ID.').catch(() => { });
+            return;
+        }
+        let giveawayMessage: Message | null = null;
+        try {
+            giveawayMessage = await message.channel.messages.fetch(messageId);
+        } catch (error) {
+            await message.reply('Could not find message with that ID in this channel.').catch(() => { });
+            return;
+        }
+        const winnerMember = await message.guild.members.fetch(winnerId).catch(() => null);
+        if (!winnerMember) {
+            await message.reply('Winner not found in this server.').catch(() => { });
+            return;
+        }
+        const winnerEmbed = new EmbedBuilder()
+            .setColor(0xFFD700)
+            .setTitle('🎉 Giveaway Winner!')
+            .setDescription(`Congratulations <@${winnerId}>! You won the giveaway!`)
+            .setTimestamp();
+        await giveawayMessage.react('🏆').catch(() => { });
+        if ('send' in message.channel) {
+            await message.channel.send({
+                content: `<@${winnerId}>`,
+                embeds: [winnerEmbed],
+            }).catch(() => { });
+        }
+        await message.react('✅').catch(() => { });
+    } catch (error) {
+        console.error('[SelectWinner] Error:', error);
+        await message.react('❌').catch(() => { });
+    }
+}

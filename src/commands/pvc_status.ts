@@ -8,55 +8,45 @@ import {
 import prisma from '../utils/database';
 import type { Command } from '../client';
 import { canRunAdminCommand } from '../utils/permissions';
-
 const data = new SlashCommandBuilder()
     .setName('pvc_status')
     .setDescription('Show PVC system status and all setups')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .setDMPermission(false);
-
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guild) {
         await interaction.reply({ content: 'This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-
     if (!await canRunAdminCommand(interaction)) {
         await interaction.reply({ content: 'You need a role higher than the bot to use this command, or be the bot developer.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
-
     try {
         const guild = interaction.guild;
-
         const settings = await prisma.guildSettings.findUnique({
             where: { guildId: guild.id },
             include: {
                 privateChannels: true,
             },
         });
-
         const teamSettings = await prisma.teamVoiceSettings.findUnique({
             where: { guildId: guild.id },
             include: {
                 teamChannels: true,
             },
         });
-
         if (!settings) {
             await interaction.editReply('PVC system is not set up in this server. Use `/pvc_setup` to configure it.');
             return;
         }
-
         const interfaceTextChannel = settings.interfaceTextId
             ? guild.channels.cache.get(settings.interfaceTextId)
             : null;
         const interfaceVcChannel = settings.interfaceVcId
             ? guild.channels.cache.get(settings.interfaceVcId)
             : null;
-
         const embed = new EmbedBuilder()
             .setTitle('PVC System Status')
             .setColor(settings.adminStrictness ? 0x00FF00 : 0xFF0000)
@@ -88,21 +78,18 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 },
             )
             .setTimestamp();
-
         if (settings.privateChannels.length > 0) {
             const channelList = settings.privateChannels.slice(0, 10).map((pvc: { channelId: string; ownerId: string }) => {
                 const channel = guild.channels.cache.get(pvc.channelId);
                 const owner = guild.members.cache.get(pvc.ownerId);
                 return `• ${channel ? channel.name : 'Unknown'} - Owner: ${owner ? owner.displayName : pvc.ownerId}`;
             }).join('\n');
-
             embed.addFields({
                 name: 'Active PVC Channels (showing up to 10)',
                 value: channelList || 'None',
                 inline: false,
             });
         }
-
         if (teamSettings && teamSettings.teamChannels.length > 0) {
             const channelList = teamSettings.teamChannels.slice(0, 10).map((tc: { channelId: string; ownerId: string; teamType: string }) => {
                 const channel = guild.channels.cache.get(tc.channelId);
@@ -110,20 +97,17 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 const typeEmoji = tc.teamType === 'DUO' ? '' : tc.teamType === 'TRIO' ? '' : '';
                 return `• ${channel ? channel.name : 'Unknown'} ${typeEmoji} - Owner: ${owner ? owner.displayName : tc.ownerId}`;
             }).join('\n');
-
             embed.addFields({
                 name: 'Active Team Channels (showing up to 10)',
                 value: channelList || 'None',
                 inline: false,
             });
         }
-
         await interaction.editReply({ embeds: [embed] });
     } catch {
         await interaction.editReply('Failed to get PVC status.');
     }
 }
-
 export const command: Command = {
     data: data as unknown as import('discord.js').SlashCommandBuilder,
     execute,

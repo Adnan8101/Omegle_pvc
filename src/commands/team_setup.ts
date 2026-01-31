@@ -11,7 +11,6 @@ import { registerTeamInterfaceChannel } from '../utils/voiceManager';
 import type { Command } from '../client';
 import { canRunAdminCommand } from '../utils/permissions';
 import { logAction, LogAction } from '../utils/logger';
-
 const data = new SlashCommandBuilder()
     .setName('team_setup')
     .setDescription('Set up the Duo/Trio/Squad voice channel system')
@@ -31,62 +30,48 @@ const data = new SlashCommandBuilder()
             .setRequired(true)
             .addChannelTypes(ChannelType.GuildText)
     );
-
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guild) {
         await interaction.reply({ content: 'This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-
     if (!await canRunAdminCommand(interaction)) {
         await interaction.reply({ content: 'You need a role higher than the bot to use this command, or be the bot developer.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-
     const category = interaction.options.getChannel('category', true);
     const logsChannel = interaction.options.getChannel('logs_channel', true);
-
     if (category.type !== ChannelType.GuildCategory) {
         await interaction.reply({ content: 'Please select a valid category channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-
     if (logsChannel.type !== ChannelType.GuildText) {
         await interaction.reply({ content: 'Logs channel must be a text channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
-
     try {
         const guild = interaction.guild;
-
         const duoVc = await guild.channels.create({
             name: 'Create Duo',
             type: ChannelType.GuildVoice,
             parent: category.id,
         });
-
         const trioVc = await guild.channels.create({
             name: 'Create Trio',
             type: ChannelType.GuildVoice,
             parent: category.id,
         });
-
         const squadVc = await guild.channels.create({
             name: 'Create Squad',
             type: ChannelType.GuildVoice,
             parent: category.id,
         });
-
-        // Setup webhook - reuse existing or create new
         let logsWebhook;
         try {
             const webhooks = await (logsChannel as any).fetchWebhooks();
             logsWebhook = webhooks.find((w: any) => w.owner?.id === interaction.client.user?.id && w.name === 'Team VC Logger');
-            
             if (!logsWebhook) {
-                // Clean up old bot webhooks if we're at the limit
                 const botWebhooks = webhooks.filter((w: any) => w.owner?.id === interaction.client.user?.id);
                 if (webhooks.size >= 15 && botWebhooks.size > 0) {
                     console.log('[Team Setup] Webhook limit reached, cleaning up old bot webhooks...');
@@ -96,7 +81,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                         } catch {}
                     }
                 }
-                
                 logsWebhook = await (logsChannel as any).createWebhook({
                     name: 'Team VC Logger',
                     reason: 'For logging Team VC actions',
@@ -105,7 +89,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         } catch (webhookError: any) {
             throw new Error(`Failed to setup webhook: ${webhookError.message}`);
         }
-
         await prisma.teamVoiceSettings.upsert({
             where: { guildId: guild.id },
             update: {
@@ -126,18 +109,15 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 logsWebhookUrl: logsWebhook.url,
             },
         });
-
         registerTeamInterfaceChannel(guild.id, 'duo', duoVc.id);
         registerTeamInterfaceChannel(guild.id, 'trio', trioVc.id);
         registerTeamInterfaceChannel(guild.id, 'squad', squadVc.id);
-
         await logAction({
             action: LogAction.TEAM_SETUP,
             guild: guild,
             user: interaction.user,
             details: `Team VC System set up with category: ${category.name}, logs: ${logsChannel}`,
         });
-
         const embed = new EmbedBuilder()
             .setColor(0x00FF00)
             .setTitle('✅ Team Voice Channel System Setup Complete')
@@ -170,13 +150,11 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 },
             )
             .setTimestamp();
-
         await interaction.editReply({ embeds: [embed] });
     } catch (error) {
         await interaction.editReply('Failed to set up Team VC system. Check bot permissions.');
     }
 }
-
 export const command: Command = {
     data: data as unknown as import('discord.js').SlashCommandBuilder,
     execute,

@@ -1,27 +1,22 @@
 import { ChannelType, type VoiceChannel, type Guild, type GuildMember, DiscordAPIError } from 'discord.js';
-import { executeWithRateLimit } from './rateLimit';
+import { vcnsBridge } from '../vcns/bridge';
 import { unregisterChannel } from './voiceManager';
 import prisma from './database';
-
 let recordBotEditFn: ((channelId: string) => void) | null = null;
-
 export function setRecordBotEditFn(fn: (channelId: string) => void): void {
     recordBotEditFn = fn;
 }
-
 function notifyBotEdit(channelId: string): void {
     if (recordBotEditFn) {
         recordBotEditFn(channelId);
     }
 }
-
 export interface SafeResult<T> {
     success: boolean;
     data?: T;
     error?: string;
     code?: number;
 }
-
 const DISCORD_ERRORS = {
     UNKNOWN_CHANNEL: 10003,
     UNKNOWN_GUILD: 10004,
@@ -30,7 +25,6 @@ const DISCORD_ERRORS = {
     MISSING_PERMISSIONS: 50013,
     RATE_LIMITED: 429,
 };
-
 export async function validateVoiceChannel(guild: Guild, channelId: string): Promise<VoiceChannel | null> {
     try {
         const channel = guild.channels.cache.get(channelId);
@@ -49,14 +43,12 @@ export async function validateVoiceChannel(guild: Guild, channelId: string): Pro
         return null;
     }
 }
-
 async function cleanupStaleChannel(channelId: string): Promise<void> {
     unregisterChannel(channelId);
     await prisma.privateVoiceChannel.delete({
         where: { channelId },
     }).catch(() => { });
 }
-
 export async function safeSetChannelName(
     guild: Guild,
     channelId: string,
@@ -66,18 +58,14 @@ export async function safeSetChannelName(
     if (!channel) {
         return { success: false, error: 'Channel no longer exists', code: DISCORD_ERRORS.UNKNOWN_CHANNEL };
     }
-
     try {
         notifyBotEdit(channelId);
-        const result = await executeWithRateLimit(`edit:${channelId}`, () =>
-            channel.setName(name)
-        );
+        const result = await channel.setName(name);
         return { success: true, data: result };
     } catch (error) {
         return handleDiscordError(error, channelId);
     }
 }
-
 export async function safeEditPermissions(
     guild: Guild,
     channelId: string,
@@ -88,18 +76,19 @@ export async function safeEditPermissions(
     if (!channel) {
         return { success: false, error: 'Channel no longer exists', code: DISCORD_ERRORS.UNKNOWN_CHANNEL };
     }
-
     try {
         notifyBotEdit(channelId);
-        await executeWithRateLimit(`perms:${channelId}`, () =>
-            channel.permissionOverwrites.edit(targetId, permissions)
-        );
+        await vcnsBridge.editPermission({
+            guild,
+            channelId,
+            targetId,
+            permissions,
+        });
         return { success: true };
     } catch (error) {
         return handleDiscordError(error, channelId);
     }
 }
-
 export async function safeDeleteChannel(
     guild: Guild,
     channelId: string
@@ -109,18 +98,18 @@ export async function safeDeleteChannel(
         await cleanupStaleChannel(channelId);
         return { success: true };
     }
-
     try {
-        await executeWithRateLimit(`delete:${channelId}`, () =>
-            channel.delete()
-        );
+        await vcnsBridge.deleteVC({
+            guild,
+            channelId,
+            isTeam: false,
+        });
         await cleanupStaleChannel(channelId);
         return { success: true };
     } catch (error) {
         return handleDiscordError(error, channelId);
     }
 }
-
 export async function safeSetUserLimit(
     guild: Guild,
     channelId: string,
@@ -130,18 +119,14 @@ export async function safeSetUserLimit(
     if (!channel) {
         return { success: false, error: 'Channel no longer exists', code: DISCORD_ERRORS.UNKNOWN_CHANNEL };
     }
-
     try {
         notifyBotEdit(channelId);
-        const result = await executeWithRateLimit(`edit:${channelId}`, () =>
-            channel.setUserLimit(limit)
-        );
+        const result = await channel.setUserLimit(limit);
         return { success: true, data: result };
     } catch (error) {
         return handleDiscordError(error, channelId);
     }
 }
-
 export async function safeSetBitrate(
     guild: Guild,
     channelId: string,
@@ -151,18 +136,14 @@ export async function safeSetBitrate(
     if (!channel) {
         return { success: false, error: 'Channel no longer exists', code: DISCORD_ERRORS.UNKNOWN_CHANNEL };
     }
-
     try {
         notifyBotEdit(channelId);
-        const result = await executeWithRateLimit(`edit:${channelId}`, () =>
-            channel.setBitrate(bitrate)
-        );
+        const result = await channel.setBitrate(bitrate);
         return { success: true, data: result };
     } catch (error) {
         return handleDiscordError(error, channelId);
     }
 }
-
 export async function safeSetRegion(
     guild: Guild,
     channelId: string,
@@ -172,25 +153,25 @@ export async function safeSetRegion(
     if (!channel) {
         return { success: false, error: 'Channel no longer exists', code: DISCORD_ERRORS.UNKNOWN_CHANNEL };
     }
-
     try {
         notifyBotEdit(channelId);
-        const result = await executeWithRateLimit(`edit:${channelId}`, () =>
-            channel.setRTCRegion(region)
-        );
+        const result = await channel.setRTCRegion(region);
         return { success: true, data: result };
     } catch (error) {
         return handleDiscordError(error, channelId);
     }
 }
-
 export async function safeDisconnectMember(
     member: GuildMember
 ): Promise<SafeResult<void>> {
     try {
-        await executeWithRateLimit(`disconnect:${member.id}`, () =>
-            member.voice.disconnect()
-        );
+        await vcnsBridge.kickUser({
+            guild: member.guild,
+            channelId: member.voice.channelId || '',
+            userId: member.id,
+            reason: 'Disconnected via safeDisconnectMember',
+            isImmediate: false,
+        });
         return { success: true };
     } catch (error) {
         const discordError = error as DiscordAPIError;
@@ -201,14 +182,11 @@ export async function safeDisconnectMember(
         };
     }
 }
-
 function handleDiscordError(error: unknown, channelId?: string): SafeResult<any> {
     const discordError = error as DiscordAPIError;
-
     if (discordError.code === DISCORD_ERRORS.UNKNOWN_CHANNEL && channelId) {
         cleanupStaleChannel(channelId);
     }
-
     return {
         success: false,
         error: discordError.message || 'An API error occurred',

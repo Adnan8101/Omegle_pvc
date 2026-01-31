@@ -11,24 +11,20 @@ import { canRunAdminCommand } from '../utils/permissions';
 import { isPvcPaused, pausePvc, setPauseMessageId } from '../utils/pauseManager';
 import { getGuildSettings } from '../utils/cache';
 import { logAction, LogAction } from '../utils/logger';
-
 const data = new SlashCommandBuilder()
     .setName('pvc_pause')
     .setDescription('Pause the PVC system - disables all voice channel creation and interface commands')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .setDMPermission(false);
-
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guild) {
         await interaction.reply({ content: 'This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-
     if (!await canRunAdminCommand(interaction)) {
         await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-
     const guildId = interaction.guild.id;
     if (isPvcPaused(guildId)) {
         await interaction.reply({
@@ -37,9 +33,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         });
         return;
     }
-
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
-
     try {
         pausePvc(guildId);
         const settings = await getGuildSettings(guildId);
@@ -58,7 +52,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             )
             .setFooter({ text: `Paused by ${interaction.user.tag}` })
             .setTimestamp();
-
         if (settings?.interfaceTextId) {
             const interfaceChannel = interaction.guild.channels.cache.get(settings.interfaceTextId);
             if (interfaceChannel && interfaceChannel.type === ChannelType.GuildText) {
@@ -66,14 +59,12 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 setPauseMessageId(guildId, pauseMessage.id);
             }
         }
-
         await logAction({
             action: LogAction.PVC_SETUP,
             guild: interaction.guild,
             user: interaction.user,
             details: 'PVC System paused',
         });
-
         await interaction.editReply(
             '✅ **PVC System Paused**\n\n' +
             'All PVC features have been disabled. Users will see a pause notification when trying to use any PVC feature.\n\n' +
@@ -86,7 +77,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         await interaction.editReply('❌ Failed to pause the PVC system. Please try again.');
     }
 }
-
 export const command: Command = {
     data: data as unknown as import('discord.js').SlashCommandBuilder,
     execute,

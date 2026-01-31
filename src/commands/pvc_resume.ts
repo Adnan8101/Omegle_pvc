@@ -11,26 +11,21 @@ import { canRunAdminCommand } from '../utils/permissions';
 import { isPvcPaused, resumePvc, getPauseMessageId, clearPauseMessageId } from '../utils/pauseManager';
 import { getGuildSettings } from '../utils/cache';
 import { logAction, LogAction } from '../utils/logger';
-
 const data = new SlashCommandBuilder()
     .setName('pvc_resume')
     .setDescription('Resume the PVC system - enables all voice channel creation and interface commands')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .setDMPermission(false);
-
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guild) {
         await interaction.reply({ content: 'This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-
     if (!await canRunAdminCommand(interaction)) {
         await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-
     const guildId = interaction.guild.id;
-
     if (!isPvcPaused(guildId)) {
         await interaction.reply({
             content: '⚠️ The PVC system is not paused. It is already running normally.',
@@ -38,15 +33,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         });
         return;
     }
-
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
-
     try {
-
         resumePvc(guildId);
-
         const settings = await getGuildSettings(guildId);
-
         if (settings?.interfaceTextId) {
             const interfaceChannel = interaction.guild.channels.cache.get(settings.interfaceTextId);
             if (interfaceChannel && interfaceChannel.type === ChannelType.GuildText) {
@@ -58,7 +48,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     } catch { }
                     clearPauseMessageId(guildId);
                 }
-
                 const resumeEmbed = new EmbedBuilder()
                     .setColor(0x57F287)
                     .setTitle('▶️ PVC System Resumed')
@@ -73,9 +62,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     )
                     .setFooter({ text: `Resumed by ${interaction.user.tag}` })
                     .setTimestamp();
-
                 const resumeMessage = await interfaceChannel.send({ embeds: [resumeEmbed] });
-
                 setTimeout(async () => {
                     try {
                         await resumeMessage.delete();
@@ -83,14 +70,12 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 }, 30000);
             }
         }
-
         await logAction({
             action: LogAction.PVC_SETUP,
             guild: interaction.guild,
             user: interaction.user,
             details: 'PVC System resumed',
         });
-
         await interaction.editReply(
             '✅ **PVC System Resumed**\n\n' +
             'All PVC features have been re-enabled.\n\n' +
@@ -103,7 +88,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         await interaction.editReply('❌ Failed to resume the PVC system. Please try again.');
     }
 }
-
 export const command: Command = {
     data: data as unknown as import('discord.js').SlashCommandBuilder,
     execute,

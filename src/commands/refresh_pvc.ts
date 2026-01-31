@@ -19,7 +19,6 @@ import { canRunAdminCommand } from '../utils/permissions';
 import { logAction, LogAction } from '../utils/logger';
 import { invalidateGuildSettings, clearAllCaches as invalidateAllCaches, invalidateChannelPermissions, getOwnerPermissions as getPermanentPermissionsAndCache } from '../utils/cache';
 import { clearGuildState, registerInterfaceChannel, registerChannel, registerTeamChannel, registerTeamInterfaceChannel, transferOwnership, transferTeamOwnership, addUserToJoinOrder, type TeamType } from '../utils/voiceManager';
-
 const MAIN_BUTTONS = [
     { id: 'pvc_lock' },
     { id: 'pvc_unlock' },
@@ -37,7 +36,6 @@ const MAIN_BUTTONS = [
     { id: 'pvc_chat' },
     { id: 'pvc_info' },
 ] as const;
-
 const data = new SlashCommandBuilder()
     .setName('refresh_pvc')
     .setDescription('Refresh PVC & Team setup (interface, logs, permissions sync)')
@@ -71,16 +69,13 @@ const data = new SlashCommandBuilder()
             .setRequired(false)
             .addChannelTypes(ChannelType.GuildText)
     );
-
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     console.log(`[Refresh PVC] Command invoked by ${interaction.user.tag} (${interaction.user.id}) in guild ${interaction.guild?.name} (${interaction.guildId})`);
-    
     if (!interaction.guild) {
         console.log('[Refresh PVC] Error: Command used outside of guild');
         await interaction.reply({ content: 'This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-
     try {
         const canRun = await canRunAdminCommand(interaction);
         console.log(`[Refresh PVC] Permission check: canRunAdminCommand = ${canRun}`);
@@ -93,7 +88,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         await interaction.reply({ content: '❌ Error checking permissions. Please try again.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-
     try {
         await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
         console.log('[Refresh PVC] Reply deferred successfully');
@@ -101,18 +95,14 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         console.error('[Refresh PVC] Error deferring reply:', deferError);
         return;
     }
-
     const guild = interaction.guild;
     const pvcLogsChannel = interaction.options.getChannel('pvc_logs_channel');
     const teamLogsChannel = interaction.options.getChannel('team_logs_channel');
     const commandChannel = interaction.options.getChannel('command_channel');
     const teamCommandChannel = interaction.options.getChannel('team_command_channel');
-
     console.log(`[Refresh PVC] Options - pvcLogs: ${pvcLogsChannel?.id}, teamLogs: ${teamLogsChannel?.id}, cmdChannel: ${commandChannel?.id}, teamCmdChannel: ${teamCommandChannel?.id}`);
-
     let settings;
     let teamSettings;
-    
     try {
         console.log('[Refresh PVC] Fetching guild settings from database...');
         settings = await withRetry(() => prisma.guildSettings.findUnique({
@@ -129,7 +119,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
         return;
     }
-
     try {
         console.log('[Refresh PVC] Fetching team settings from database...');
         teamSettings = await withRetry(() => prisma.teamVoiceSettings.findUnique({
@@ -146,13 +135,11 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
         return;
     }
-
     if (!settings?.interfaceTextId && !teamSettings?.categoryId) {
         console.log('[Refresh PVC] Neither PVC nor Team system is set up');
         await interaction.editReply('Neither PVC nor Team system is set up. Use `/pvc_setup` or `/team_setup` first.');
         return;
     }
-
     console.log('[Refresh PVC] Setting up webhooks...');
     let pvcLogsWebhookUrl = settings?.logsWebhookUrl;
     if (pvcLogsChannel && pvcLogsChannel.type === ChannelType.GuildText) {
@@ -160,13 +147,9 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             console.log(`[Refresh PVC] Fetching webhooks for PVC logs channel: ${pvcLogsChannel.id}`);
             const webhooks = await (pvcLogsChannel as any).fetchWebhooks();
             const botWebhooks = webhooks.filter((w: any) => w.owner?.id === interaction.client.user?.id && w.name === 'PVC Logger');
-            
             let webhook = botWebhooks.first();
-
             if (!webhook) {
                 console.log('[Refresh PVC] No existing webhook found, creating new PVC webhook...');
-                
-                // Clean up old bot webhooks if we're at the limit
                 const allBotWebhooks = webhooks.filter((w: any) => w.owner?.id === interaction.client.user?.id);
                 if (webhooks.size >= 15 && allBotWebhooks.size > 0) {
                     console.log('[Refresh PVC] Webhook limit reached, cleaning up old bot webhooks...');
@@ -177,13 +160,11 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                         } catch {}
                     }
                 }
-                
                 webhook = await (pvcLogsChannel as any).createWebhook({
                     name: 'PVC Logger',
                     reason: 'PVC Logs Refresh',
                 });
             } else if (botWebhooks.size > 1) {
-                // Clean up duplicates, keep the first one
                 console.log(`[Refresh PVC] Found ${botWebhooks.size} duplicate webhooks, cleaning up...`);
                 const duplicates = botWebhooks.filter((w: any) => w.id !== webhook.id);
                 for (const dup of duplicates.values()) {
@@ -199,20 +180,15 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             console.error('[Refresh PVC] Error setting up PVC webhook:', error?.message || error);
         }
     }
-
     let teamLogsWebhookUrl = teamSettings?.logsWebhookUrl;
     if (teamLogsChannel && teamLogsChannel.type === ChannelType.GuildText) {
         try {
             console.log(`[Refresh PVC] Fetching webhooks for Team logs channel: ${teamLogsChannel.id}`);
             const webhooks = await (teamLogsChannel as any).fetchWebhooks();
             const botWebhooks = webhooks.filter((w: any) => w.owner?.id === interaction.client.user?.id && w.name === 'Team VC Logger');
-            
             let webhook = botWebhooks.first();
-
             if (!webhook) {
                 console.log('[Refresh PVC] No existing webhook found, creating new Team webhook...');
-                
-                // Clean up old bot webhooks if we're at the limit
                 const allBotWebhooks = webhooks.filter((w: any) => w.owner?.id === interaction.client.user?.id);
                 if (webhooks.size >= 15 && allBotWebhooks.size > 0) {
                     console.log('[Refresh PVC] Webhook limit reached, cleaning up old bot webhooks...');
@@ -223,13 +199,11 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                         } catch {}
                     }
                 }
-                
                 webhook = await (teamLogsChannel as any).createWebhook({
                     name: 'Team VC Logger',
                     reason: 'Team Logs Refresh',
                 });
             } else if (botWebhooks.size > 1) {
-                // Clean up duplicates
                 console.log(`[Refresh PVC] Found ${botWebhooks.size} duplicate webhooks, cleaning up...`);
                 const duplicates = botWebhooks.filter((w: any) => w.id !== webhook.id);
                 for (const dup of duplicates.values()) {
@@ -245,7 +219,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             console.error('[Refresh PVC] Error setting up Team webhook:', error?.message || error);
         }
     }
-
     try {
         console.log('[Refresh PVC] Updating database settings...');
         if (settings) {
@@ -261,7 +234,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             });
             console.log('[Refresh PVC] Guild settings updated');
         }
-
         if (teamSettings) {
             await prisma.teamVoiceSettings.update({
                 where: { guildId: guild.id },
@@ -280,24 +252,19 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         await interaction.editReply('❌ Failed to update settings in database. Please try again.');
         return;
     }
-
     console.log('[Refresh PVC] Invalidating caches...');
     invalidateGuildSettings(guild.id);
     invalidateAllCaches();
-
     console.log('[Refresh PVC] Clearing guild state...');
     clearGuildState(guild.id);
-
     let freshSettings;
     let freshTeamSettings;
-    
     try {
         console.log('[Refresh PVC] Fetching fresh settings from database...');
         freshSettings = await prisma.guildSettings.findUnique({
             where: { guildId: guild.id },
             include: { privateChannels: true },
         });
-
         freshTeamSettings = await prisma.teamVoiceSettings.findUnique({
             where: { guildId: guild.id },
             include: { teamChannels: true },
@@ -308,7 +275,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         await interaction.editReply('❌ Failed to reload settings from database. Please try again.');
         return;
     }
-
     console.log('[Refresh PVC] Registering interface channels...');
     if (freshSettings?.interfaceVcId) {
         const interfaceVc = guild.channels.cache.get(freshSettings.interfaceVcId);
@@ -319,7 +285,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             console.log(`[Refresh PVC] PVC interface VC not found in cache: ${freshSettings.interfaceVcId}`);
         }
     }
-
     let teamInterfacesRegistered = 0;
     if (freshTeamSettings) {
         console.log('[Refresh PVC] Registering team interface channels...');
@@ -354,12 +319,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }
         }
     }
-
     console.log('[Refresh PVC] Validating and registering PVC channels...');
     if (freshSettings?.privateChannels) {
         const validPvcs = [];
         const invalidPvcIds: string[] = [];
-
         for (const pvc of freshSettings.privateChannels) {
             const channel = guild.channels.cache.get(pvc.channelId);
             if (channel) {
@@ -371,7 +334,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }
         }
         console.log(`[Refresh PVC] Registered ${validPvcs.length} PVC channels, ${invalidPvcIds.length} invalid`);
-
         if (invalidPvcIds.length > 0) {
             try {
                 await prisma.privateVoiceChannel.deleteMany({
@@ -383,12 +345,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }
         }
     }
-
     console.log('[Refresh PVC] Validating and registering Team channels...');
     if (freshTeamSettings?.teamChannels) {
         const invalidTeamIds: string[] = [];
         let validTeamCount = 0;
-
         for (const tc of freshTeamSettings.teamChannels) {
             const channel = guild.channels.cache.get(tc.channelId);
             if (channel) {
@@ -400,7 +360,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }
         }
         console.log(`[Refresh PVC] Registered ${validTeamCount} Team channels, ${invalidTeamIds.length} invalid`);
-
         if (invalidTeamIds.length > 0) {
             try {
                 await prisma.teamVoiceChannel.deleteMany({
@@ -412,20 +371,16 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }
         }
     }
-
     let ownershipTransfers = 0;
     let channelsDeleted = 0;
-
     console.log('[Refresh PVC] Processing PVC ownership and empty channels...');
     if (freshSettings?.privateChannels) {
         for (const pvc of freshSettings.privateChannels) {
             const channel = guild.channels.cache.get(pvc.channelId);
             if (channel && channel.type === ChannelType.GuildVoice) {
                 const ownerInChannel = channel.members.has(pvc.ownerId);
-
                 if (!ownerInChannel) {
                     console.log(`[Refresh PVC] Owner ${pvc.ownerId} not in channel ${pvc.channelId}`);
-
                     if (channel.members.size === 0) {
                         console.log(`[Refresh PVC] Channel ${pvc.channelId} is empty, deleting...`);
                         try {
@@ -443,31 +398,24 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                             console.log(`[Refresh PVC] Transferring ownership to ${nextOwner.id}`);
                             try {
                                 transferOwnership(pvc.channelId, nextOwner.id);
-
                                 await prisma.privateVoiceChannel.update({
                                     where: { channelId: pvc.channelId },
                                     data: { ownerId: nextOwner.id },
                                 });
-
                                 const { recordBotEdit } = await import('../events/channelUpdate');
                                 recordBotEdit(pvc.channelId);
-
                                 await channel.permissionOverwrites.edit(nextOwner.id, {
                                     ViewChannel: true, Connect: true, Speak: true, Stream: true,
                                     SendMessages: true, EmbedLinks: true, AttachFiles: true,
                                     MuteMembers: true, DeafenMembers: true, ManageChannels: true,
                                 });
-
                                 await channel.setName(nextOwner.displayName);
-
                                 registerChannel(pvc.channelId, pvc.guildId, nextOwner.id);
-
                                 const membersInOrder = Array.from(channel.members.values())
                                     .filter(m => !m.user.bot && m.id !== nextOwner.id);
                                 for (const member of membersInOrder) {
                                     addUserToJoinOrder(pvc.channelId, member.id);
                                 }
-
                                 try {
                                     const embed = new EmbedBuilder()
                                         .setColor(0x9B59B6)
@@ -478,7 +426,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                                 } catch (sendErr) {
                                     console.error(`[Refresh PVC] Error sending transfer message:`, sendErr);
                                 }
-
                                 await logAction({
                                     action: LogAction.CHANNEL_TRANSFERRED,
                                     guild: guild,
@@ -487,7 +434,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                                     channelId: pvc.channelId,
                                     details: `Ownership transferred during refresh (previous owner not present)`,
                                 });
-
                                 ownershipTransfers++;
                                 console.log(`[Refresh PVC] Successfully transferred ownership of ${pvc.channelId}`);
                             } catch (transferErr) {
@@ -505,17 +451,14 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }
         }
     }
-
     console.log('[Refresh PVC] Processing Team channel ownership and empty channels...');
     if (freshTeamSettings?.teamChannels) {
         for (const tc of freshTeamSettings.teamChannels) {
             const channel = guild.channels.cache.get(tc.channelId);
             if (channel && channel.type === ChannelType.GuildVoice) {
                 const ownerInChannel = channel.members.has(tc.ownerId);
-
                 if (!ownerInChannel) {
                     console.log(`[Refresh PVC] Team owner ${tc.ownerId} not in channel ${tc.channelId}`);
-
                     if (channel.members.size === 0) {
                         console.log(`[Refresh PVC] Team channel ${tc.channelId} is empty, deleting...`);
                         try {
@@ -533,32 +476,25 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                             console.log(`[Refresh PVC] Transferring team ownership to ${nextOwner.id}`);
                             try {
                                 transferTeamOwnership(tc.channelId, nextOwner.id);
-
                                 await prisma.teamVoiceChannel.update({
                                     where: { channelId: tc.channelId },
                                     data: { ownerId: nextOwner.id },
                                 });
-
                                 const { recordBotEdit } = await import('../events/channelUpdate');
                                 recordBotEdit(tc.channelId);
-
                                 await channel.permissionOverwrites.edit(nextOwner.id, {
                                     ViewChannel: true, Connect: true, Speak: true, Stream: true,
                                     SendMessages: true, EmbedLinks: true, AttachFiles: true,
                                     MuteMembers: true, DeafenMembers: true, ManageChannels: true,
                                 });
-
                                 const teamTypeName = tc.teamType.charAt(0) + tc.teamType.slice(1).toLowerCase();
                                 await channel.setName(`${nextOwner.displayName}'s ${teamTypeName}`);
-
                                 registerTeamChannel(tc.channelId, tc.guildId, nextOwner.id, tc.teamType.toLowerCase() as 'duo' | 'trio' | 'squad');
-
                                 const membersInOrder = Array.from(channel.members.values())
                                     .filter(m => !m.user.bot && m.id !== nextOwner.id);
                                 for (const member of membersInOrder) {
                                     addUserToJoinOrder(tc.channelId, member.id);
                                 }
-
                                 try {
                                     const embed = new EmbedBuilder()
                                         .setColor(0x9B59B6)
@@ -569,7 +505,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                                 } catch (sendErr) {
                                     console.error(`[Refresh PVC] Error sending team transfer message:`, sendErr);
                                 }
-
                                 await logAction({
                                     action: LogAction.CHANNEL_TRANSFERRED,
                                     guild: guild,
@@ -580,7 +515,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                                     isTeamChannel: true,
                                     teamType: tc.teamType.toLowerCase(),
                                 });
-
                                 ownershipTransfers++;
                                 console.log(`[Refresh PVC] Successfully transferred team ownership of ${tc.channelId}`);
                             } catch (transferErr) {
@@ -589,7 +523,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                         }
                     }
                 } else {
-
                     const membersInOrder = Array.from(channel.members.values())
                         .filter(m => !m.user.bot && m.id !== tc.ownerId);
                     for (const member of membersInOrder) {
@@ -599,11 +532,9 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }
         }
     }
-
     console.log('[Refresh PVC] Fetching updated channel lists...');
     let updatedPvcs;
     let updatedTeamChannels;
-    
     try {
         updatedPvcs = await prisma.privateVoiceChannel.findMany({
             where: { guildId: guild.id },
@@ -617,10 +548,8 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         await interaction.editReply('❌ Failed to fetch channel list for permission sync. Please try again.');
         return;
     }
-
     let permsSynced = 0;
     let teamPermsSynced = 0;
-
     console.log('[Refresh PVC] Syncing PVC permissions...');
     for (const pvc of updatedPvcs) {
         const channel = guild.channels.cache.get(pvc.channelId);
@@ -628,19 +557,14 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             try {
                 const permanentPerms = await getPermanentPermissionsAndCache(guild.id, pvc.ownerId);
                 const permanentUserIds = new Set(permanentPerms.map(p => p.targetId));
-
                 const currentMemberIds = channel.members
                     .filter(m => m.id !== pvc.ownerId && !m.user.bot)
                     .map(m => m.id);
-
                 const allAllowedIds = new Set([...permanentUserIds, ...currentMemberIds]);
-
                 await prisma.voicePermission.deleteMany({
                     where: { channelId: pvc.channelId, permission: 'permit' },
                 });
-
                 invalidateChannelPermissions(pvc.channelId);
-
                 if (allAllowedIds.size > 0) {
                     await prisma.voicePermission.createMany({
                         data: Array.from(allAllowedIds).map(userId => ({
@@ -653,36 +577,29 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     });
                     permsSynced += allAllowedIds.size;
                 }
-
                 const { recordBotEdit } = await import('../events/channelUpdate');
                 recordBotEdit(pvc.channelId);
-
                 await channel.permissionOverwrites.edit(pvc.ownerId, {
                     ViewChannel: true, Connect: true, Speak: true, Stream: true,
                     SendMessages: true, EmbedLinks: true, AttachFiles: true,
                     MuteMembers: true, DeafenMembers: true, ManageChannels: true,
                 });
-
                 for (const memberId of allAllowedIds) {
                     await channel.permissionOverwrites.edit(memberId, {
                         ViewChannel: true, Connect: true,
                         SendMessages: true, EmbedLinks: true, AttachFiles: true,
                     });
                 }
-
                 const existingOverwrites = channel.permissionOverwrites.cache;
                 for (const [targetId, overwrite] of existingOverwrites) {
                     const member = guild.members.cache.get(targetId);
                     const isBot = member?.user.bot ?? false;
-
                     if (targetId === pvc.ownerId || allAllowedIds.has(targetId) || isBot || targetId === guild.id) {
                         continue;
                     }
-
                     if (overwrite.type === OverwriteType.Role) {
                         continue;
                     }
-
                     if (overwrite.type === OverwriteType.Member && !allAllowedIds.has(targetId)) {
                         await channel.permissionOverwrites.delete(targetId).catch(() => { });
                     }
@@ -693,7 +610,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
     console.log(`[Refresh PVC] PVC permissions synced: ${permsSynced} users`);
-
     console.log('[Refresh PVC] Syncing Team permissions...');
     for (const tc of updatedTeamChannels) {
         const channel = guild.channels.cache.get(tc.channelId);
@@ -701,19 +617,14 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             try {
                 const permanentPerms = await getPermanentPermissionsAndCache(guild.id, tc.ownerId);
                 const permanentUserIds = new Set(permanentPerms.map(p => p.targetId));
-
                 const currentMemberIds = channel.members
                     .filter(m => m.id !== tc.ownerId && !m.user.bot)
                     .map(m => m.id);
-
                 const allAllowedIds = new Set([...permanentUserIds, ...currentMemberIds]);
-
                 await prisma.teamVoicePermission.deleteMany({
                     where: { channelId: tc.channelId, permission: 'permit' },
                 });
-
                 invalidateChannelPermissions(tc.channelId);
-
                 if (allAllowedIds.size > 0) {
                     await prisma.teamVoicePermission.createMany({
                         data: Array.from(allAllowedIds).map(userId => ({
@@ -726,32 +637,26 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     });
                     teamPermsSynced += allAllowedIds.size;
                 }
-
                 const { recordBotEdit } = await import('../events/channelUpdate');
                 recordBotEdit(tc.channelId);
-
                 await channel.permissionOverwrites.edit(tc.ownerId, {
                     ViewChannel: true, Connect: true, Speak: true, Stream: true,
                     SendMessages: true, EmbedLinks: true, AttachFiles: true,
                     MuteMembers: true, DeafenMembers: true, ManageChannels: true,
                 });
-
                 for (const memberId of allAllowedIds) {
                     await channel.permissionOverwrites.edit(memberId, {
                         ViewChannel: true, Connect: true,
                         SendMessages: true, EmbedLinks: true, AttachFiles: true,
                     });
                 }
-
                 const existingOverwrites = channel.permissionOverwrites.cache;
                 for (const [targetId, overwrite] of existingOverwrites) {
                     const member = guild.members.cache.get(targetId);
                     const isBot = member?.user.bot ?? false;
-
                     if (targetId === tc.ownerId || allAllowedIds.has(targetId) || isBot || targetId === guild.id) {
                         continue;
                     }
-
                     if (overwrite.type === OverwriteType.Member) {
                         await channel.permissionOverwrites.delete(targetId).catch(() => { });
                     }
@@ -762,11 +667,9 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
     console.log(`[Refresh PVC] Team permissions synced: ${teamPermsSynced} users`);
-
     let interfacesUpdated = 0;
     let interfacesSkipped = 0;
     let interfaceErrors: string[] = [];
-
     console.log('[Refresh PVC] Updating PVC interfaces...');
     for (const pvc of updatedPvcs) {
         const channel = guild.channels.cache.get(pvc.channelId);
@@ -774,12 +677,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             try {
                 console.log(`[Refresh PVC] Fetching messages from PVC: ${channel.name} (${pvc.channelId})`);
                 const messages = await channel.messages.fetch({ limit: 20 });
-
                 const interfaceMsg = messages.find(m =>
                     m.author.id === interaction.client.user?.id &&
                     (m.embeds.length > 0 || m.components.length > 0)
                 );
-
                 if (interfaceMsg) {
                     console.log(`[Refresh PVC] Updating existing interface in ${pvc.channelId}`);
                     const imageBuffer = await generateInterfaceImage();
@@ -817,7 +718,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }
         }
     }
-
     console.log('[Refresh PVC] Updating Team interfaces...');
     for (const tc of updatedTeamChannels) {
         const channel = guild.channels.cache.get(tc.channelId);
@@ -825,12 +725,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             try {
                 console.log(`[Refresh PVC] Fetching messages from Team: ${channel.name} (${tc.channelId})`);
                 const messages = await channel.messages.fetch({ limit: 20 });
-
                 const interfaceMsg = messages.find(m =>
                     m.author.id === interaction.client.user?.id &&
                     (m.embeds.length > 0 || m.components.length > 0)
                 );
-
                 if (interfaceMsg) {
                     console.log(`[Refresh PVC] Updating existing team interface in ${tc.channelId}`);
                     const imageBuffer = await generateInterfaceImage();
@@ -860,7 +758,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                         await newMsg.pin().catch(() => { });
                         interfacesUpdated++;
                         console.log(`[Refresh PVC] New team interface created for ${tc.channelId}`);
-
                     } catch (sendErr) {
                         console.error(`[Refresh PVC] Error sending team interface to ${tc.channelId}:`, sendErr);
                         interfacesSkipped++;
@@ -874,16 +771,12 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
     console.log(`[Refresh PVC] Total interfaces updated: ${interfacesUpdated}, skipped: ${interfacesSkipped}`);
-
     console.log('[Refresh PVC] Updating main interface channel...');
     const interfaceTextChannel = guild.channels.cache.get(freshSettings?.interfaceTextId || settings?.interfaceTextId || '');
-
     let mainInterfaceUpdated = false;
-
     if (interfaceTextChannel && interfaceTextChannel.type === ChannelType.GuildText) {
         try {
             let oldMessage: Message | null = null;
-
             try {
                 console.log('[Refresh PVC] Fetching main interface messages...');
                 const messages = await interfaceTextChannel.messages.fetch({ limit: 10 });
@@ -897,22 +790,18 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             } catch (fetchErr) {
                 console.error('[Refresh PVC] Error fetching main interface messages:', fetchErr);
             }
-
             const row1 = new ActionRowBuilder<ButtonBuilder>();
             const row2 = new ActionRowBuilder<ButtonBuilder>();
             const row3 = new ActionRowBuilder<ButtonBuilder>();
             const row4 = new ActionRowBuilder<ButtonBuilder>();
-
             MAIN_BUTTONS.forEach((btn, index) => {
                 const emojiData = BUTTON_EMOJI_MAP[btn.id];
                 const button = new ButtonBuilder()
                     .setCustomId(btn.id)
                     .setStyle(ButtonStyle.Secondary);
-
                 if (emojiData) {
                     button.setEmoji({ id: emojiData.id, name: emojiData.name });
                 }
-
                 if (index < 4) {
                     row1.addComponents(button);
                 } else if (index < 8) {
@@ -923,13 +812,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     row4.addComponents(button);
                 }
             });
-
             const imageBuffer = await generateInterfaceImage();
             const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
             const embed = generateInterfaceEmbed(guild, 'interface.png');
-
             const components = [row1, row2, row3, row4];
-
             if (oldMessage) {
                 try {
                     console.log('[Refresh PVC] Editing existing main interface message...');
@@ -974,7 +860,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     } else {
         console.log(`[Refresh PVC] Main interface text channel not found: ${freshSettings?.interfaceTextId || settings?.interfaceTextId || 'none'}`);
     }
-
     console.log('[Refresh PVC] Logging action...');
     logAction({
         action: LogAction.PVC_REFRESHED,
@@ -984,7 +869,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     }).catch((logErr) => {
         console.error('[Refresh PVC] Error logging action:', logErr);
     });
-
     console.log('[Refresh PVC] Building response...');
     let response = '✅ **PVC & Team System Refreshed**\n\n';
     response += '**State Reloaded:**\n';
@@ -1010,7 +894,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     if (teamCommandChannel) response += `• Team Commands: ${teamCommandChannel}\n`;
     response += `\n**Channels in memory:** ${updatedPvcs.length} PVC, ${updatedTeamChannels.length} Team\n`;
     response += '> Privacy removed. MoveMembers removed. Caches cleared.';
-
     console.log('[Refresh PVC] Sending response to user...');
     try {
         await interaction.editReply(response);
@@ -1019,7 +902,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         console.error('[Refresh PVC] Error sending final response:', replyErr);
     }
 }
-
 export const command: Command = {
     data: data as unknown as import('discord.js').SlashCommandBuilder,
     execute,

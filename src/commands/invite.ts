@@ -7,14 +7,11 @@ import {
 } from 'discord.js';
 import type { Command } from '../client';
 import { Config } from '../config';
-
 const data = new SlashCommandBuilder()
     .setName('invite')
     .setDescription('Get the bot invite link with all necessary permissions')
     .setDMPermission(true);
-
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
-
     const permissions = [
         PermissionFlagsBits.ViewChannel,
         PermissionFlagsBits.ManageChannels,
@@ -29,11 +26,8 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         PermissionFlagsBits.UseVAD,
         PermissionFlagsBits.ManageMessages,
     ];
-
     const permissionValue = permissions.reduce((acc, perm) => acc | perm, 0n);
-
     const inviteUrl = `https://discord.com/api/oauth2/authorize?client_id=${Config.clientId}&permissions=${permissionValue}&scope=bot%20applications.commands`;
-
     const embed = new EmbedBuilder()
         .setTitle('Invite Private Voice Channel Bot')
         .setDescription(
@@ -59,10 +53,8 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         })
         .setFooter({ text: 'After adding, use /pvc_setup to configure the system' })
         .setTimestamp();
-
     await interaction.reply({ embeds: [embed], flags: [MessageFlags.Ephemeral] });
 }
-
 export const command: Command = {
     data: data as unknown as import('discord.js').SlashCommandBuilder,
     execute,

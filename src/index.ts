@@ -30,16 +30,9 @@ import * as messageReactionAddEvent from './events/messageReactionAdd';
 import * as channelUpdateEvent from './events/channelUpdate';
 import * as channelDeleteEvent from './events/channelDelete';
 import { startCleanupInterval, stopCleanupInterval } from './utils/stateManager';
-
-import { command as mmSetup } from './commands/modmail/setup_modmail';
-import { command as mmClaim } from './commands/modmail/claim';
-import { command as mmUnclaim } from './commands/modmail/unclaim';
-import { command as mmAddStaff } from './commands/modmail/addstaff';
-import { command as mmClose } from './commands/modmail/close';
-import { command as mmFlush } from './commands/modmail/flush';
+import { vcns } from './vcns';
 import { command as funBan } from './commands/fun_ban';
 import { command as counting } from './commands/counting';
-
 client.commands.set(pvcSetup.data.name, pvcSetup);
 client.commands.set(adminStrictness.data.name, adminStrictness);
 client.commands.set(teamAdminStrictness.data.name, teamAdminStrictness);
@@ -62,19 +55,13 @@ client.commands.set(pvcResume.data.name, pvcResume);
 client.commands.set(globalVcBlock.data.name, globalVcBlock);
 client.commands.set(wvAllowedRoles.data.name, wvAllowedRoles);
 client.commands.set(showAccess.data.name, showAccess);
-client.commands.set(mmSetup.data.name, mmSetup);
-client.commands.set(mmClaim.data.name, mmClaim);
-client.commands.set(mmUnclaim.data.name, mmUnclaim);
-client.commands.set(mmAddStaff.data.name, mmAddStaff);
-client.commands.set(mmClose.data.name, mmClose);
-client.commands.set(mmClose.data.name, mmClose);
-client.commands.set(mmFlush.data.name, mmFlush);
 client.commands.set(funBan.data.name, funBan);
 client.commands.set(counting.data.name, counting);
-
-client.once(readyEvent.name, () => {
+client.once(readyEvent.name, async () => {
     readyEvent.execute(client);
     startCleanupInterval();
+    await vcns.start();
+    console.log('[VCNS] Virtual Central Nervous System started');
 });
 client.on(voiceStateUpdateEvent.name, (...args) =>
     voiceStateUpdateEvent.execute(client, ...args)
@@ -97,34 +84,28 @@ client.on(channelUpdateEvent.name, (...args) =>
 client.on(channelDeleteEvent.name, (...args) =>
     channelDeleteEvent.execute(client, ...args)
 );
-
 client.on('error', (error) => {
-
 });
-
 client.on('warn', (warning) => {
     console.warn('[Discord Warning]:', warning);
 });
-
 process.on('unhandledRejection', (reason, promise) => {
-
 });
-
 process.on('uncaughtException', (error) => {
-
 });
-
 client.login(Config.token).catch(() => {
     process.exit(1);
 });
-
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
+    console.log('[VCNS] Shutting down...');
+    vcns.stop();
     stopCleanupInterval();
     client.destroy();
     process.exit(0);
 });
-
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
+    console.log('[VCNS] Shutting down...');
+    vcns.stop();
     stopCleanupInterval();
     client.destroy();
     process.exit(0);

@@ -1,6 +1,5 @@
 import { EmbedBuilder, GuildMember, type Guild, type User } from 'discord.js';
 import prisma from './database';
-
 export enum LogAction {
     CHANNEL_CREATED = 'Channel Created',
     CHANNEL_DELETED = 'Channel Deleted',
@@ -14,33 +13,26 @@ export enum LogAction {
     CHANNEL_REGION_SET = 'Region Changed',
     CHANNEL_CLAIMED = 'Channel Claimed',
     CHANNEL_TRANSFERRED = 'Channel Transferred',
-
     USER_ADDED = 'User Added',
     USER_REMOVED = 'User Removed',
     USER_BANNED = 'User Banned',
     USER_PERMITTED = 'User Permitted',
-
     RENAME_REQUESTED = 'Rename Requested',
     RENAME_APPROVED = 'Rename Approved',
     RENAME_REJECTED = 'Rename Rejected',
     RENAME_EXPIRED = 'Rename Expired',
-
     PVC_SETUP = 'PVC System Setup',
     PVC_DELETED = 'PVC System Deleted',
     PVC_REFRESHED = 'PVC Interface Refreshed',
-
     TEAM_SETUP = 'Team VC System Setup',
     TEAM_CHANNEL_CREATED = 'Team Channel Created',
     TEAM_CHANNEL_DELETED = 'Team Channel Deleted',
-
     TICKET_OPENED = 'Ticket Opened',
     TICKET_CLOSED = 'Ticket Closed',
     TICKET_FLUSHED = 'Ticket Flushed',
-
     SETTINGS_UPDATED = 'Settings Updated',
     UNAUTHORIZED_CHANGE_REVERTED = '⚠️ Unauthorized Change Reverted',
 }
-
 interface LogData {
     action: LogAction;
     guild: Guild;
@@ -52,7 +44,6 @@ interface LogData {
     teamType?: string;
     isTeamChannel?: boolean;
 }
-
 const ACTION_COLORS: Record<LogAction, number> = {
     [LogAction.CHANNEL_CREATED]: 0x00FF00,
     [LogAction.CHANNEL_DELETED]: 0xFF0000,
@@ -86,19 +77,15 @@ const ACTION_COLORS: Record<LogAction, number> = {
     [LogAction.SETTINGS_UPDATED]: 0x3498DB,
     [LogAction.UNAUTHORIZED_CHANGE_REVERTED]: 0xFF0000,
 };
-
 export async function logAction(data: LogData): Promise<void> {
     const startTime = Date.now();
-
     try {
         let webhookUrl: string | null = null;
-
         if (data.isTeamChannel) {
             const teamSettings = await prisma.teamVoiceSettings.findUnique({
                 where: { guildId: data.guild.id },
             });
             webhookUrl = teamSettings?.logsWebhookUrl || null;
-
             if (!webhookUrl) {
                 const pvcSettings = await prisma.guildSettings.findUnique({
                     where: { guildId: data.guild.id },
@@ -111,53 +98,40 @@ export async function logAction(data: LogData): Promise<void> {
             });
             webhookUrl = settings?.logsWebhookUrl || null;
         }
-
         if (!webhookUrl) {
-
             return;
         }
-
         let description = '';
-
         if (data.user) {
             const username = data.user instanceof GuildMember ? data.user.user.username : data.user.username;
             const userId = data.user instanceof GuildMember ? data.user.user.id : data.user.id;
             description += `**User:** <@${userId}> (${username})`;
         }
-
         if (data.channelName) {
             description += `${description ? '\n' : ''}**Channel:** ${data.channelName}`;
         }
-
         if (data.channelId) {
             description += ` (<#${data.channelId}>)`;
         }
-
         if (data.teamType) {
             description += `\n**Type:** ${data.teamType.toUpperCase()}`;
         }
-
         if (data.targetUser) {
             const targetUserId = data.targetUser instanceof GuildMember ? data.targetUser.user.id : data.targetUser.id;
             description += `\n**Target:** <@${targetUserId}>`;
         }
-
         if (data.details) {
             description += `\n\n${data.details}`;
         }
-
         const embed = new EmbedBuilder()
             .setTitle(data.action)
             .setDescription(description || 'No details provided')
             .setColor(ACTION_COLORS[data.action])
             .setFooter({ text: `Guild: ${data.guild.name}` })
             .setTimestamp();
-
         const botUser = data.guild.client.user;
         const avatarURL = botUser?.displayAvatarURL() || undefined;
-
         const loggerName = data.isTeamChannel ? 'Team VC Logs' : 'PVC Logs';
-
         const response = await fetch(webhookUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -167,10 +141,8 @@ export async function logAction(data: LogData): Promise<void> {
                 avatar_url: avatarURL,
             }),
         });
-
         if (!response.ok) {
             const errorText = await response.text().catch(() => 'Unknown error');
-
             if (response.status === 404 || response.status === 401) {
                 console.warn(`[Logger] Webhook appears to be invalid for guild ${data.guild.id}. Consider clearing it.`);
             }
@@ -178,6 +150,5 @@ export async function logAction(data: LogData): Promise<void> {
             console.log(`[Logger] Successfully sent ${data.action} log for guild ${data.guild.id} in ${Date.now() - startTime}ms`);
         }
     } catch (err) {
-
     }
 }

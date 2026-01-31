@@ -6,15 +6,12 @@ import {
     type ChatInputCommandInteraction,
     type SlashCommandBuilder,
 } from 'discord.js';
-
 export interface Command {
     data: SlashCommandBuilder;
     execute: (interaction: ChatInputCommandInteraction) => Promise<void>;
 }
-
 export class PVCClient extends Client {
     commands: Collection<string, Command> = new Collection();
-
     constructor() {
         super({
             intents: [
@@ -31,5 +28,4 @@ export class PVCClient extends Client {
         });
     }
 }
-
 export const client = new PVCClient();

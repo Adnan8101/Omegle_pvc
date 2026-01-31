@@ -9,7 +9,9 @@
     "dev": "nodemon --watch src --ext ts --exec ts-node src/index.ts",
     "register": "ts-node src/deploy-commands.ts",
     "db:push": "prisma db push",
-    "db:generate": "prisma generate"
+    "db:generate": "prisma generate",
+    "test:vcns": "ts-node tools/vcns-test/simulate-vc-storm.ts",
+    "test:full": "ts-node tools/vcns-test/full-system-test.ts"
   },
   "keywords": [
     "discord",

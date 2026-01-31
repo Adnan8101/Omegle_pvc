@@ -8,7 +8,6 @@ import prisma from '../utils/database';
 import type { Command } from '../client';
 import { invalidateGuildSettings } from '../utils/cache';
 import { canRunAdminCommand } from '../utils/permissions';
-
 const data = new SlashCommandBuilder()
     .setName('admin_strictness')
     .setDescription('Toggle admin strictness for private voice channels')
@@ -24,21 +23,17 @@ const data = new SlashCommandBuilder()
                 { name: 'off', value: 'off' }
             )
     );
-
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guild) {
         await interaction.reply({ content: 'This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-
     if (!await canRunAdminCommand(interaction)) {
         await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-
     const mode = interaction.options.getString('mode', true);
     const enabled = mode === 'on';
-
     try {
         await prisma.guildSettings.upsert({
             where: { guildId: interaction.guild.id },
@@ -48,9 +43,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 adminStrictness: enabled,
             },
         });
-
         invalidateGuildSettings(interaction.guild.id);
-
         await interaction.reply({
             content: `Admin strictness has been turned **${mode}**.${enabled
                 ? '\n\nAdministrators will now be disconnected from private channels they do not have access to.'
@@ -67,7 +60,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
 }
-
 export const command: Command = {
     data: data as unknown as import('discord.js').SlashCommandBuilder,
     execute,

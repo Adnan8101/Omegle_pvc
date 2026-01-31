@@ -13,7 +13,6 @@ import prisma from '../utils/database';
 import { registerInterfaceChannel } from '../utils/voiceManager';
 import { generateInterfaceEmbed, generateInterfaceImage, BUTTON_EMOJI_MAP } from '../utils/canvasGenerator';
 import { invalidateGuildSettings } from '../utils/cache';
-
 const MAIN_BUTTONS = [
     { id: 'pvc_lock' },
     { id: 'pvc_unlock' },
@@ -31,10 +30,8 @@ const MAIN_BUTTONS = [
     { id: 'pvc_chat' },
     { id: 'pvc_info' },
 ] as const;
-
 export const name = Events.GuildCreate;
 export const once = false;
-
 export async function execute(guild: Guild): Promise<void> {
     try {
         const existingSettings = await prisma.guildSettings.findUnique({
@@ -47,22 +44,18 @@ export async function execute(guild: Guild): Promise<void> {
                 },
             },
         });
-
         if (!existingSettings) {
             await sendWelcomeDM(guild);
             return;
         }
-
         let restored = false;
         let restorationDetails = '';
-
         const interfaceTextChannel = existingSettings.interfaceTextId
             ? guild.channels.cache.get(existingSettings.interfaceTextId)
             : null;
         const interfaceVcChannel = existingSettings.interfaceVcId
             ? guild.channels.cache.get(existingSettings.interfaceVcId)
             : null;
-
         if (interfaceTextChannel && interfaceVcChannel) {
             registerInterfaceChannel(guild.id, existingSettings.interfaceVcId!);
             restored = true;
@@ -78,17 +71,14 @@ export async function execute(guild: Guild): Promise<void> {
                     `• Join to Create VC: ${restoredChannels.interfaceVcChannel}\n`;
             }
         }
-
         const activePrivateChannels = existingSettings.privateChannels.filter(pvc => {
             const channel = guild.channels.cache.get(pvc.channelId);
             return channel !== undefined;
         });
-
         const channelsToDelete = existingSettings.privateChannels.filter(pvc => {
             const channel = guild.channels.cache.get(pvc.channelId);
             return channel === undefined;
         });
-
         if (channelsToDelete.length > 0) {
             await prisma.privateVoiceChannel.deleteMany({
                 where: {
@@ -98,7 +88,6 @@ export async function execute(guild: Guild): Promise<void> {
                 },
             });
         }
-
         const otherSettings: string[] = [];
         if (existingSettings.commandChannelId) {
             const cmdChannel = guild.channels.cache.get(existingSettings.commandChannelId);
@@ -115,56 +104,45 @@ export async function execute(guild: Guild): Promise<void> {
         if (existingSettings.adminStrictness) {
             otherSettings.push(`• Admin Strictness: Enabled`);
         }
-
         restorationDetails += `\n**Configuration Restored:**\n` +
             `• Active Private VCs: ${activePrivateChannels.length}\n` +
             (otherSettings.length > 0 ? otherSettings.join('\n') + '\n' : '');
-
         await sendRestorationSuccessDM(guild, restored, restorationDetails);
-
     } catch { }
 }
-
 async function recreateSetup(guild: Guild, existingSettings: any) {
     try {
         let category = guild.channels.cache.find(
             c => c.type === ChannelType.GuildCategory && c.name.toLowerCase().includes('voice')
         );
-
         if (!category) {
             category = await guild.channels.create({
                 name: 'Private Voice Channels',
                 type: ChannelType.GuildCategory,
             });
         }
-
         const interfaceTextChannel = await guild.channels.create({
             name: 'interface',
             type: ChannelType.GuildText,
             parent: category.id,
         });
-
         const interfaceVcChannel = await guild.channels.create({
             name: 'Join to Create',
             type: ChannelType.GuildVoice,
             parent: category.id,
         });
-
         const row1 = new ActionRowBuilder<ButtonBuilder>();
         const row2 = new ActionRowBuilder<ButtonBuilder>();
         const row3 = new ActionRowBuilder<ButtonBuilder>();
         const row4 = new ActionRowBuilder<ButtonBuilder>();
-
         MAIN_BUTTONS.forEach((btn, index) => {
             const emojiData = BUTTON_EMOJI_MAP[btn.id];
             const button = new ButtonBuilder()
                 .setCustomId(btn.id)
                 .setStyle(ButtonStyle.Secondary);
-
             if (emojiData) {
                 button.setEmoji({ id: emojiData.id, name: emojiData.name });
             }
-
             if (index < 4) {
                 row1.addComponents(button);
             } else if (index < 8) {
@@ -175,19 +153,15 @@ async function recreateSetup(guild: Guild, existingSettings: any) {
                 row4.addComponents(button);
             }
         });
-
         const imageBuffer = await generateInterfaceImage();
         const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
         const embed = generateInterfaceEmbed(guild, 'interface.png');
-
         const components = [row1, row2, row3, row4];
-
         await interfaceTextChannel.send({
             embeds: [embed],
             files: [attachment],
             components,
         });
-
         await prisma.guildSettings.update({
             where: { guildId: guild.id },
             data: {
@@ -195,11 +169,8 @@ async function recreateSetup(guild: Guild, existingSettings: any) {
                 interfaceTextId: interfaceTextChannel.id,
             },
         });
-
         invalidateGuildSettings(guild.id);
-
         registerInterfaceChannel(guild.id, interfaceVcChannel.id);
-
         return {
             interfaceTextChannel,
             interfaceVcChannel,
@@ -209,14 +180,12 @@ async function recreateSetup(guild: Guild, existingSettings: any) {
         return null;
     }
 }
-
 async function sendWelcomeDM(guild: Guild) {
     try {
         const auditLogs = await guild.fetchAuditLogs({
             type: 28,
             limit: 1,
         });
-
         const addLog = auditLogs.entries.first();
         if (addLog && addLog.executor) {
             const embed = new EmbedBuilder()
@@ -232,19 +201,16 @@ async function sendWelcomeDM(guild: Guild) {
                 )
                 .setColor(0x00FF00)
                 .setTimestamp();
-
             await addLog.executor.send({ embeds: [embed] }).catch(() => { });
         }
     } catch { }
 }
-
 async function sendRestorationSuccessDM(guild: Guild, restored: boolean, details: string) {
     try {
         const auditLogs = await guild.fetchAuditLogs({
             type: 28,
             limit: 1,
         });
-
         const addLog = auditLogs.entries.first();
         if (addLog && addLog.executor) {
             const embed = new EmbedBuilder()
@@ -258,7 +224,6 @@ async function sendRestorationSuccessDM(guild: Guild, restored: boolean, details
                 .setColor(0x00FF00)
                 .setFooter({ text: 'Thank you for using PVC Bot!' })
                 .setTimestamp();
-
             await addLog.executor.send({ embeds: [embed] }).catch(() => { });
         }
     } catch { }

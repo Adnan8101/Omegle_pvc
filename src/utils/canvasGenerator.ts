@@ -1,6 +1,5 @@
 import { EmbedBuilder, type Guild } from 'discord.js';
 import { createCanvas, loadImage } from 'canvas';
-
 export const BUTTON_EMOJI_MAP: Record<string, { id: string; name: string }> = {
     pvc_lock: { id: '1462741158047514717', name: 'vc_locked' },
     pvc_unlock: { id: '1462741437798940703', name: 'vc' },
@@ -19,7 +18,6 @@ export const BUTTON_EMOJI_MAP: Record<string, { id: string; name: string }> = {
     pvc_info: { id: '1463034934611673264', name: 'info' },
     settings: { id: '1462347302948569178', name: 'settings' },
 };
-
 const BUTTON_LAYOUT = [
     [
         { id: 'pvc_lock', label: 'LOCK' },
@@ -45,7 +43,6 @@ const BUTTON_LAYOUT = [
         { id: 'pvc_info', label: 'INFO' }
     ]
 ];
-
 export async function generateInterfaceImage(): Promise<Buffer> {
     const canvasWidth = 960;
     const canvasHeight = 340;
@@ -54,23 +51,18 @@ export async function generateInterfaceImage(): Promise<Buffer> {
     const gap = 20;
     const startX = 10;
     const startY = 10;
-
     const canvas = createCanvas(canvasWidth, canvasHeight);
     const ctx = canvas.getContext('2d');
-
     for (let r = 0; r < BUTTON_LAYOUT.length; r++) {
         const row = BUTTON_LAYOUT[r];
         for (let c = 0; c < row.length; c++) {
             const btn = row[c];
             if (!btn) continue;
-
             const x = startX + c * (buttonWidth + gap);
             const y = startY + r * (buttonHeight + gap);
-
             ctx.fillStyle = '#232428';
             roundRect(ctx, x, y, buttonWidth, buttonHeight, 15);
             ctx.fill();
-
             try {
                 const emojiData = BUTTON_EMOJI_MAP[btn.id];
                 if (emojiData) {
@@ -79,35 +71,27 @@ export async function generateInterfaceImage(): Promise<Buffer> {
                     ctx.drawImage(emojiImg, x + 15, y + 12, 36, 36);
                 }
             } catch (e) {
-
             }
-
             ctx.fillStyle = '#FFFFFF';
             ctx.font = 'bold 20px "Verdana", "Arial", sans-serif';
             ctx.textAlign = 'left';
             ctx.textBaseline = 'middle';
-
             const maxTextWidth = buttonWidth - 75;
             const textX = x + 65;
             const textY = y + buttonHeight / 2;
-
             let currentFont = 20;
             ctx.font = `bold ${currentFont}px "Verdana", "Arial", sans-serif`;
             let textWidth = ctx.measureText(btn.label).width;
-
             while (textWidth > maxTextWidth && currentFont > 14) {
                 currentFont -= 1;
                 ctx.font = `bold ${currentFont}px "Verdana", "Arial", sans-serif`;
                 textWidth = ctx.measureText(btn.label).width;
             }
-
             ctx.fillText(btn.label, textX, textY);
         }
     }
-
     return canvas.toBuffer();
 }
-
 function roundRect(ctx: any, x: number, y: number, w: number, h: number, r: number) {
     if (w < 2 * r) r = w / 2;
     if (h < 2 * r) r = h / 2;
@@ -119,7 +103,6 @@ function roundRect(ctx: any, x: number, y: number, w: number, h: number, r: numb
     ctx.arcTo(x, y, x + w, y, r);
     ctx.closePath();
 }
-
 export function generateInterfaceEmbed(guild: Guild, imageName: string = 'interface.png'): EmbedBuilder {
     const embed = new EmbedBuilder()
         .setTitle(`${guild.name} PVC`)
@@ -130,10 +113,8 @@ export function generateInterfaceEmbed(guild: Guild, imageName: string = 'interf
             text: 'Press the buttons below to use the interface',
             iconURL: `https://cdn.discordapp.com/emojis/${BUTTON_EMOJI_MAP.settings.id}.png`
         });
-
     return embed;
 }
-
 export function generateVcInterfaceEmbed(guild: Guild, ownerId: string, imageName: string = 'interface.png'): EmbedBuilder {
     const embed = new EmbedBuilder()
         .setTitle('🎮 Channel Controls')
@@ -144,12 +125,9 @@ export function generateVcInterfaceEmbed(guild: Guild, ownerId: string, imageNam
             text: 'Only the channel owner can use these controls',
             iconURL: `https://cdn.discordapp.com/emojis/${BUTTON_EMOJI_MAP.settings.id}.png`
         });
-
     return embed;
 }
-
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
-
 const MAIN_BUTTONS = [
     { id: 'pvc_lock' },
     { id: 'pvc_unlock' },
@@ -167,23 +145,19 @@ const MAIN_BUTTONS = [
     { id: 'pvc_chat' },
     { id: 'pvc_info' },
 ] as const;
-
 export function createInterfaceComponents(): ActionRowBuilder<ButtonBuilder>[] {
     const row1 = new ActionRowBuilder<ButtonBuilder>();
     const row2 = new ActionRowBuilder<ButtonBuilder>();
     const row3 = new ActionRowBuilder<ButtonBuilder>();
     const row4 = new ActionRowBuilder<ButtonBuilder>();
-
     MAIN_BUTTONS.forEach((btn, index) => {
         const emojiData = BUTTON_EMOJI_MAP[btn.id];
         const button = new ButtonBuilder()
             .setCustomId(btn.id)
             .setStyle(ButtonStyle.Secondary);
-
         if (emojiData) {
             button.setEmoji({ id: emojiData.id, name: emojiData.name });
         }
-
         if (index < 4) {
             row1.addComponents(button);
         } else if (index < 8) {
@@ -194,6 +168,5 @@ export function createInterfaceComponents(): ActionRowBuilder<ButtonBuilder>[] {
             row4.addComponents(button);
         }
     });
-
     return [row1, row2, row3, row4];
 }

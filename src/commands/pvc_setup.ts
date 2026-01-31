@@ -16,7 +16,6 @@ import { generateInterfaceEmbed, generateInterfaceImage, BUTTON_EMOJI_MAP } from
 import { invalidateGuildSettings } from '../utils/cache';
 import { canRunAdminCommand } from '../utils/permissions';
 import { logAction, LogAction } from '../utils/logger';
-
 const MAIN_BUTTONS = [
     { id: 'pvc_lock' },
     { id: 'pvc_unlock' },
@@ -34,7 +33,6 @@ const MAIN_BUTTONS = [
     { id: 'pvc_chat' },
     { id: 'pvc_info' },
 ] as const;
-
 const data = new SlashCommandBuilder()
     .setName('pvc_setup')
     .setDescription('Set up the Private Voice Channel system')
@@ -61,57 +59,45 @@ const data = new SlashCommandBuilder()
             .setRequired(true)
             .addChannelTypes(ChannelType.GuildText)
     );
-
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guild) {
         await interaction.reply({ content: 'This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-
     if (!await canRunAdminCommand(interaction)) {
         await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-
     const category = interaction.options.getChannel('category', true);
     const logsChannel = interaction.options.getChannel('logs_channel', true);
     const commandChannel = interaction.options.getChannel('command_channel', true);
-
     if (category.type !== ChannelType.GuildCategory) {
         await interaction.reply({ content: 'Please select a valid category channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-
     if (logsChannel.type !== ChannelType.GuildText) {
         await interaction.reply({ content: 'Logs channel must be a text channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-
     if (commandChannel.type !== ChannelType.GuildText) {
         await interaction.reply({ content: 'Command channel must be a text channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
-
     console.log('[PVC Setup] Starting PVC setup process...');
     console.log('[PVC Setup] Guild:', interaction.guild.name, '(' + interaction.guild.id + ')');
     console.log('[PVC Setup] Category:', category.name, '(' + category.id + ')');
     console.log('[PVC Setup] Logs Channel:', logsChannel.name, '(' + logsChannel.id + ')');
     console.log('[PVC Setup] Command Channel:', commandChannel.name, '(' + commandChannel.id + ')');
-
     try {
         const guild = interaction.guild;
-
         console.log('[PVC Setup] Creating interface text channel...');
         const interfaceTextChannel = await guild.channels.create({
             name: 'interface',
             type: ChannelType.GuildText,
             parent: category.id,
         });
-
         console.log('[PVC Setup] Interface text channel created:', interfaceTextChannel.id);
-        
         console.log('[PVC Setup] Creating Join to Create voice channel...');
         const joinToCreateVc = await guild.channels.create({
             name: 'Join to Create',
@@ -119,22 +105,18 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             parent: category.id,
         });
         console.log('[PVC Setup] Join to Create VC created:', joinToCreateVc.id);
-
         const row1 = new ActionRowBuilder<ButtonBuilder>();
         const row2 = new ActionRowBuilder<ButtonBuilder>();
         const row3 = new ActionRowBuilder<ButtonBuilder>();
         const row4 = new ActionRowBuilder<ButtonBuilder>();
-
         MAIN_BUTTONS.forEach((btn, index) => {
             const emojiData = BUTTON_EMOJI_MAP[btn.id];
             const button = new ButtonBuilder()
                 .setCustomId(btn.id)
                 .setStyle(ButtonStyle.Secondary);
-
             if (emojiData) {
                 button.setEmoji({ id: emojiData.id, name: emojiData.name });
             }
-
             if (index < 4) {
                 row1.addComponents(button);
             } else if (index < 8) {
@@ -145,32 +127,24 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 row4.addComponents(button);
             }
         });
-
         const imageBuffer = await generateInterfaceImage();
         const attachment = new AttachmentBuilder(imageBuffer, { name: 'interface.png' });
         const embed = generateInterfaceEmbed(guild, 'interface.png');
-
         const components = [row1, row2, row3, row4];
-
         await interfaceTextChannel.send({
             embeds: [embed],
             files: [attachment],
             components,
         });
-
         console.log('[PVC Setup] Setting up logs webhook...');
         let logsWebhook;
         try {
-            // Try to reuse existing webhook
             const webhooks = await (logsChannel as any).fetchWebhooks();
             logsWebhook = webhooks.find((w: any) => w.owner?.id === interaction.client.user?.id && w.name === 'PVC Logger');
-            
             if (logsWebhook) {
                 console.log('[PVC Setup] Reusing existing webhook:', logsWebhook.id);
             } else {
                 console.log('[PVC Setup] No existing webhook found, creating new one...');
-                
-                // Clean up old bot webhooks if we're at the limit
                 const botWebhooks = webhooks.filter((w: any) => w.owner?.id === interaction.client.user?.id);
                 if (webhooks.size >= 15 && botWebhooks.size > 0) {
                     console.log('[PVC Setup] Webhook limit reached, cleaning up old bot webhooks...');
@@ -183,7 +157,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                         }
                     }
                 }
-                
                 logsWebhook = await (logsChannel as any).createWebhook({
                     name: 'PVC Logger',
                     reason: 'For logging PVC actions',
@@ -194,12 +167,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             console.error('[PVC Setup] Webhook error:', webhookError.message);
             throw new Error(`Failed to setup webhook: ${webhookError.message}`);
         }
-
         console.log('[PVC Setup] Saving guild settings to database...');
         console.log('[PVC Setup] Guild ID:', guild.id);
         console.log('[PVC Setup] Interface VC ID:', joinToCreateVc.id);
         console.log('[PVC Setup] Interface Text ID:', interfaceTextChannel.id);
-        
         await prisma.guildSettings.upsert({
             where: { guildId: guild.id },
             update: {
@@ -219,18 +190,14 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             },
         });
         console.log('[PVC Setup] ✅ Guild settings saved to database successfully!');
-
         invalidateGuildSettings(guild.id);
-
         registerInterfaceChannel(guild.id, joinToCreateVc.id);
-
         await logAction({
             action: LogAction.PVC_SETUP,
             guild: guild,
             user: interaction.user,
             details: `PVC System set up with category: ${category.name}, logs: ${logsChannel}, commands: ${commandChannel}`,
         });
-
         console.log('[PVC Setup] Setup complete! Sending success message...');
         await interaction.editReply(
             `✅ PVC System set up successfully!\n\n` +
@@ -249,7 +216,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         await interaction.editReply(`Failed to set up PVC system.\n\n**Error:** ${error.message}\n\nCheck bot permissions and database connection.`);
     }
 }
-
 export const command: Command = {
     data: data as unknown as import('discord.js').SlashCommandBuilder,
     execute,
