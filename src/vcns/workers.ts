@@ -307,63 +307,37 @@ async function executeVCDelete(intent: Intent<VCDeletePayload>): Promise<WorkerR
         const channel = guild.channels.cache.get(payload.channelId);
         if (!channel) {
             stateStore.unregisterChannel(payload.channelId);
-            try {
-                await prisma.privateVoiceChannel.delete({
-                    where: { channelId: payload.channelId },
-                });
-            } catch (err: any) {
-                // DB cleanup failure after channel already missing - log but don't fail intent
-                console.error(`[Workers] CRITICAL: DB cleanup failed for missing private channel ${payload.channelId}:`, {
-                    error: err.message,
-                    intentId: intent.id,
-                    channelId: payload.channelId
-                });
-            }
-            try {
-                await prisma.teamVoiceChannel.delete({
-                    where: { channelId: payload.channelId },
-                });
-            } catch (err: any) {
-                // DB cleanup failure after channel already missing - log but don't fail intent
-                console.error(`[Workers] CRITICAL: DB cleanup failed for missing team channel ${payload.channelId}:`, {
-                    error: err.message,
-                    intentId: intent.id,
-                    channelId: payload.channelId
-                });
-            }
+            // Use deleteMany - doesn't throw if record doesn't exist
+            await prisma.privateVoiceChannel.deleteMany({
+                where: { channelId: payload.channelId },
+            });
+            await prisma.teamVoiceChannel.deleteMany({
+                where: { channelId: payload.channelId },
+            });
+            await prisma.voicePermission.deleteMany({
+                where: { channelId: payload.channelId },
+            });
+            await prisma.teamVoicePermission.deleteMany({
+                where: { channelId: payload.channelId },
+            });
             return success(intent, Date.now() - startTime);
         }
         recordBotEdit(payload.channelId);
         await channel.delete(payload.reason || 'PVC cleanup');
         stateStore.unregisterChannel(payload.channelId);
-        try {
-            await prisma.privateVoiceChannel.delete({
-                where: { channelId: payload.channelId },
-            });
-        } catch (err: any) {
-            // CRITICAL: DB cleanup failed after successful Discord deletion - data inconsistency
-            console.error(`[Workers] CRITICAL: DB cleanup failed after Discord deletion for private channel ${payload.channelId}:`, {
-                error: err.message,
-                intentId: intent.id,
-                channelId: payload.channelId,
-                guildId: intent.guildId
-            });
-            // TODO: Add to reconciliation queue when implemented
-        }
-        try {
-            await prisma.teamVoiceChannel.delete({
-                where: { channelId: payload.channelId },
-            });
-        } catch (err: any) {
-            // CRITICAL: DB cleanup failed after successful Discord deletion - data inconsistency
-            console.error(`[Workers] CRITICAL: DB cleanup failed after Discord deletion for team channel ${payload.channelId}:`, {
-                error: err.message,
-                intentId: intent.id,
-                channelId: payload.channelId,
-                guildId: intent.guildId
-            });
-            // TODO: Add to reconciliation queue when implemented
-        }
+        // Use deleteMany - doesn't throw if record was already deleted elsewhere
+        await prisma.privateVoiceChannel.deleteMany({
+            where: { channelId: payload.channelId },
+        });
+        await prisma.teamVoiceChannel.deleteMany({
+            where: { channelId: payload.channelId },
+        });
+        await prisma.voicePermission.deleteMany({
+            where: { channelId: payload.channelId },
+        });
+        await prisma.teamVoicePermission.deleteMany({
+            where: { channelId: payload.channelId },
+        });
         rateGovernor.recordAction(intent.action, intent.cost);
         return success(intent, Date.now() - startTime);
     } catch (error: any) {

@@ -577,6 +577,9 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
 async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> {
     const { channelId, guild, member } = state;
     if (!channelId) return;
+    
+    console.log(`[HandleLeave] User ${member?.user?.username} (${member?.id}) left channel ${channelId}`);
+    
     if (member && hasTempDragPermission(channelId, member.id)) {
         const pvcData = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
         const teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
@@ -600,7 +603,24 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
         removeTempDragPermission(channelId, member.id);
         invalidateChannelPermissions(channelId);
     }
-    const channelState = getChannelState(channelId);
+    
+    // Try memory first, then fallback to database
+    let channelState = getChannelState(channelId);
+    
+    // If not in memory, check database and register it
+    if (!channelState) {
+        console.log(`[HandleLeave] Channel ${channelId} not in memory, checking database...`);
+        const dbChannel = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+        if (dbChannel) {
+            console.log(`[HandleLeave] Found channel in DB, owner: ${dbChannel.ownerId}. Registering in memory.`);
+            // Register in memory for future use - signature is (channelId, guildId, ownerId)
+            const { registerChannel } = await import('../utils/voiceManager');
+            registerChannel(channelId, dbChannel.guildId, dbChannel.ownerId);
+            channelState = getChannelState(channelId);
+        }
+    }
+    
+    console.log(`[HandleLeave] channelState: ${channelState ? `owner=${channelState.ownerId}` : 'null'}`);
     if (channelState) {
         if (member) {
             removeUserFromJoinOrder(channelId, member.id);
@@ -644,7 +664,10 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
                     });
                     await deletePrivateChannel(channelId, guild.id);
                 } else if (member && member.id === channelState.ownerId) {
+                    console.log(`[HandleLeave] Owner ${member.id} left, transferring ownership...`);
                     await transferChannelOwnership(client, channelId, guild, channel);
+                } else {
+                    console.log(`[HandleLeave] Non-owner left. Member: ${member?.id}, Owner: ${channelState.ownerId}`);
                 }
             }
         }
@@ -1047,24 +1070,35 @@ async function transferChannelOwnership(
     channel: any
 ): Promise<void> {
     try {
+        console.log(`[TransferOwnership] Starting transfer for channel ${channelId}`);
+        console.log(`[TransferOwnership] Channel members count: ${channel.members.size}`);
+        
         let nextUserId = getNextUserInOrder(channelId);
         const currentState = getChannelState(channelId);
         const teamState = getTeamChannelState(channelId);
         const oldOwnerId = currentState?.ownerId || teamState?.ownerId;
         
+        console.log(`[TransferOwnership] Next in join order: ${nextUserId}, oldOwnerId: ${oldOwnerId}`);
+        
         if (!nextUserId && channel.members.size > 0) {
             const availableMember = channel.members.find((m: any) => m.id !== oldOwnerId && !m.user.bot);
             if (availableMember) {
                 nextUserId = availableMember.id;
+                console.log(`[TransferOwnership] Found available member as fallback: ${nextUserId}`);
             }
         }
         if (!nextUserId) {
+            console.log(`[TransferOwnership] No next user found, aborting transfer`);
             return;
         }
         const newOwner = guild.members.cache.get(nextUserId);
         if (!newOwner) {
+            console.log(`[TransferOwnership] Could not find member ${nextUserId} in guild cache`);
             return;
         }
+        
+        console.log(`[TransferOwnership] Transferring to ${newOwner.displayName} (${nextUserId})`);
+        
         const isTeamChannel = Boolean(teamState);
         if (currentState) {
             transferOwnership(channelId, nextUserId);
@@ -1082,6 +1116,7 @@ async function transferChannelOwnership(
                 where: { channelId },
                 data: { ownerId: nextUserId },
             });
+            console.log(`[TransferOwnership] Updated DB owner for PVC channel`);
         }
         const ownerPerms = getOwnerPermissions();
         recordBotEdit(channelId);
@@ -1090,7 +1125,10 @@ async function transferChannelOwnership(
         if (oldOwnerId) {
             try {
                 await channel.permissionOverwrites.delete(oldOwnerId);
-            } catch { }
+                console.log(`[TransferOwnership] Removed old owner ${oldOwnerId} permissions`);
+            } catch (err) {
+                console.log(`[TransferOwnership] Failed to remove old owner permissions:`, err);
+            }
         }
         
         // Grant new owner full permissions
@@ -1106,9 +1144,14 @@ async function transferChannelOwnership(
             DeafenMembers: true,
             ManageChannels: true,
         });
+        console.log(`[TransferOwnership] Granted new owner ${nextUserId} permissions`);
+        
         try {
             await channel.setName(newOwner.displayName);
-        } catch { }
+            console.log(`[TransferOwnership] Renamed channel to: ${newOwner.displayName}`);
+        } catch (err) {
+            console.log(`[TransferOwnership] Failed to rename channel:`, err);
+        }
         await logAction({
             action: LogAction.CHANNEL_TRANSFERRED,
             guild: guild,
@@ -1127,7 +1170,11 @@ async function transferChannelOwnership(
                 .setTimestamp();
             await channel.send({ embeds: [embed] });
         } catch { }
-    } catch { }
+        
+        console.log(`[TransferOwnership] ✅ Ownership transfer complete to ${newOwner.displayName}`);
+    } catch (err) {
+        console.error(`[TransferOwnership] ❌ Error during ownership transfer:`, err);
+    }
 }
 async function deletePrivateChannel(channelId: string, guildId: string): Promise<void> {
     try {
