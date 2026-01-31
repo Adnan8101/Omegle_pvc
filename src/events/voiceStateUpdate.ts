@@ -225,10 +225,32 @@ async function handleAccessProtection(
         }).catch(() => { });
         return true;
     }
+    // Check if user has PERMANENT ACCESS (from owner's saved permissions)
     const hasPermanentAccess = stateStore.hasPermanentAccess(guild.id, ownerId, member.id);
+    console.log(`[VCNS-ACCESS] 🔑 Permanent access check for ${member.user.tag}: ${hasPermanentAccess}`);
     if (hasPermanentAccess) {
-        console.log(`[VCNS-ACCESS] 🔑 User ${member.user.tag} has PERMANENT ACCESS - bypass all restrictions`);
+        console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} has PERMANENT ACCESS from owner - bypass all restrictions`);
         return false; 
+    }
+    
+    // Check if user has PERMIT on this specific channel (allows bypass of all restrictions including strictness)
+    // This is set by !au command - creates VoicePermission with permission='permit'
+    console.log(`[VCNS-ACCESS] 🎟️ Checking channel permits for ${member.user.tag}, permissions count: ${dbPermissions.length}`);
+    if (dbPermissions.length > 0) {
+        console.log(`[VCNS-ACCESS] 🎟️ All permissions in DB:`, dbPermissions.map((p: any) => `${p.targetId}:${p.permission}`).join(', '));
+    }
+    const hasDirectPermit = dbPermissions.some(
+        (p: any) => p.targetId === member.id && p.permission === 'permit'
+    );
+    const hasRolePermit = dbPermissions.some(
+        (p: any) => memberRoleIds.includes(p.targetId) && p.targetType === 'role' && p.permission === 'permit'
+    );
+    const hasChannelPermit = hasDirectPermit || hasRolePermit;
+    console.log(`[VCNS-ACCESS] 🎟️ Permit check for ${member.id}: direct=${hasDirectPermit}, role=${hasRolePermit}, has=${hasChannelPermit}`);
+    
+    if (hasChannelPermit) {
+        console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} has CHANNEL PERMIT (!au) - bypass all restrictions`);
+        return false;
     }
     
     console.log(`[VCNS-ACCESS] ⚙️ Loading guild settings for admin strictness...`);
@@ -249,11 +271,12 @@ async function handleAccessProtection(
         hasAdminPerm,
         strictnessEnabled: !!strictnessEnabled,
         isWhitelisted,
-        isTeamChannel
+        isTeamChannel,
+        hasChannelPermit
     });
     
-    // ADMIN STRICTNESS: When enabled, ONLY whitelisted users can access ANY channel
-    // Non-whitelisted users are INSTANTLY kicked regardless of channel state (locked/unlocked)
+    // ADMIN STRICTNESS: When enabled, ONLY whitelisted OR permitted users can access
+    // Non-whitelisted/non-permitted users are INSTANTLY kicked regardless of channel state
     if (strictnessEnabled) {
         if (isWhitelisted) {
             console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} is WHITELISTED - access granted (strictness ON)`);
@@ -261,7 +284,7 @@ async function handleAccessProtection(
         }
         
         // NOT whitelisted + strictness ON = INSTANT KICK + DM + LOG
-        console.log(`[VCNS-ACCESS] 🚨 STRICTNESS VIOLATION: ${member.user.tag} is NOT whitelisted - INSTANT KICK`);
+        console.log(`[VCNS-ACCESS] 🚨 STRICTNESS VIOLATION: ${member.user.tag} is NOT whitelisted and has no permit - INSTANT KICK`);
         
         const channelTypeName = isTeamChannel ? 'team voice channel' : 'voice channel';
         
@@ -344,22 +367,8 @@ async function handleAccessProtection(
         return false;
     }
     
-    console.log(`[VCNS-ACCESS] 🔍 Checking user permits...`);
-    const isUserPermitted = dbPermissions.some(
-        (p: any) => p.targetId === member.id && p.permission === 'permit'
-    );
-    if (isUserPermitted) {
-        console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} has direct PERMIT - access granted`);
-        return false;
-    }
-    
-    const isRolePermitted = dbPermissions.some(
-        (p: any) => memberRoleIds.includes(p.targetId) && p.targetType === 'role' && p.permission === 'permit'
-    );
-    if (isRolePermitted) {
-        console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} has role PERMIT - access granted`);
-        return false;
-    }
+    // Channel permit was already checked earlier - if we reach here, user has no permit
+    console.log(`[VCNS-ACCESS] 🔍 User ${member.user.tag} has no permits and channel is restricted`);
     if (isFull) {
         // NO BYPASS - even admins/server owner need AU or permanent access
         console.log(`[VCNS-ACCESS] 🚫 Channel is FULL - kicking ${member.user.tag} (no AU or permanent access)`);

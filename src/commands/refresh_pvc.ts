@@ -319,6 +319,83 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }
         }
     }
+
+    // === ORPHAN PVC DETECTION ===
+    // Scan for voice channels in the PVC category that exist on Discord but not in the database
+    let orphanPvcsAdded = 0;
+    if (freshSettings?.interfaceVcId) {
+        const interfaceVc = guild.channels.cache.get(freshSettings.interfaceVcId);
+        if (interfaceVc && interfaceVc.parent) {
+            const categoryId = interfaceVc.parentId;
+            console.log(`[Refresh PVC] Scanning for orphan PVCs in category ${categoryId}...`);
+            
+            // Get all known PVC channel IDs from database
+            const knownPvcIds = new Set((freshSettings.privateChannels || []).map(p => p.channelId));
+            knownPvcIds.add(freshSettings.interfaceVcId); // Don't count interface as orphan
+            
+            // Find voice channels in the category that aren't in the database
+            const orphanChannels = guild.channels.cache.filter(ch => 
+                ch.type === ChannelType.GuildVoice && 
+                ch.parentId === categoryId && 
+                !knownPvcIds.has(ch.id)
+            );
+            
+            console.log(`[Refresh PVC] Found ${orphanChannels.size} potential orphan channels`);
+            
+            for (const [channelId, channel] of orphanChannels) {
+                if (channel.type !== ChannelType.GuildVoice) continue;
+                const voiceChannel = channel as any;
+                
+                // Try to determine owner from permission overwrites
+                // The owner should have specific permissions like MoveMembers
+                let ownerId: string | null = null;
+                for (const [targetId, overwrite] of voiceChannel.permissionOverwrites.cache) {
+                    // Skip @everyone and bot permissions
+                    if (targetId === guild.id || targetId === interaction.client.user?.id) continue;
+                    // Check if this looks like an owner (has MoveMembers permission)
+                    if (overwrite.type === OverwriteType.Member && overwrite.allow.has(PermissionFlagsBits.MoveMembers)) {
+                        ownerId = targetId;
+                        break;
+                    }
+                }
+                
+                // If we can't determine owner from permissions, try finding a member in the channel
+                if (!ownerId && voiceChannel.members.size > 0) {
+                    const nonBotMember = voiceChannel.members.find((m: any) => !m.user.bot);
+                    if (nonBotMember) {
+                        ownerId = nonBotMember.id;
+                    }
+                }
+                
+                if (ownerId) {
+                    console.log(`[Refresh PVC] Found orphan PVC ${channelId} with owner ${ownerId} - adding to database`);
+                    try {
+                        await prisma.privateVoiceChannel.create({
+                            data: {
+                                channelId: channelId,
+                                guildId: guild.id,
+                                ownerId: ownerId,
+                                isLocked: false,
+                                isHidden: false,
+                            },
+                        });
+                        registerChannel(channelId, guild.id, ownerId);
+                        orphanPvcsAdded++;
+                        console.log(`[Refresh PVC] ✅ Added orphan PVC ${channelId} to database`);
+                    } catch (err: any) {
+                        // Might fail if already exists (race condition) or foreign key
+                        console.error(`[Refresh PVC] Failed to add orphan PVC ${channelId}:`, err.message);
+                    }
+                } else {
+                    console.log(`[Refresh PVC] Orphan PVC ${channelId} has no identifiable owner - skipping`);
+                }
+            }
+        }
+    }
+    if (orphanPvcsAdded > 0) {
+        console.log(`[Refresh PVC] ✅ Added ${orphanPvcsAdded} orphan PVCs to database`);
+    }
+
     console.log('[Refresh PVC] Validating and registering PVC channels...');
     if (freshSettings?.privateChannels) {
         const validPvcs = [];
@@ -882,6 +959,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     response += '• In-memory state resynced from DB\n';
     if (ownershipTransfers > 0) response += `• **Ownership transfers: ${ownershipTransfers}** (owners not in channel)\n`;
     if (channelsDeleted > 0) response += `• **Empty channels deleted: ${channelsDeleted}**\n`;
+    if (orphanPvcsAdded > 0) response += `• **Orphan PVCs recovered: ${orphanPvcsAdded}** (found on Discord, added to DB)\n`;
     response += `• PVC permissions synced (${permsSynced} users)\n`;
     response += `• Team permissions synced (${teamPermsSynced} users)\n`;
     response += `• **VC interfaces updated/sent: ${interfacesUpdated}**`;
