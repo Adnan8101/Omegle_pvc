@@ -133,7 +133,7 @@ interface OwnerTransferPayload {
     channelId: string;
     newOwnerId: string;
 }
-function success(intent: Intent<unknown>, executionTimeMs: number): WorkerResult {
+function success(intent: Intent<unknown>, executionTimeMs: number, data?: Record<string, unknown>): WorkerResult {
     return {
         success: true,
         intentId: intent.id,
@@ -141,6 +141,7 @@ function success(intent: Intent<unknown>, executionTimeMs: number): WorkerResult
         executionTimeMs,
         retryable: false,
         rateLimitHit: false,
+        data,
     };
 }
 function failure(
@@ -268,7 +269,7 @@ async function executeVCCreate(intent: Intent<VCCreatePayload>): Promise<WorkerR
             channelId: result.channelId,
             executionTimeMs: execTime
         });
-        return success(intent, execTime);
+        return success(intent, execTime, { channelId: result.channelId });
     }
     
     // Log VC creation failure with context

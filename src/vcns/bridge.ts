@@ -5,7 +5,7 @@ import {
     type GuildMember,
     PermissionFlagsBits,
 } from 'discord.js';
-import { vcns, IntentFactory, stateStore, rateGovernor, type VCNSStats } from './index';
+import { vcns, IntentFactory, stateStore, rateGovernor, waitForIntent, type VCNSStats } from './index';
 import {
     Intent,
     IntentPriority,
@@ -131,13 +131,42 @@ export class VCNSBridge {
             bitrate,
         };
         const result = vcns.requestVCCreate(payload, targetOwnerId);
-        return {
-            success: result.queued,
-            queued: result.queued,
-            intentId: result.intentId,
-            eta: result.eta,
-            error: result.queued ? undefined : 'Failed to queue creation',
-        };
+        
+        if (!result.queued) {
+            return {
+                success: false,
+                queued: false,
+                intentId: result.intentId,
+                error: 'Failed to queue creation',
+            };
+        }
+        
+        // Wait for the intent to complete and get the channelId
+        try {
+            const workerResult = await waitForIntent(result.intentId, 30000);
+            if (workerResult.success && workerResult.data?.channelId) {
+                return {
+                    success: true,
+                    queued: true,
+                    intentId: result.intentId,
+                    channelId: workerResult.data.channelId as string,
+                };
+            } else {
+                return {
+                    success: false,
+                    queued: true,
+                    intentId: result.intentId,
+                    error: workerResult.error || 'VC creation failed',
+                };
+            }
+        } catch (err: any) {
+            return {
+                success: false,
+                queued: true,
+                intentId: result.intentId,
+                error: err.message || 'Intent timeout',
+            };
+        }
     }
     public async createVCImmediate(
         guild: Guild,

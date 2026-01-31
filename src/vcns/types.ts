@@ -180,6 +180,7 @@ export interface WorkerResult {
     retryable: boolean;
     rateLimitHit: boolean;
     rateLimitRetryAfter?: number;
+    data?: Record<string, unknown>;
 }
 export interface WorkerHealth {
     workerId: string;

@@ -29,13 +29,33 @@ interface VCNSEvents {
     started: () => void;
     stopped: () => void;
     intentQueued: (intent: Intent<unknown>) => void;
-    intentCompleted: (intent: Intent<unknown>) => void;
+    intentCompleted: (intent: Intent<unknown>, result: WorkerResult) => void;
     intentFailed: (intent: Intent<unknown>, error: string) => void;
     intentRetryScheduled: (intent: Intent<unknown>, delayMs: number, attempt: number) => void;
     intentRetryExhausted: (intent: Intent<unknown>) => void;
     intentRateLimited: (intent: Intent<unknown>, retryAfterMs: number) => void;
     stateLoaded: (channelCount: number) => void;
 }
+
+// Pending intent callbacks for awaiting completion
+type IntentCallback = (result: WorkerResult) => void;
+const pendingCallbacks = new Map<string, IntentCallback>();
+
+export function waitForIntent(intentId: string, timeoutMs: number = 30000): Promise<WorkerResult> {
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            pendingCallbacks.delete(intentId);
+            reject(new Error('Intent timeout'));
+        }, timeoutMs);
+        
+        pendingCallbacks.set(intentId, (result) => {
+            clearTimeout(timeout);
+            pendingCallbacks.delete(intentId);
+            resolve(result);
+        });
+    });
+}
+
 class VCNSController extends EventEmitter {
     private startedAt: number = 0;
     private isRunning: boolean = false;
@@ -166,7 +186,13 @@ class VCNSController extends EventEmitter {
         if (result.success) {
             intent.status = IntentStatus.COMPLETED;
             this.intentsProcessed++;
-            this.emit('intentCompleted', intent);
+            this.emit('intentCompleted', intent, result);
+            
+            // Call pending callback if exists
+            const callback = pendingCallbacks.get(intent.id);
+            if (callback) {
+                callback(result);
+            }
         } else {
             const retryInfo = handleWorkerFailure(intent, result);
             if (retryInfo.willRetry) {
@@ -176,10 +202,20 @@ class VCNSController extends EventEmitter {
                 this.emit('intentRetryScheduled', intent, retryInfo.delayMs!, retryInfo.attempt!);
             } else if (retryInfo.retryExhausted) {
                 this.emit('intentRetryExhausted', intent);
+                // Call pending callback with failure
+                const callback = pendingCallbacks.get(intent.id);
+                if (callback) {
+                    callback(result);
+                }
             }
             if (intent.status === IntentStatus.FAILED) {
                 this.intentsFailed++;
                 this.emit('intentFailed', intent, result.error || 'Unknown error');
+                // Call pending callback with failure
+                const callback = pendingCallbacks.get(intent.id);
+                if (callback) {
+                    callback(result);
+                }
             }
         }
     }
