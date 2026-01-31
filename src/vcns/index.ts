@@ -13,6 +13,7 @@ import { rateGovernor } from './rateGovernor';
 import { decisionEngine } from './decisionEngine';
 import { scheduler } from './scheduler';
 import { IntentFactory } from './intentFactory';
+import { registerChannel, registerTeamChannel } from '../utils/voiceManager';
 import { executeIntent, handleWorkerFailure } from './workers';
 import prisma from '../utils/database';
 export interface VCNSStats {
@@ -129,6 +130,8 @@ class VCNSController extends EventEmitter {
                     pvc.isHidden,
                     false, 
                 );
+                // Also register in voiceManager for command compatibility
+                registerChannel(pvc.channelId, pvc.guildId, pvc.ownerId);
                 channelCount++;
             }
             const teamChannels = await prisma.teamVoiceChannel.findMany({
@@ -151,6 +154,8 @@ class VCNSController extends EventEmitter {
                     true, 
                     team.teamType as 'DUO' | 'TRIO' | 'SQUAD',
                 );
+                // Also register in voiceManager for command compatibility
+                registerTeamChannel(team.channelId, team.guildId, team.ownerId, team.teamType.toLowerCase() as 'duo' | 'trio' | 'squad');
                 channelCount++;
             }
             const globalBlocks = await prisma.globalVCBlock.findMany({
