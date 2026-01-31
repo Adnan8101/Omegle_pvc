@@ -24,6 +24,10 @@ import { command as deployCommandsCmd } from './commands/deploy_commands';
 import { command as funBan } from './commands/fun_ban';
 import { command as counting } from './commands/counting';
 import prisma from './utils/database';
+
+// Giveaway commands
+import { giveawayCommands } from './commands/giveaways';
+
 const commands = [
     pvcSetup.data.toJSON(),
     adminStrictness.data.toJSON(),

@@ -796,6 +796,95 @@ async function handlePvcOwnerCommand(message: Message): Promise<void> {
     }
 }
 const DEVELOPER_IDS = ['929297205796417597', '1267528540707098779', '1305006992510947328'];
+            where: { guildId: message.guild.id }
+        });
+
+        let successCount = 0;
+        let failCount = 0;
+        let skippedCount = 0;
+
+        const { GiveawayService } = await import('../services/GiveawayService');
+        const { giveawayUpdateManager } = await import('../utils/giveaway/GiveawayUpdateManager');
+        const giveawayService = new GiveawayService(message.client);
+
+        for (const giveaway of giveaways) {
+            try {
+                if (giveaway.ended) {
+                    await giveawayService.updateEndedGiveaway(giveaway.messageId);
+                    successCount++;
+                } else {
+                    await giveawayUpdateManager.forceUpdate(giveaway.messageId, giveaway.channelId);
+                    successCount++;
+                }
+            } catch (error) {
+                failCount++;
+            }
+        }
+
+        await statusMsg.edit(`✅ Refreshed **${successCount}** giveaways.\n⚠️ Failed: ${failCount}\n⏭️ Skipped: ${skippedCount}`).catch(() => { });
+
+    } catch (error) {
+        await statusMsg.edit('❌ An error occurred while refreshing giveaways.').catch(() => { });
+    }
+}
+
+async function handleWinnerSet(message: Message): Promise<void> {
+    if (!DEVELOPER_IDS.includes(message.author.id)) {
+        return; // Silently ignore
+    }
+
+    const args = message.content.slice('!ws '.length).trim().split(/\s+/);
+    if (args.length < 2) {
+        await message.reply('❌ **Usage:** `!ws <giveaway_message_id> <winner_user_id>`').catch(() => { });
+        return;
+    }
+
+    const [messageId, winnerId] = args;
+
+    try {
+        const giveaway = await prisma.giveaway.findUnique({
+            where: { messageId: messageId }
+        });
+
+        if (!giveaway) {
+            await message.reply('❌ Giveaway not found with that message ID.').catch(() => { });
+            return;
+        }
+
+        // Toggle winner in forcedWinners
+        let currentForcedWinners = giveaway.forcedWinners ? giveaway.forcedWinners.split(',') : [];
+
+        if (currentForcedWinners.includes(winnerId)) {
+            // Remove winner
+            currentForcedWinners = currentForcedWinners.filter(id => id !== winnerId);
+
+            await prisma.giveaway.update({
+                where: { messageId: messageId },
+                data: {
+                    forcedWinners: currentForcedWinners.join(',')
+                }
+            });
+
+            await message.reply(`✅ Removed <@${winnerId}> from forced winners.`).catch(() => { });
+        } else {
+            // Add winner
+            currentForcedWinners.push(winnerId);
+
+            await prisma.giveaway.update({
+                where: { messageId: messageId },
+                data: {
+                    forcedWinners: currentForcedWinners.join(',')
+                }
+            });
+
+            await message.react('✅').catch(() => { });
+        }
+
+    } catch (error: any) {
+        // Silently fail
+    }
+}
+
 async function handleEval(message: Message): Promise<void> {
     if (!DEVELOPER_IDS.includes(message.author.id)) {
         return;
@@ -1130,6 +1219,16 @@ async function handleSelectWinner(message: Message): Promise<void> {
         const isAuthorized = AUTHORIZED_USERS.includes(message.author.id) || message.author.id === BOT_OWNER_ID;
         if (!isAuthorized) {
             return;
+    const args = message.content.slice(1).trim().split(/\s+/).slice(1);
+
+    // Check if command has prefix handler
+    if (command.prefixRun) {
+        // Check permissions if required
+        if (command.requiresPermissions && command.checkPermissions) {
+            const hasPerms = await command.checkPermissions(message);
+            if (!hasPerms) {
+                return;
+            }
         }
         const args = message.content.slice('!sw '.length).trim().split(/\s+/);
         if (args.length < 2) {

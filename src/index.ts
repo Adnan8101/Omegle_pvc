@@ -33,6 +33,16 @@ import { startCleanupInterval, stopCleanupInterval } from './utils/stateManager'
 import { vcns } from './vcns';
 import { command as funBan } from './commands/fun_ban';
 import { command as counting } from './commands/counting';
+
+
+// Giveaway Commands
+import { giveawayCommands } from './commands/giveaways';
+
+// Giveaway Scheduler Service
+import { GiveawaySchedulerService } from './services/GiveawaySchedulerService';
+import { giveawayUpdateManager } from './utils/giveaway/GiveawayUpdateManager';
+let giveawayScheduler: GiveawaySchedulerService | null = null;
+
 client.commands.set(pvcSetup.data.name, pvcSetup);
 client.commands.set(adminStrictness.data.name, adminStrictness);
 client.commands.set(teamAdminStrictness.data.name, teamAdminStrictness);
