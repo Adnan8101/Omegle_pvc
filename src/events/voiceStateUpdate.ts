@@ -397,16 +397,25 @@ async function handleAccessProtection(
 async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
     const { channelId, guild, member } = state;
     if (!channelId || !member) return;
+    
+    console.log(`[VCNS-HANDLEJOIN] 📌 Processing join for ${member.user.tag} in channel ${channelId}`);
+    
     let isInterface = isInterfaceChannel(channelId);
+    console.log(`[VCNS-HANDLEJOIN] 🔍 isInterfaceChannel(${channelId}) = ${isInterface}`);
+    
     if (!isInterface) {
         const settings = await getGuildSettings(guild.id);
+        console.log(`[VCNS-HANDLEJOIN] 🔍 Guild settings interfaceVcId = ${settings?.interfaceVcId}`);
         if (settings?.interfaceVcId === channelId) {
             registerInterfaceChannel(guild.id, channelId);
             isInterface = true;
+            console.log(`[VCNS-HANDLEJOIN] ✅ Registered ${channelId} as interface channel`);
         }
     }
     if (isInterface) {
+        console.log(`[VCNS-HANDLEJOIN] 🎯 Channel IS an interface - checking PVC pause status`);
         if (isPvcPaused(guild.id)) {
+            console.log(`[VCNS-HANDLEJOIN] ⏸️ PVC is PAUSED - disconnecting user`);
             try {
                 await member.voice.disconnect();
                 const pauseEmbed = new EmbedBuilder()
@@ -422,7 +431,9 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
             } catch { }
             return;
         }
+        console.log(`[VCNS-HANDLEJOIN] 🚀 Calling createPrivateChannel for ${member.user.tag}`);
         await createPrivateChannel(client, state);
+        console.log(`[VCNS-HANDLEJOIN] ✅ createPrivateChannel completed for ${member.user.tag}`);
         return;
     }
     let teamType = getTeamInterfaceType(channelId);
@@ -636,16 +647,24 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
 }
 async function createPrivateChannel(client: PVCClient, state: VoiceState): Promise<void> {
     const { guild, member, channel: interfaceChannel } = state;
-    if (!member || !interfaceChannel) return;
+    if (!member || !interfaceChannel) {
+        console.log(`[VCNS-CREATE] ❌ No member or interfaceChannel - aborting`);
+        return;
+    }
+    
+    console.log(`[VCNS-CREATE] 🔐 Acquiring creation lock for ${member.user.tag}...`);
     const lockAcquired = await acquireCreationLock(guild.id, member.id);
     if (!lockAcquired) {
+        console.log(`[VCNS-CREATE] ❌ Lock NOT acquired for ${member.user.tag} - disconnecting`);
         try {
             await member.voice.disconnect();
         } catch { }
         return;
     }
+    console.log(`[VCNS-CREATE] ✅ Lock acquired for ${member.user.tag}`);
     try {
         if (isOnCooldown(member.id, 'CREATE_CHANNEL')) {
+            console.log(`[VCNS-CREATE] ⏳ User ${member.user.tag} is on cooldown - disconnecting`);
             try {
                 await member.voice.disconnect();
             } catch { }
@@ -658,6 +677,7 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
             existingChannel = getTeamChannelByOwner(guild.id, member.id);
             existingType = 'Team';
         }
+        console.log(`[VCNS-CREATE] 🔍 Existing channel check: ${existingChannel || 'none'} (type: ${existingType})`);
         if (existingChannel) {
             let actuallyOwnsChannel = false;
             if (existingType === 'Team') {
@@ -745,6 +765,8 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                 },
             }).catch(() => { });
         }
+        console.log(`[VCNS-CREATE] 🏗️ Calling vcnsBridge.createVC for ${member.user.tag}...`);
+        console.log(`[VCNS-CREATE] 📝 parentId: ${interfaceChannel.parent?.id}`);
         const createResult = await vcnsBridge.createVC({
             guild,
             ownerId: member.id,
@@ -753,7 +775,9 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
             permissionOverwrites,
             isTeam: false,
         });
+        console.log(`[VCNS-CREATE] 📊 createVC result:`, JSON.stringify(createResult, null, 2));
         if (!createResult || !createResult.channelId) {
+            console.log(`[VCNS-CREATE] ❌ No channelId returned - disconnecting user`);
             releaseCreationLock(guild.id, member.id);
             try {
                 await member.voice.disconnect();
