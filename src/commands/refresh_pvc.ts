@@ -370,13 +370,20 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 if (ownerId) {
                     console.log(`[Refresh PVC] Found orphan PVC ${channelId} with owner ${ownerId} - adding to database`);
                     try {
+                        // Check if channel is actually locked by inspecting @everyone permissions
+                        const everyoneOverwrite = voiceChannel.permissionOverwrites.cache.get(guild.id);
+                        const isLocked = everyoneOverwrite?.deny.has(PermissionFlagsBits.Connect) ?? false;
+                        const isHidden = everyoneOverwrite?.deny.has(PermissionFlagsBits.ViewChannel) ?? false;
+                        
+                        console.log(`[Refresh PVC] Orphan PVC ${channelId} state: isLocked=${isLocked}, isHidden=${isHidden}`);
+                        
                         await prisma.privateVoiceChannel.create({
                             data: {
                                 channelId: channelId,
                                 guildId: guild.id,
                                 ownerId: ownerId,
-                                isLocked: false,
-                                isHidden: false,
+                                isLocked: isLocked,
+                                isHidden: isHidden,
                             },
                         });
                         registerChannel(channelId, guild.id, ownerId);
@@ -625,6 +632,66 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         await interaction.editReply('❌ Failed to fetch channel list for permission sync. Please try again.');
         return;
     }
+    
+    // CRITICAL FIX: Update stateStore with correct lock/hidden state from DB
+    console.log('[Refresh PVC] Updating stateStore with DB lock/hidden states...');
+    const { stateStore } = await import('../vcns/index');
+    let stateStoreUpdated = 0;
+    for (const pvc of updatedPvcs) {
+        const existingState = stateStore.getChannelState(pvc.channelId);
+        if (existingState) {
+            stateStore.updateChannelState(pvc.channelId, {
+                isLocked: pvc.isLocked,
+                isHidden: pvc.isHidden,
+            });
+            stateStoreUpdated++;
+            console.log(`[Refresh PVC] Updated stateStore for ${pvc.channelId}: isLocked=${pvc.isLocked}, isHidden=${pvc.isHidden}`);
+        } else {
+            // Channel not in stateStore, register it with correct state
+            stateStore.registerChannel({
+                channelId: pvc.channelId,
+                guildId: pvc.guildId,
+                ownerId: pvc.ownerId,
+                isLocked: pvc.isLocked,
+                isHidden: pvc.isHidden,
+                userLimit: pvc.userLimit || 0,
+                isTeamChannel: false,
+                operationPending: false,
+                lastModified: Date.now(),
+            });
+            stateStoreUpdated++;
+            console.log(`[Refresh PVC] Registered missing channel ${pvc.channelId} in stateStore: isLocked=${pvc.isLocked}, isHidden=${pvc.isHidden}`);
+        }
+    }
+    for (const tc of updatedTeamChannels) {
+        const existingState = stateStore.getChannelState(tc.channelId);
+        if (existingState) {
+            stateStore.updateChannelState(tc.channelId, {
+                isLocked: tc.isLocked,
+                isHidden: tc.isHidden,
+            });
+            stateStoreUpdated++;
+            console.log(`[Refresh PVC] Updated stateStore for Team ${tc.channelId}: isLocked=${tc.isLocked}, isHidden=${tc.isHidden}`);
+        } else {
+            // Channel not in stateStore, register it with correct state
+            stateStore.registerChannel({
+                channelId: tc.channelId,
+                guildId: tc.guildId,
+                ownerId: tc.ownerId,
+                isLocked: tc.isLocked,
+                isHidden: tc.isHidden,
+                userLimit: tc.userLimit || 0,
+                isTeamChannel: true,
+                teamType: tc.teamType,
+                operationPending: false,
+                lastModified: Date.now(),
+            });
+            stateStoreUpdated++;
+            console.log(`[Refresh PVC] Registered missing Team channel ${tc.channelId} in stateStore: isLocked=${tc.isLocked}, isHidden=${tc.isHidden}`);
+        }
+    }
+    console.log(`[Refresh PVC] StateStore synchronized: ${stateStoreUpdated} channels updated/registered`);
+    
     let permsSynced = 0;
     let teamPermsSynced = 0;
     console.log('[Refresh PVC] Syncing PVC permissions...');
@@ -861,6 +928,28 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
     console.log(`[Refresh PVC] Synced lock/hidden state for ${teamLocksSynced} locked Team channels`);
+    
+    // VERIFICATION: Test that channels are queryable from DB (for access protection)
+    console.log('[Refresh PVC] Verifying DB accessibility...');
+    let dbVerificationPassed = 0;
+    let dbVerificationFailed = 0;
+    for (const pvc of updatedPvcs) {
+        try {
+            const testQuery = await prisma.privateVoiceChannel.findUnique({
+                where: { channelId: pvc.channelId },
+            });
+            if (testQuery) {
+                dbVerificationPassed++;
+            } else {
+                dbVerificationFailed++;
+                console.error(`[Refresh PVC] ❌ VERIFICATION FAILED: Channel ${pvc.channelId} not queryable from DB!`);
+            }
+        } catch (err) {
+            dbVerificationFailed++;
+            console.error(`[Refresh PVC] ❌ VERIFICATION ERROR for ${pvc.channelId}:`, err);
+        }
+    }
+    console.log(`[Refresh PVC] DB verification: ${dbVerificationPassed} passed, ${dbVerificationFailed} failed`);
     
     let interfacesUpdated = 0;
     let interfacesSkipped = 0;
