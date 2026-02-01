@@ -69,6 +69,35 @@ export async function buildVC(options: VCBuildOptions): Promise<VCBuildResult> {
             permissionOverwrites,
         }) as VoiceChannel;
         recordBotEdit(channel.id);
+        
+        // Add Discord permissions for permanent access users
+        try {
+            const permanentAccessUsers = await prisma.ownerPermission.findMany({
+                where: { guildId, ownerId, targetType: 'user' }
+            });
+            
+            if (permanentAccessUsers.length > 0) {
+                console.log(`[VCBuilder] 🔑 Adding Discord permissions for ${permanentAccessUsers.length} permanent access users...`);
+                
+                for (const perm of permanentAccessUsers) {
+                    try {
+                        await channel.permissionOverwrites.create(perm.targetId, {
+                            ViewChannel: true,
+                            Connect: true,
+                            SendMessages: true,
+                            EmbedLinks: true,
+                            AttachFiles: true,
+                        });
+                        console.log(`[VCBuilder] ✅ Added permissions for permanent access user ${perm.targetId}`);
+                    } catch (permErr) {
+                        console.error(`[VCBuilder] ⚠️ Failed to add permission for ${perm.targetId}:`, permErr);
+                    }
+                }
+            }
+        } catch (permCheckErr) {
+            console.error(`[VCBuilder] ⚠️ Failed to check permanent access users:`, permCheckErr);
+        }
+        
         if (!skipDbWrite) {
             try {
                 await writeToDatabase(channel.id, guildId, ownerId, isTeamChannel, teamType);
