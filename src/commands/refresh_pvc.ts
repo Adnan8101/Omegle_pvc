@@ -687,6 +687,50 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
     console.log(`[Refresh PVC] PVC permissions synced: ${permsSynced} users`);
+    
+    // Sync lock/hidden state from DB to Discord permissions
+    console.log('[Refresh PVC] Syncing lock/hidden state for PVCs...');
+    let pvcLocksSynced = 0;
+    for (const pvc of updatedPvcs) {
+        const channel = guild.channels.cache.get(pvc.channelId);
+        if (channel && channel.type === ChannelType.GuildVoice) {
+            try {
+                const { recordBotEdit } = await import('../events/channelUpdate');
+                recordBotEdit(pvc.channelId);
+                
+                // Sync lock state: if locked in DB, set @everyone Connect to deny
+                if (pvc.isLocked) {
+                    await channel.permissionOverwrites.edit(guild.id, {
+                        Connect: false, // Deny
+                    });
+                    pvcLocksSynced++;
+                    console.log(`[Refresh PVC] ✅ Synced LOCKED state for PVC ${pvc.channelId}`);
+                } else {
+                    // If unlocked, set Connect to neutral (null = inherit)
+                    await channel.permissionOverwrites.edit(guild.id, {
+                        Connect: null,
+                    });
+                }
+                
+                // Sync hidden state: if hidden in DB, set @everyone ViewChannel to deny
+                if (pvc.isHidden) {
+                    await channel.permissionOverwrites.edit(guild.id, {
+                        ViewChannel: false, // Deny
+                    });
+                    console.log(`[Refresh PVC] ✅ Synced HIDDEN state for PVC ${pvc.channelId}`);
+                } else {
+                    // If visible, set ViewChannel to neutral (null = inherit)
+                    await channel.permissionOverwrites.edit(guild.id, {
+                        ViewChannel: null,
+                    });
+                }
+            } catch (lockSyncErr) {
+                console.error(`[Refresh PVC] Error syncing lock/hidden state for PVC ${pvc.channelId}:`, lockSyncErr);
+            }
+        }
+    }
+    console.log(`[Refresh PVC] Synced lock/hidden state for ${pvcLocksSynced} locked PVCs`);
+    
     console.log('[Refresh PVC] Syncing Team permissions...');
     for (const tc of updatedTeamChannels) {
         const channel = guild.channels.cache.get(tc.channelId);
@@ -744,6 +788,50 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
     console.log(`[Refresh PVC] Team permissions synced: ${teamPermsSynced} users`);
+    
+    // Sync lock/hidden state from DB to Discord permissions for Team channels
+    console.log('[Refresh PVC] Syncing lock/hidden state for Team channels...');
+    let teamLocksSynced = 0;
+    for (const tc of updatedTeamChannels) {
+        const channel = guild.channels.cache.get(tc.channelId);
+        if (channel && channel.type === ChannelType.GuildVoice) {
+            try {
+                const { recordBotEdit } = await import('../events/channelUpdate');
+                recordBotEdit(tc.channelId);
+                
+                // Sync lock state: if locked in DB, set @everyone Connect to deny
+                if (tc.isLocked) {
+                    await channel.permissionOverwrites.edit(guild.id, {
+                        Connect: false, // Deny
+                    });
+                    teamLocksSynced++;
+                    console.log(`[Refresh PVC] ✅ Synced LOCKED state for Team ${tc.channelId}`);
+                } else {
+                    // If unlocked, set Connect to neutral (null = inherit)
+                    await channel.permissionOverwrites.edit(guild.id, {
+                        Connect: null,
+                    });
+                }
+                
+                // Sync hidden state: if hidden in DB, set @everyone ViewChannel to deny
+                if (tc.isHidden) {
+                    await channel.permissionOverwrites.edit(guild.id, {
+                        ViewChannel: false, // Deny
+                    });
+                    console.log(`[Refresh PVC] ✅ Synced HIDDEN state for Team ${tc.channelId}`);
+                } else {
+                    // If visible, set ViewChannel to neutral (null = inherit)
+                    await channel.permissionOverwrites.edit(guild.id, {
+                        ViewChannel: null,
+                    });
+                }
+            } catch (lockSyncErr) {
+                console.error(`[Refresh PVC] Error syncing lock/hidden state for Team ${tc.channelId}:`, lockSyncErr);
+            }
+        }
+    }
+    console.log(`[Refresh PVC] Synced lock/hidden state for ${teamLocksSynced} locked Team channels`);
+    
     let interfacesUpdated = 0;
     let interfacesSkipped = 0;
     let interfaceErrors: string[] = [];
@@ -962,6 +1050,8 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     if (orphanPvcsAdded > 0) response += `• **Orphan PVCs recovered: ${orphanPvcsAdded}** (found on Discord, added to DB)\n`;
     response += `• PVC permissions synced (${permsSynced} users)\n`;
     response += `• Team permissions synced (${teamPermsSynced} users)\n`;
+    if (pvcLocksSynced > 0) response += `• **Lock/Hidden state synced: ${pvcLocksSynced} PVCs**\n`;
+    if (teamLocksSynced > 0) response += `• **Lock/Hidden state synced: ${teamLocksSynced} Team channels**\n`;
     response += `• **VC interfaces updated/sent: ${interfacesUpdated}**`;
     if (interfacesSkipped > 0) response += ` (${interfacesSkipped} skipped)`;
     response += '\n';

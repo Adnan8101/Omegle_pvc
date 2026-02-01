@@ -175,22 +175,31 @@ class EnforcerService {
             });
             const everyoneDeny: bigint[] = [];
             const everyoneAllow: bigint[] = [];
+            
+            // When locked: explicitly DENY Connect for @everyone
+            // When unlocked: do NOT set Connect at all (leave as neutral/inherit)
             if (dbState.isLocked) {
                 everyoneDeny.push(PermissionFlagsBits.Connect);
-            } else {
-                everyoneAllow.push(PermissionFlagsBits.Connect);
             }
+            // Note: When not locked, we intentionally don't add Connect to allow - let it inherit
+            
+            // When hidden: explicitly DENY ViewChannel for @everyone
+            // When visible: do NOT set ViewChannel at all (leave as neutral/inherit)
             if (dbState.isHidden) {
                 everyoneDeny.push(PermissionFlagsBits.ViewChannel);
-            } else {
-                everyoneAllow.push(PermissionFlagsBits.ViewChannel);
             }
-            overwrites.push({
-                id: channel.guild.id,
-                type: OverwriteType.Role,
-                allow: everyoneAllow,
-                deny: everyoneDeny,
-            });
+            // Note: When not hidden, we intentionally don't add ViewChannel to allow - let it inherit
+            
+            // Only add @everyone overwrite if there's something to deny
+            // If both arrays are empty, we don't need an @everyone overwrite at all
+            if (everyoneDeny.length > 0 || everyoneAllow.length > 0) {
+                overwrites.push({
+                    id: channel.guild.id,
+                    type: OverwriteType.Role,
+                    allow: everyoneAllow,
+                    deny: everyoneDeny,
+                });
+            }
             for (const perm of dbState.permissions || []) {
                 if (perm.permission === 'permit') {
                     overwrites.push({
