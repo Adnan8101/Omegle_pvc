@@ -103,6 +103,7 @@ export class VoiceStateService {
                 where: { channelId },
                 data: { isLocked },
             });
+            console.log(`[VoiceStateService] ✅ Updated PVC ${channelId} in DB: isLocked=${isLocked}`);
         } else {
             const team = await prisma.teamVoiceChannel.findUnique({ where: { channelId } });
             if (team) {
@@ -110,6 +111,10 @@ export class VoiceStateService {
                     where: { channelId },
                     data: { isLocked },
                 });
+                console.log(`[VoiceStateService] ✅ Updated Team ${channelId} in DB: isLocked=${isLocked}`);
+            } else {
+                console.error(`[VoiceStateService] ❌ Channel ${channelId} NOT FOUND in database! Cannot set lock state.`);
+                return; // Don't proceed if channel not in DB
             }
         }
         

@@ -377,7 +377,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                         
                         console.log(`[Refresh PVC] Orphan PVC ${channelId} state: isLocked=${isLocked}, isHidden=${isHidden}`);
                         
-                        await prisma.privateVoiceChannel.create({
+                        const createdPvc = await prisma.privateVoiceChannel.create({
                             data: {
                                 channelId: channelId,
                                 guildId: guild.id,
@@ -386,6 +386,17 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                                 isHidden: isHidden,
                             },
                         });
+                        
+                        // Verify it was actually saved
+                        const verification = await prisma.privateVoiceChannel.findUnique({
+                            where: { channelId: channelId }
+                        });
+                        if (!verification) {
+                            console.error(`[Refresh PVC] ❌ CRITICAL: PVC ${channelId} created but NOT in database!`);
+                        } else {
+                            console.log(`[Refresh PVC] ✅ Verified PVC ${channelId} persisted in DB`);
+                        }
+                        
                         registerChannel(channelId, guild.id, ownerId);
                         orphanPvcsAdded++;
                         console.log(`[Refresh PVC] ✅ Added orphan PVC ${channelId} to database`);
