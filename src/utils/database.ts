@@ -199,14 +199,14 @@ function startHealthCheck(): void {
             connectAsync();
             return;
         }
+        
         try {
             await prisma.$queryRaw`SELECT 1 as ping`;
-            5 minutes (10 health checks)
+            
             cleanupCounter++;
             if (cleanupCounter >= 10) {
                 cleanupCounter = 0;
-                await cleanupCounter = 0;
-                killIdleConnections();
+                await killIdleConnections();
             }
         } catch (err) {
             console.warn('[DB] ⚠️ Health check failed, marking disconnected');
@@ -239,25 +239,36 @@ function shutdown(): void {
             process.exit(1);
         });
 }
+
 if (!globalForPrisma.prisma) {
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);
-    proKill idle connections from previous instances
+    process.on('exit', shutdown);
+}
+
+(async () => {
+    console.log(`[DB] 🚀 High-Load Mode | Pool: ${CONFIG.POOL_SIZE} connections | Timeout: ${CONFIG.POOL_TIMEOUT}s | Retries: ${CONFIG.MAX_RETRIES}`);
+    console.log(`[DB] ⚡ Optimized for 1000+ concurrent PVC operations`);
+    
+    try {
+        await prisma.$disconnect();
+        console.log('[DB] 🧹 Disconnected stale connections');
+    } catch (err) {
+    }
+    
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    
+    await connectAsync();
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
     try {
         await killIdleConnections();
     } catch (err) {
     }
-}
-(async () => {
-    console.log(`[DB] 🚀 Minimal Pool Mode | Pool: ${CONFIG.POOL_SIZE} connections | Timeout: ${CONFIG.POOL_TIMEOUT}s | Retries: ${CONFIG.MAX_RETRIES}`);
-    console.log(`[DB] 💡 Using minimal pool to prevent "too many connections" errors`);
-    try {
-        await prisma.$disconnect();
-        console.log('[DB] 🧹 Cleaned up stale connections from previous instance');
-    } catch (err) {
-    }
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    connectAsync();
+    
+    startHealthCheck();
+    startMetrics();
+})();
     startHealthCheck();
     startMetrics();
 })();
