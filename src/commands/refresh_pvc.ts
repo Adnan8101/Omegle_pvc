@@ -713,10 +713,21 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             try {
                 const permanentPerms = await getPermanentPermissionsAndCache(guild.id, pvc.ownerId);
                 const permanentUserIds = new Set(permanentPerms.map(p => p.targetId));
-                const currentMemberIds = channel.members
-                    .filter(m => m.id !== pvc.ownerId && !m.user.bot)
-                    .map(m => m.id);
-                const allAllowedIds = new Set([...permanentUserIds, ...currentMemberIds]);
+                
+                // Validate that current members actually exist in the guild
+                const validatedMemberIds: string[] = [];
+                for (const member of channel.members.values()) {
+                    if (member.id === pvc.ownerId || member.user.bot) continue;
+                    // Verify the member still exists in guild
+                    const guildMember = await guild.members.fetch(member.id).catch(() => null);
+                    if (guildMember) {
+                        validatedMemberIds.push(member.id);
+                    } else {
+                        console.log(`[Refresh PVC] ⚠️ Member ${member.id} in channel but not in guild - skipping`);
+                    }
+                }
+                
+                const allAllowedIds = new Set([...permanentUserIds, ...validatedMemberIds]);
                 await prisma.voicePermission.deleteMany({
                     where: { channelId: pvc.channelId, permission: 'permit' },
                 });
@@ -739,17 +750,27 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 // Verify owner exists before setting permissions
                 const ownerMember = await guild.members.fetch(pvc.ownerId).catch(() => null);
                 if (ownerMember) {
-                    await channel.permissionOverwrites.edit(pvc.ownerId, {
-                        ViewChannel: true, Connect: true, Speak: true, Stream: true,
-                        SendMessages: true, EmbedLinks: true, AttachFiles: true,
-                        MuteMembers: true, DeafenMembers: true, ManageChannels: true,
-                    }).catch(err => console.error(`[Refresh PVC] Failed to set owner permissions for ${pvc.ownerId}:`, err.message));
+                    try {
+                        await channel.permissionOverwrites.edit(ownerMember, {
+                            ViewChannel: true, Connect: true, Speak: true, Stream: true,
+                            SendMessages: true, EmbedLinks: true, AttachFiles: true,
+                            MuteMembers: true, DeafenMembers: true, ManageChannels: true,
+                        });
+                    } catch (err: any) {
+                        console.error(`[Refresh PVC] Failed to set owner permissions for ${pvc.ownerId}:`, err.message);
+                    }
                 } else {
                     console.log(`[Refresh PVC] ⚠️ Owner ${pvc.ownerId} not found in guild - skipping owner permissions`);
                 }
                 
                 // Set permissions for allowed users, with validation
                 for (const memberId of allAllowedIds) {
+                    // Validate memberId is a valid snowflake
+                    if (!memberId || typeof memberId !== 'string' || memberId.length < 17) {
+                        console.log(`[Refresh PVC] ⚠️ Invalid member ID: ${memberId} - skipping`);
+                        continue;
+                    }
+                    
                     // Validate user exists in guild
                     const member = await guild.members.fetch(memberId).catch(() => null);
                     if (!member) {
@@ -757,10 +778,14 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                         continue;
                     }
                     
-                    await channel.permissionOverwrites.edit(memberId, {
-                        ViewChannel: true, Connect: true,
-                        SendMessages: true, EmbedLinks: true, AttachFiles: true,
-                    }).catch(err => console.error(`[Refresh PVC] Failed to set permissions for ${memberId}:`, err.message));
+                    try {
+                        await channel.permissionOverwrites.edit(member, {
+                            ViewChannel: true, Connect: true,
+                            SendMessages: true, EmbedLinks: true, AttachFiles: true,
+                        });
+                    } catch (err: any) {
+                        console.error(`[Refresh PVC] Failed to set permissions for ${memberId}:`, err.message);
+                    }
                 }
                 const existingOverwrites = channel.permissionOverwrites.cache;
                 for (const [targetId, overwrite] of existingOverwrites) {
@@ -834,10 +859,21 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             try {
                 const permanentPerms = await getPermanentPermissionsAndCache(guild.id, tc.ownerId);
                 const permanentUserIds = new Set(permanentPerms.map(p => p.targetId));
-                const currentMemberIds = channel.members
-                    .filter(m => m.id !== tc.ownerId && !m.user.bot)
-                    .map(m => m.id);
-                const allAllowedIds = new Set([...permanentUserIds, ...currentMemberIds]);
+                
+                // Validate that current members actually exist in the guild
+                const validatedMemberIds: string[] = [];
+                for (const member of channel.members.values()) {
+                    if (member.id === tc.ownerId || member.user.bot) continue;
+                    // Verify the member still exists in guild
+                    const guildMember = await guild.members.fetch(member.id).catch(() => null);
+                    if (guildMember) {
+                        validatedMemberIds.push(member.id);
+                    } else {
+                        console.log(`[Refresh PVC] ⚠️ Team member ${member.id} in channel but not in guild - skipping`);
+                    }
+                }
+                
+                const allAllowedIds = new Set([...permanentUserIds, ...validatedMemberIds]);
                 await prisma.teamVoicePermission.deleteMany({
                     where: { channelId: tc.channelId, permission: 'permit' },
                 });
