@@ -38,7 +38,7 @@ export async function execute(client: PVCClient, channel: DMChannel | GuildChann
     if (channelState) {
         unregisterChannel(channelId);
         invalidateChannelPermissions(channelId);
-        await prisma.privateVoiceChannel.delete({
+        await prisma.privateVoiceChannel.deleteMany({
             where: { channelId },
         }).catch(() => { });
         return;
@@ -47,7 +47,7 @@ export async function execute(client: PVCClient, channel: DMChannel | GuildChann
     if (teamChannelState) {
         unregisterTeamChannel(channelId);
         invalidateChannelPermissions(channelId);
-        await prisma.teamVoiceChannel.delete({
+        await prisma.teamVoiceChannel.deleteMany({
             where: { channelId },
         }).catch(() => { });
         await prisma.teamVoicePermission.deleteMany({

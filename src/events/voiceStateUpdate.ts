@@ -898,12 +898,12 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                 } else {
                     if (existingType === 'Team') {
                         unregisterTeamChannel(existingChannel);
-                        await prisma.teamVoiceChannel.delete({
+                        await prisma.teamVoiceChannel.deleteMany({
                             where: { channelId: existingChannel },
                         }).catch(() => { });
                     } else {
                         unregisterChannel(existingChannel);
-                        await prisma.privateVoiceChannel.delete({
+                        await prisma.privateVoiceChannel.deleteMany({
                             where: { channelId: existingChannel },
                         }).catch(() => { });
                     }
@@ -1264,7 +1264,7 @@ async function deletePrivateChannel(channelId: string, guildId: string): Promise
         const guild = client.guilds.cache.get(guildId);
         if (!guild) {
             unregisterChannel(channelId);
-            await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+            await prisma.privateVoiceChannel.deleteMany({ where: { channelId } }).catch(() => { });
             await prisma.voicePermission.deleteMany({ where: { channelId } }).catch(() => { });
             return;
         }
@@ -1302,7 +1302,7 @@ async function deletePrivateChannel(channelId: string, guildId: string): Promise
         invalidateChannelPermissions(channelId);
         
         await prisma.voicePermission.deleteMany({ where: { channelId } }).catch(() => { });
-        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+        await prisma.privateVoiceChannel.deleteMany({ where: { channelId } }).catch(() => { });
     }
 }
 async function createTeamChannel(client: PVCClient, state: VoiceState, teamType: TeamType): Promise<void> {
@@ -1376,12 +1376,12 @@ async function createTeamChannel(client: PVCClient, state: VoiceState, teamType:
                 } else {
                     if (existingType === 'Team') {
                         unregisterTeamChannel(existingChannel);
-                        await prisma.teamVoiceChannel.delete({
+                        await prisma.teamVoiceChannel.deleteMany({
                             where: { channelId: existingChannel },
                         }).catch(() => { });
                     } else {
                         unregisterChannel(existingChannel);
-                        await prisma.privateVoiceChannel.delete({
+                        await prisma.privateVoiceChannel.deleteMany({
                             where: { channelId: existingChannel },
                         }).catch(() => { });
                     }
