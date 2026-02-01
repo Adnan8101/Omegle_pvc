@@ -8,7 +8,7 @@ import {
 } from 'discord.js';
 import type { Command } from '../client';
 import { transferChannelOwnership } from '../utils/channelActions';
-import { isChannelOwner, getChannelState, getTeamChannelState } from '../utils/voiceManager';
+import { isChannelOwner, getChannelState, getTeamChannelState, transferOwnership, transferTeamOwnership } from '../utils/voiceManager';
 import { logAction, LogAction } from '../utils/logger';
 import prisma from '../utils/database';
 import { enforcer } from '../services/enforcerService';
@@ -69,14 +69,18 @@ export const command: Command = {
         await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
         try {
             if (isTeam) {
+                // Update voiceManager first
+                transferTeamOwnership(targetChannel.id, newOwnerUser.id);
+                // Then DB
                 await prisma.teamVoiceChannel.update({
                     where: { channelId: targetChannel.id },
                     data: { ownerId: newOwnerUser.id },
                 });
+                // Then stateStore
                 stateStore.updateChannelState(targetChannel.id, { ownerId: newOwnerUser.id });
                 await enforcer.enforceQuietly(targetChannel.id);
                 await logAction({
-                    action: LogAction.CHANNEL_CREATED,
+                    action: LogAction.CHANNEL_TRANSFERRED,
                     guild: interaction.guild,
                     user: newOwnerUser,
                     channelName: targetChannel.name,
@@ -85,6 +89,7 @@ export const command: Command = {
                     isTeamChannel: true,
                 });
             } else {
+                // transferChannelOwnership already updates voiceManager, DB, and stateStore
                 await transferChannelOwnership(
                     interaction.guild,
                     targetChannel.id,
@@ -93,7 +98,6 @@ export const command: Command = {
                     guildMember,
                     targetChannel.name || 'Voice Channel'
                 );
-                stateStore.updateChannelState(targetChannel.id, { ownerId: newOwnerUser.id });
             }
             await interaction.editReply({
                 content: `✅ Successfully force-transferred **${targetChannel.name}** to **${newOwnerUser.username}**.`,

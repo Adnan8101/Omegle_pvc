@@ -146,6 +146,7 @@ export interface ChannelState {
     ownerId: string;
     isLocked: boolean;
     isHidden: boolean;
+    userLimit: number;
     isTeamChannel: boolean;
     teamType?: 'DUO' | 'TRIO' | 'SQUAD';
     operationPending: boolean;

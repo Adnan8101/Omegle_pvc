@@ -42,7 +42,8 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         if (settings.interfaceTextId) {
             const channel = guild.channels.cache.get(settings.interfaceTextId);
             if (channel) {
-                await channel.delete().catch(() => {
+                await channel.delete().catch((err) => {
+                    console.error(`[PVC Delete] Failed to delete interface text channel ${settings.interfaceTextId}:`, err);
                     errors++;
                 });
                 channelsDeleted++;
@@ -51,7 +52,8 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         if (settings.interfaceVcId) {
             const channel = guild.channels.cache.get(settings.interfaceVcId);
             if (channel) {
-                await channel.delete().catch(() => {
+                await channel.delete().catch((err) => {
+                    console.error(`[PVC Delete] Failed to delete interface VC ${settings.interfaceVcId}:`, err);
                     errors++;
                 });
                 channelsDeleted++;
@@ -61,7 +63,8 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         for (const pvc of settings.privateChannels) {
             const channel = guild.channels.cache.get(pvc.channelId);
             if (channel) {
-                await channel.delete().catch(() => {
+                await channel.delete().catch((err) => {
+                    console.error(`[PVC Delete] Failed to delete PVC ${pvc.channelId}:`, err);
                     errors++;
                 });
                 channelsDeleted++;

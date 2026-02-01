@@ -5,6 +5,8 @@ import { transferOwnership as updateOwnershipMap, transferTeamOwnership, getTeam
 import { getOwnerPermissions as getCachedOwnerPerms, invalidateChannelPermissions } from './cache';
 import { logAction, LogAction } from './logger';
 import { recordBotEdit } from '../events/channelUpdate';
+import { stateStore } from '../vcns/index';
+
 export async function transferChannelOwnership(
     guild: Guild,
     channelId: string,
@@ -15,11 +17,17 @@ export async function transferChannelOwnership(
 ): Promise<void> {
     const teamState = getTeamChannelState(channelId);
     const isTeamChannel = Boolean(teamState);
+    
+    // Update voiceManager
     if (isTeamChannel) {
         transferTeamOwnership(channelId, newOwnerId);
     } else {
         updateOwnershipMap(channelId, newOwnerId);
     }
+    
+    // Also update stateStore for VCNS consistency
+    stateStore.transferOwnership(channelId, newOwnerId);
+    
     const channel = guild.channels.cache.get(channelId);
     if (!channel || !channel.isVoiceBased()) return;
     recordBotEdit(channelId);

@@ -41,7 +41,8 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         if (teamSettings.duoVcId) {
             const channel = guild.channels.cache.get(teamSettings.duoVcId);
             if (channel) {
-                await channel.delete().catch(() => {
+                await channel.delete().catch((err) => {
+                    console.error(`[Team Delete] Failed to delete duo VC ${teamSettings.duoVcId}:`, err);
                     errors++;
                 });
                 channelsDeleted++;
@@ -51,7 +52,8 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         if (teamSettings.trioVcId) {
             const channel = guild.channels.cache.get(teamSettings.trioVcId);
             if (channel) {
-                await channel.delete().catch(() => {
+                await channel.delete().catch((err) => {
+                    console.error(`[Team Delete] Failed to delete trio VC ${teamSettings.trioVcId}:`, err);
                     errors++;
                 });
                 channelsDeleted++;
@@ -61,7 +63,8 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         if (teamSettings.squadVcId) {
             const channel = guild.channels.cache.get(teamSettings.squadVcId);
             if (channel) {
-                await channel.delete().catch(() => {
+                await channel.delete().catch((err) => {
+                    console.error(`[Team Delete] Failed to delete squad VC ${teamSettings.squadVcId}:`, err);
                     errors++;
                 });
                 channelsDeleted++;
@@ -71,7 +74,8 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         for (const tc of teamSettings.teamChannels) {
             const channel = guild.channels.cache.get(tc.channelId);
             if (channel) {
-                await channel.delete().catch(() => {
+                await channel.delete().catch((err) => {
+                    console.error(`[Team Delete] Failed to delete team channel ${tc.channelId}:`, err);
                     errors++;
                 });
                 channelsDeleted++;

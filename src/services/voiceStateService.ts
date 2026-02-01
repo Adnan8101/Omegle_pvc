@@ -3,6 +3,8 @@ import prisma from '../utils/database';
 import { enforcer } from './enforcerService';
 import { invalidateChannelPermissions } from '../utils/cache';
 import { client } from '../client';
+import { stateStore } from '../vcns/index';
+
 export class VoiceStateService {
     static async getVCState(channelId: string): Promise<any | null> {
         let state = await prisma.privateVoiceChannel.findUnique({
@@ -25,6 +27,18 @@ export class VoiceStateService {
         const state = await this.getVCState(channelId);
         return state?.ownerId || null;
     }
+    
+    /**
+     * Sync channel state to stateStore after DB update
+     */
+    private static syncToStateStore(channelId: string, updates: Partial<{ isLocked: boolean; isHidden: boolean; userLimit: number }>): void {
+        const existing = stateStore.getChannelState(channelId);
+        if (existing) {
+            stateStore.updateChannelState(channelId, updates);
+            console.log(`[VoiceStateService] Synced state to stateStore for ${channelId}:`, updates);
+        }
+    }
+    
     static async setLock(channelId: string, isLocked: boolean): Promise<void> {
         if (isLocked) {
             const channel = client.channels.cache.get(channelId) as VoiceChannel | undefined;
@@ -95,6 +109,8 @@ export class VoiceStateService {
                 });
             }
         }
+        // Sync to stateStore
+        this.syncToStateStore(channelId, { isLocked });
         await enforcer.enforceQuietly(channelId);
     }
     static async setHidden(channelId: string, isHidden: boolean): Promise<void> {
@@ -113,6 +129,8 @@ export class VoiceStateService {
                 });
             }
         }
+        // Sync to stateStore
+        this.syncToStateStore(channelId, { isHidden });
         await enforcer.enforceQuietly(channelId);
     }
     static async setUserLimit(channelId: string, limit: number): Promise<void> {
@@ -131,6 +149,8 @@ export class VoiceStateService {
                 });
             }
         }
+        // Sync to stateStore
+        this.syncToStateStore(channelId, { userLimit: limit });
         await enforcer.enforceQuietly(channelId);
     }
     static async setBitrate(channelId: string, bitrate: number): Promise<void> {

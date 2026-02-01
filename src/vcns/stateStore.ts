@@ -335,6 +335,7 @@ export class StateStore extends EventEmitter {
         isHidden: boolean,
         isTeamChannel: boolean,
         teamType?: 'DUO' | 'TRIO' | 'SQUAD',
+        userLimit: number = 0,
     ): void {
         const state: ChannelState = {
             channelId,
@@ -342,6 +343,7 @@ export class StateStore extends EventEmitter {
             ownerId,
             isLocked,
             isHidden,
+            userLimit,
             isTeamChannel,
             teamType,
             operationPending: false,

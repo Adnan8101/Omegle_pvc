@@ -104,8 +104,9 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             });
         }
         await interaction.editReply({ embeds: [embed] });
-    } catch {
-        await interaction.editReply('Failed to get PVC status.');
+    } catch (err) {
+        console.error('[PVC Status] Failed to get status:', err);
+        await interaction.editReply('Failed to get PVC status. Check logs for details.');
     }
 }
 export const command: Command = {

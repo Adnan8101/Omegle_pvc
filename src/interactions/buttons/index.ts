@@ -14,8 +14,9 @@ import {
     ButtonStyle,
     MessageFlags,
 } from 'discord.js';
-import { getChannelByOwner, getChannelState, transferOwnership, unregisterChannel, getGuildChannels, addTempPermittedUsers, getTeamChannelByOwner, getTeamChannelState } from '../../utils/voiceManager';
+import { getChannelByOwner, getChannelState, transferOwnership, unregisterChannel, getGuildChannels, addTempPermittedUsers, getTeamChannelByOwner, getTeamChannelState, transferTeamOwnership, registerChannel, registerTeamChannel } from '../../utils/voiceManager';
 import { vcnsBridge } from '../../vcns/bridge';
+import { stateStore } from '../../vcns/index';
 import { safeEditPermissions, validateVoiceChannel } from '../../utils/discordApi';
 import { VoiceStateService } from '../../services/voiceStateService';
 import prisma from '../../utils/database';
@@ -510,11 +511,41 @@ async function handleClaim(
         await interaction.reply({ content: 'You must be in a voice channel to claim it.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-    const channelState = getChannelState(voiceChannelId);
-    if (!channelState) {
+    
+    // Check memory first (both PVC and Team), then fallback to DB
+    let channelState = getChannelState(voiceChannelId);
+    let teamChannelState = getTeamChannelState(voiceChannelId);
+    let isTeamChannel = false;
+    let ownerId: string | undefined;
+    
+    if (channelState) {
+        ownerId = channelState.ownerId;
+    } else if (teamChannelState) {
+        ownerId = teamChannelState.ownerId;
+        isTeamChannel = true;
+    } else {
+        // Fallback to DB
+        const pvcData = await prisma.privateVoiceChannel.findUnique({ where: { channelId: voiceChannelId } });
+        const teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({ where: { channelId: voiceChannelId } }) : null;
+        if (pvcData) {
+            ownerId = pvcData.ownerId;
+            // Register in memory for future use
+            registerChannel(voiceChannelId, pvcData.guildId, pvcData.ownerId);
+            channelState = getChannelState(voiceChannelId);
+        } else if (teamData) {
+            ownerId = teamData.ownerId;
+            isTeamChannel = true;
+            // Register in memory for future use
+            registerTeamChannel(voiceChannelId, teamData.guildId, teamData.ownerId, teamData.teamType.toLowerCase() as any);
+            teamChannelState = getTeamChannelState(voiceChannelId);
+        }
+    }
+    
+    if (!ownerId) {
         await interaction.reply({ content: 'This is not a private voice channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
+    
     const userId = interaction.user.id;
     const guild = interaction.guild!;
     const channel = guild.channels.cache.get(voiceChannelId);
@@ -522,17 +553,28 @@ async function handleClaim(
         await interaction.reply({ content: 'Channel not found.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-    if (channel.members.has(channelState.ownerId)) {
+    if (channel.members.has(ownerId)) {
         await interaction.reply({ content: 'The owner is still in the channel. You cannot claim it.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-    transferOwnership(voiceChannelId, userId);
+    
+    // Transfer ownership in memory
+    if (isTeamChannel) {
+        transferTeamOwnership(voiceChannelId, userId);
+        // Also update stateStore if it exists there
+        stateStore.transferOwnership(voiceChannelId, userId);
+    } else {
+        transferOwnership(voiceChannelId, userId);
+        // Also update stateStore if it exists there
+        stateStore.transferOwnership(voiceChannelId, userId);
+    }
+    
     const newOwner = await guild.members.fetch(userId);
     recordBotEdit(voiceChannelId);
     await vcnsBridge.removePermission({
         guild,
         channelId: voiceChannelId,
-        targetId: channelState.ownerId,
+        targetId: ownerId,
     }).catch(() => { });
     await vcnsBridge.editPermission({
         guild,
@@ -545,10 +587,20 @@ async function handleClaim(
         },
     });
     await channel.setName(newOwner.displayName).catch(() => { });
-    await prisma.privateVoiceChannel.update({
-        where: { channelId: voiceChannelId },
-        data: { ownerId: userId },
-    });
+    
+    // Update DB based on channel type
+    if (isTeamChannel) {
+        await prisma.teamVoiceChannel.update({
+            where: { channelId: voiceChannelId },
+            data: { ownerId: userId },
+        }).catch((err: any) => console.error('[handleClaim] Failed to update team channel DB:', err));
+    } else {
+        await prisma.privateVoiceChannel.update({
+            where: { channelId: voiceChannelId },
+            data: { ownerId: userId },
+        }).catch((err: any) => console.error('[handleClaim] Failed to update PVC DB:', err));
+    }
+    
     await interaction.reply({ content: '👑 You have claimed ownership of this voice channel.', flags: [MessageFlags.Ephemeral] });
 }
 async function handleDelete(interaction: ButtonInteraction): Promise<void> {

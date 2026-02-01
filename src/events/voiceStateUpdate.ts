@@ -267,26 +267,59 @@ async function handleAccessProtection(
         w => w.targetId === member.id || memberRoleIds.includes(w.targetId)
     );
     
+    // Check channel restrictions FIRST before strictness
+    const isLocked = dbState.isLocked;
+    const isHidden = dbState.isHidden;
+    
+    let isFull = false;
+    let actualMembers = 0;
+    
+    // Capacity check logic
+    if ('teamType' in dbState && dbState.teamType) {
+        const teamTypeLower = (dbState.teamType as string).toLowerCase() as keyof typeof TEAM_USER_LIMITS;
+        const teamLimit = TEAM_USER_LIMITS[teamTypeLower];
+        if (teamLimit) {
+            const voiceChannel = newState.channel;
+            if (voiceChannel && voiceChannel.type === ChannelType.GuildVoice) {
+                actualMembers = voiceChannel.members.size;
+                isFull = actualMembers > teamLimit;
+            }
+        }
+    } else {
+        const voiceChannel = newState.channel;
+        if (voiceChannel && voiceChannel.type === ChannelType.GuildVoice) {
+            actualMembers = voiceChannel.members.size;
+            isFull = dbState.userLimit > 0 && actualMembers > dbState.userLimit;
+        }
+    }
+    
+    const isRestricted = isLocked || isHidden || isFull;
+    
     console.log(`[VCNS-ACCESS] 👨‍💼 Admin evaluation for ${member.user.tag}:`, {
         hasAdminPerm,
         strictnessEnabled: !!strictnessEnabled,
         isWhitelisted,
         isTeamChannel,
-        hasChannelPermit
+        hasChannelPermit,
+        isLocked,
+        isHidden,
+        isFull,
+        isRestricted
     });
     
-    // ADMIN STRICTNESS: When enabled, ONLY whitelisted OR permitted users can access
-    // Non-whitelisted/non-permitted users are INSTANTLY kicked regardless of channel state
-    if (strictnessEnabled) {
+    // ADMIN STRICTNESS: ONLY applies when channel is RESTRICTED (locked, hidden, or full)
+    // When channel is OPEN, strictness does NOT apply - anyone can join
+    if (strictnessEnabled && isRestricted) {
         if (isWhitelisted) {
-            console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} is WHITELISTED - access granted (strictness ON)`);
+            console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} is WHITELISTED - access granted (strictness ON, channel restricted)`);
             return false; 
         }
         
-        // NOT whitelisted + strictness ON = INSTANT KICK + DM + LOG
-        console.log(`[VCNS-ACCESS] 🚨 STRICTNESS VIOLATION: ${member.user.tag} is NOT whitelisted and has no permit - INSTANT KICK`);
+        // NOT whitelisted + strictness ON + channel RESTRICTED = INSTANT KICK + DM + LOG
+        console.log(`[VCNS-ACCESS] 🚨 STRICTNESS VIOLATION: ${member.user.tag} is NOT whitelisted, channel is restricted - INSTANT KICK`);
         
         const channelTypeName = isTeamChannel ? 'team voice channel' : 'voice channel';
+        const restrictionReason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
         
         // INSTANT KICK - bypass queue for immediate enforcement
         try {
@@ -294,14 +327,14 @@ async function handleAccessProtection(
                 guild,
                 channelId: newChannelId,
                 userId: member.id,
-                reason: 'Admin strictness: not whitelisted',
+                reason: `Admin strictness: not whitelisted (channel ${restrictionReason})`,
                 isImmediate: true, // IMMEDIATE - strictness violations must be instant
             });
         } catch (err) {
             console.error(`[VCNS-ACCESS] ❌ Failed to kick non-whitelisted user ${member.id}:`, err);
         }
         
-        console.log(`[VCNS-ACCESS] ✅ Strictness enforcement - ${member.user.tag} KICKED (not whitelisted)`);
+        console.log(`[VCNS-ACCESS] ✅ Strictness enforcement - ${member.user.tag} KICKED (not whitelisted, channel ${restrictionReason})`);
         
         // DM the user
         const embed = new EmbedBuilder()
@@ -309,7 +342,7 @@ async function handleAccessProtection(
             .setTitle('🚫 Access Denied - Admin Strictness')
             .setDescription(
                 `You were **instantly disconnected** from **${channel.name}** in **${guild.name}**.\n\n` +
-                `**Reason:** Admin Strictness mode is enabled. Only authorized users can access voice channels.\n\n` +
+                `**Reason:** Admin Strictness mode is enabled and the channel is **${restrictionReason}**. Only authorized users can access restricted voice channels.\n\n` +
                 `Contact a server administrator if you believe this is an error.`
             )
             .setTimestamp();
@@ -329,46 +362,22 @@ async function handleAccessProtection(
         return true;
     }
     
-    const isLocked = dbState.isLocked;
-    const isHidden = dbState.isHidden;
-    
+    // Channel is OPEN or strictness is OFF - check normal restrictions
     console.log(`[VCNS-ACCESS] 🔒 Channel restrictions:`, {
         isLocked,
         isHidden,
-        hasUserLimit: dbState.userLimit > 0
+        isFull,
+        userLimit: dbState.userLimit
     });
     
-    let isFull = false;
-    let actualMembers = 0;
-    
-    // Capacity check logic with detailed logging
-    if ('teamType' in dbState && dbState.teamType) {
-        const teamTypeLower = (dbState.teamType as string).toLowerCase() as keyof typeof TEAM_USER_LIMITS;
-        const teamLimit = TEAM_USER_LIMITS[teamTypeLower];
-        if (teamLimit) {
-            const voiceChannel = newState.channel;
-            if (voiceChannel && voiceChannel.type === ChannelType.GuildVoice) {
-                actualMembers = voiceChannel.members.size;
-                isFull = actualMembers > teamLimit;
-                console.log(`[VCNS-ACCESS] 👥 Team channel capacity: ${actualMembers}/${teamLimit} (${teamTypeLower}) - Full: ${isFull}`);
-            }
-        }
-    } else {
-        const voiceChannel = newState.channel;
-        if (voiceChannel && voiceChannel.type === ChannelType.GuildVoice) {
-            actualMembers = voiceChannel.members.size;
-            isFull = dbState.userLimit > 0 && actualMembers > dbState.userLimit;
-            console.log(`[VCNS-ACCESS] 👥 Channel capacity: ${actualMembers}/${dbState.userLimit || 'unlimited'} - Full: ${isFull}`);
-        }
-    }
-    
-    if (!isLocked && !isHidden && !isFull) {
+    if (!isRestricted) {
         console.log(`[VCNS-ACCESS] ✅ Channel is open and not full - access granted for ${member.user.tag}`);
         return false;
     }
     
-    // Channel permit was already checked earlier - if we reach here, user has no permit
-    console.log(`[VCNS-ACCESS] 🔍 User ${member.user.tag} has no permits and channel is restricted`);
+    // Channel IS restricted but strictness is OFF - apply normal access rules
+    console.log(`[VCNS-ACCESS] 🔍 User ${member.user.tag} has no permits and channel is restricted (strictness OFF)`);
+    
     if (isFull) {
         // NO BYPASS - even admins/server owner need AU or permanent access
         console.log(`[VCNS-ACCESS] 🚫 Channel is FULL - kicking ${member.user.tag} (no AU or permanent access)`);

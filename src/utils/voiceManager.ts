@@ -68,6 +68,23 @@ export function registerChannel(channelId: string, guildId: string, ownerId: str
     };
     channelStates.set(channelId, state);
     ownerToChannel.set(`${guildId}:${ownerId}`, channelId);
+    
+    // Also register in stateStore for VCNS consistency (async, fire and forget)
+    import('../vcns/index').then(({ stateStore }) => {
+        if (!stateStore.getChannelState(channelId)) {
+            stateStore.registerChannel({
+                channelId,
+                guildId,
+                ownerId,
+                isLocked: false,
+                isHidden: false,
+                userLimit: 0,
+                isTeamChannel: false,
+                operationPending: false,
+                lastModified: Date.now(),
+            });
+        }
+    }).catch(() => {}); // Ignore if VCNS not ready yet
 }
 export function unregisterChannel(channelId: string): void {
     const state = channelStates.get(channelId);
@@ -77,6 +94,11 @@ export function unregisterChannel(channelId: string): void {
     }
     joinOrder.delete(channelId);
     tempPermittedUsers.delete(channelId);
+    
+    // Also unregister from stateStore
+    import('../vcns/index').then(({ stateStore }) => {
+        stateStore.unregisterChannel(channelId);
+    }).catch(() => {});
 }
 export function getChannelState(channelId: string): VoiceChannelState | undefined {
     return channelStates.get(channelId);
@@ -232,6 +254,24 @@ export function registerTeamChannel(channelId: string, guildId: string, ownerId:
     };
     teamChannelStates.set(channelId, state);
     teamOwnerToChannel.set(`${guildId}:${ownerId}`, channelId);
+    
+    // Also register in stateStore for VCNS consistency
+    import('../vcns/index').then(({ stateStore }) => {
+        if (!stateStore.getChannelState(channelId)) {
+            stateStore.registerChannel({
+                channelId,
+                guildId,
+                ownerId,
+                isLocked: false,
+                isHidden: false,
+                userLimit: 0,
+                isTeamChannel: true,
+                teamType: teamType.toUpperCase() as 'DUO' | 'TRIO' | 'SQUAD',
+                operationPending: false,
+                lastModified: Date.now(),
+            });
+        }
+    }).catch(() => {});
 }
 export function unregisterTeamChannel(channelId: string): void {
     const state = teamChannelStates.get(channelId);
@@ -241,6 +281,11 @@ export function unregisterTeamChannel(channelId: string): void {
     }
     joinOrder.delete(channelId);
     tempPermittedUsers.delete(channelId);
+    
+    // Also unregister from stateStore
+    import('../vcns/index').then(({ stateStore }) => {
+        stateStore.unregisterChannel(channelId);
+    }).catch(() => {});
 }
 export function getTeamChannelState(channelId: string): TeamChannelState | undefined {
     return teamChannelStates.get(channelId);
@@ -272,6 +317,8 @@ export async function loadAllTeamInterfaces(): Promise<void> {
             if (settings.trioVcId) registerTeamInterfaceChannel(settings.guildId, 'trio', settings.trioVcId);
             if (settings.squadVcId) registerTeamInterfaceChannel(settings.guildId, 'squad', settings.squadVcId);
         }
+        console.log(`[VoiceManager] Loaded ${allTeamSettings.length} team interface configurations`);
     } catch (error) {
-        }
+        console.error('[VoiceManager] Failed to load team interfaces:', error);
+    }
 }

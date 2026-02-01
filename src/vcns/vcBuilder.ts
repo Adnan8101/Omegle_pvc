@@ -78,6 +78,7 @@ export async function buildVC(options: VCBuildOptions): Promise<VCBuildResult> {
             ownerId,
             isLocked: false, // OPEN by default - everyone can join
             isHidden: false,
+            userLimit: userLimit ?? 0,
             isTeamChannel,
             teamType,
             operationPending: false,

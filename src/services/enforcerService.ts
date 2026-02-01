@@ -287,9 +287,11 @@ class EnforcerService {
                 continue;
             }
             
-            // ADMIN STRICTNESS: When enabled, ONLY whitelisted users can stay in ANY channel
-            // Check strictness FIRST before any other access checks
-            if (strictnessEnabled) {
+            // ADMIN STRICTNESS: ONLY applies when channel is RESTRICTED (locked, hidden, or full)
+            // When channel is open, strictness does NOT apply - anyone can stay
+            const isRestricted = isLocked || isHidden || isFull;
+            
+            if (strictnessEnabled && isRestricted) {
                 const isWhitelisted = whitelist.some(
                     w => w.targetId === memberId || memberRoleIds.includes(w.targetId)
                 );
@@ -297,8 +299,10 @@ class EnforcerService {
                 console.log(`[Enforcer-Strictness] 🔍 Checking ${member.user.tag}:`, {
                     memberId,
                     isWhitelisted,
-                    whitelistCount: whitelist.length,
-                    memberRoles: memberRoleIds.length
+                    isRestricted,
+                    isLocked,
+                    isHidden,
+                    isFull
                 });
                 
                 if (isWhitelisted) {
@@ -307,16 +311,16 @@ class EnforcerService {
                     continue;
                 }
                 
-                // NOT whitelisted + strictness ON = INSTANT KICK
-                console.log(`[Enforcer-Strictness] 🚨 ${member.user.tag} is NOT whitelisted - INSTANT KICK`);
-                await this.kickMemberInstantly(member, channel.name, dbState.ownerId, 'not whitelisted (admin strictness)');
+                // NOT whitelisted + strictness ON + channel RESTRICTED = INSTANT KICK
+                const restrictionReason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
+                console.log(`[Enforcer-Strictness] 🚨 ${member.user.tag} is NOT whitelisted, channel is ${restrictionReason} - INSTANT KICK`);
+                await this.kickMemberInstantly(member, channel.name, dbState.ownerId, `not whitelisted - channel ${restrictionReason} (admin strictness)`);
                 continue;
             }
             
-            // Strictness is OFF - apply normal access rules
-            // But STILL enforce locked/hidden/full - NO ONE bypasses without AU or permanent access
-            if (!isLocked && !isHidden && !isFull) {
-                console.log(`[Enforcer] ✅ Channel open - ${member.user.tag} allowed (strictness OFF)`);
+            // Strictness is OFF OR channel is OPEN - apply normal access rules
+            if (!isRestricted) {
+                console.log(`[Enforcer] ✅ Channel open - ${member.user.tag} allowed (strictness ${strictnessEnabled ? 'ON but channel open' : 'OFF'})`);
                 continue;
             }
             

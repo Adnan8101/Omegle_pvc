@@ -1283,8 +1283,6 @@ async function handleGiveawayPrefixCommand(message: Message, commandName: string
     if (!command) {
         return;
     }
-
-    // Parse arguments
     const args = message.content.slice(1).trim().split(/\s+/).slice(1);
 
     // Check if command has prefix handler

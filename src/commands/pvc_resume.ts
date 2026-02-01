@@ -45,7 +45,9 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     try {
                         const pauseMessage = await interfaceChannel.messages.fetch(pauseMessageId);
                         await pauseMessage.delete();
-                    } catch { }
+                    } catch (err) {
+                        console.log(`[PVC Resume] Could not delete pause message ${pauseMessageId}:`, err);
+                    }
                     clearPauseMessageId(guildId);
                 }
                 const resumeEmbed = new EmbedBuilder()
@@ -66,7 +68,9 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 setTimeout(async () => {
                     try {
                         await resumeMessage.delete();
-                    } catch { }
+                    } catch (err) {
+                        console.log(`[PVC Resume] Could not delete resume notification:`, err);
+                    }
                 }, 30000);
             }
         }
@@ -84,7 +88,8 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             '• Text commands are enabled\n\n' +
             'The system is now fully operational!'
         );
-    } catch {
+    } catch (err) {
+        console.error('[PVC Resume] Failed to resume PVC system:', err);
         await interaction.editReply('❌ Failed to resume the PVC system. Please try again.');
     }
 }
