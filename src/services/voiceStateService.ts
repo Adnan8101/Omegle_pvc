@@ -7,17 +7,37 @@ import { stateStore } from '../vcns/index';
 
 export class VoiceStateService {
     static async getVCState(channelId: string): Promise<any | null> {
-        let state = await prisma.privateVoiceChannel.findUnique({
-            where: { channelId },
-            include: { permissions: true },
-        });
-        if (!state) {
+        try {
+            console.log(`[VoiceStateService] 🔍 getVCState called for channelId: ${channelId}`);
+            
+            let state = await prisma.privateVoiceChannel.findUnique({
+                where: { channelId },
+                include: { permissions: true },
+            });
+            
+            if (state) {
+                console.log(`[VoiceStateService] ✅ Found PVC in DB: channelId=${channelId}, ownerId=${state.ownerId}, isLocked=${state.isLocked}`);
+                return state;
+            }
+            
+            console.log(`[VoiceStateService] ⚠️ Not found in privateVoiceChannel, checking teamVoiceChannel...`);
+            
             state = await prisma.teamVoiceChannel.findUnique({
                 where: { channelId },
                 include: { permissions: true },
             }) as any;
+            
+            if (state) {
+                console.log(`[VoiceStateService] ✅ Found Team VC in DB: channelId=${channelId}, ownerId=${state.ownerId}`);
+                return state;
+            }
+            
+            console.log(`[VoiceStateService] ❌ Channel ${channelId} NOT FOUND in any database table`);
+            return null;
+        } catch (error: any) {
+            console.error(`[VoiceStateService] ❌ Database error querying channel ${channelId}:`, error.message);
+            return null;
         }
-        return state;
     }
     static async isManaged(channelId: string): Promise<boolean> {
         const state = await this.getVCState(channelId);
@@ -103,7 +123,14 @@ export class VoiceStateService {
                 where: { channelId },
                 data: { isLocked },
             });
-            console.log(`[VoiceStateService] ✅ Updated PVC ${channelId} in DB: isLocked=${isLocked}`);
+            
+            // Verify the update was successful
+            const verification = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+            if (verification?.isLocked !== isLocked) {
+                console.error(`[VoiceStateService] ❌ Lock update verification FAILED! Expected isLocked=${isLocked}, got isLocked=${verification?.isLocked}`);
+            } else {
+                console.log(`[VoiceStateService] ✅ Updated and VERIFIED PVC ${channelId} in DB: isLocked=${isLocked}`);
+            }
         } else {
             const team = await prisma.teamVoiceChannel.findUnique({ where: { channelId } });
             if (team) {
@@ -111,9 +138,16 @@ export class VoiceStateService {
                     where: { channelId },
                     data: { isLocked },
                 });
-                console.log(`[VoiceStateService] ✅ Updated Team ${channelId} in DB: isLocked=${isLocked}`);
+                
+                // Verify the update was successful
+                const verification = await prisma.teamVoiceChannel.findUnique({ where: { channelId } });
+                if (verification?.isLocked !== isLocked) {
+                    console.error(`[VoiceStateService] ❌ Team lock update verification FAILED! Expected isLocked=${isLocked}, got isLocked=${verification?.isLocked}`);
+                } else {
+                    console.log(`[VoiceStateService] ✅ Updated and VERIFIED Team ${channelId} in DB: isLocked=${isLocked}`);
+                }
             } else {
-                console.error(`[VoiceStateService] ❌ Channel ${channelId} NOT FOUND in database! Cannot set lock state.`);
+                console.error(`[VoiceStateService] ❌ CRITICAL: Channel ${channelId} NOT FOUND in database! Cannot set lock state. This channel needs /refresh_pvc to be re-registered.`);
                 return; // Don't proceed if channel not in DB
             }
         }

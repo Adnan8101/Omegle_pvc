@@ -148,12 +148,7 @@ async function handleAccessProtection(
         console.log(`[VCNS-ACCESS] ✅ Globally blocked user ${member.user.tag} kick initiated`);
         const embed = new EmbedBuilder()
             .setColor(0xFF0000)
-            .setTitle('🚫 Global Voice Block')
-            .setDescription(
-                `You are **GLOBALLY BLOCKED** from joining any voice channel in **${guild.name}**.\n\n` +
-                `**Reason:** ${globalBlock.reason || 'No reason provided'}\n\n` +
-                `Contact server administrators for assistance.`
-            )
+            .setDescription(`You don't have access to voice channels in **${guild.name}**.\n\nContact server administrators.`)
             .setTimestamp();
         member.send({ embeds: [embed] }).catch(() => { });
         logAction({
@@ -162,15 +157,60 @@ async function handleAccessProtection(
             user: member.user,
             channelName: `Channel ${newChannelId}`,
             channelId: newChannelId,
-            details: `Globally blocked user attempted to join`,
+            details: `Blocked`,
             isTeamChannel: false,
         }).catch(() => { });
         return true;
     }
-    const dbState = await VoiceStateService.getVCState(newChannelId);
+    let dbState = await VoiceStateService.getVCState(newChannelId);
     if (!dbState) {
-        console.log(`[VCNS-ACCESS] ⚠️ Channel ${newChannelId} not in DB - not a managed PVC, allowing access`);
-        return false;
+        // Check if channel exists in memory stateStore but not DB (orphan case)
+        const memoryState = stateStore.getChannelState(newChannelId);
+        if (memoryState) {
+            console.log(`[VCNS-ACCESS] ⚠️ Channel ${newChannelId} in MEMORY but not DB - attempting auto-recovery...`);
+            try {
+                // Try to add to database
+                if (memoryState.isTeamChannel) {
+                    await prisma.teamVoiceChannel.create({
+                        data: {
+                            channelId: newChannelId,
+                            guildId: memoryState.guildId,
+                            ownerId: memoryState.ownerId,
+                            teamType: (memoryState.teamType?.toUpperCase() as 'DUO' | 'TRIO' | 'SQUAD') || 'DUO',
+                            isLocked: memoryState.isLocked || false,
+                            isHidden: memoryState.isHidden || false,
+                        },
+                    });
+                } else {
+                    await prisma.privateVoiceChannel.create({
+                        data: {
+                            channelId: newChannelId,
+                            guildId: memoryState.guildId,
+                            ownerId: memoryState.ownerId,
+                            isLocked: memoryState.isLocked || false,
+                            isHidden: memoryState.isHidden || false,
+                        },
+                    });
+                }
+                console.log(`[VCNS-ACCESS] ✅ Auto-recovered channel ${newChannelId} to database!`);
+                // Re-query to get proper state with permissions
+                dbState = await VoiceStateService.getVCState(newChannelId);
+                if (dbState) {
+                    console.log(`[VCNS-ACCESS] ✅ Verified auto-recovery, continuing with access protection`);
+                } else {
+                    console.log(`[VCNS-ACCESS] ❌ Auto-recovery verification failed - allowing access`);
+                    return false;
+                }
+            } catch (recoveryErr: any) {
+                console.error(`[VCNS-ACCESS] ❌ Auto-recovery failed:`, recoveryErr.message);
+                // Still allow access since we can't enforce
+                console.log(`[VCNS-ACCESS] ⚠️ Channel ${newChannelId} not in DB - allowing access (recovery failed)`);
+                return false;
+            }
+        } else {
+            console.log(`[VCNS-ACCESS] ⚠️ Channel ${newChannelId} not in DB or memory - not a managed PVC, allowing access`);
+            return false;
+        }
     }
     const channel = guild.channels.cache.get(newChannelId);
     if (!channel || channel.type !== ChannelType.GuildVoice) {
@@ -207,10 +247,8 @@ async function handleAccessProtection(
         const ownerName = owner?.displayName || 'the owner';
         const embed = new EmbedBuilder()
             .setColor(0xFF0000)
-            .setTitle('🚫 Blocked')
             .setDescription(
-                `You are **BLOCKED** from **${channel.name}** by ${ownerName}.\n\n` +
-                `You cannot join this channel until you are unblocked.`
+                `You don't have access to **${channel.name}**.\n\nAsk **${ownerName}** to unblock you.`
             )
             .setTimestamp();
         member.send({ embeds: [embed] }).catch(() => { });
@@ -220,7 +258,7 @@ async function handleAccessProtection(
             user: member.user,
             channelName: channel.name,
             channelId: newChannelId,
-            details: `Blocked user attempted to join`,
+            details: `Blocked`,
             isTeamChannel: false,
         }).catch(() => { });
         return true;
@@ -337,13 +375,12 @@ async function handleAccessProtection(
         console.log(`[VCNS-ACCESS] ✅ Strictness enforcement - ${member.user.tag} KICKED (not whitelisted, channel ${restrictionReason})`);
         
         // DM the user
+        const owner = guild.members.cache.get(ownerId);
+        const ownerName = owner?.displayName || 'the owner';
         const embed = new EmbedBuilder()
-            .setColor(0xFF0000)
-            .setTitle('🚫 Access Denied - Admin Strictness')
+            .setColor(0xFF6B6B)
             .setDescription(
-                `You were **instantly disconnected** from **${channel.name}** in **${guild.name}**.\n\n` +
-                `**Reason:** Admin Strictness mode is enabled and the channel is **${restrictionReason}**. Only authorized users can access restricted voice channels.\n\n` +
-                `Contact a server administrator if you believe this is an error.`
+                `You don't have access to **${channel.name}**.\n\nAsk **${ownerName}** to give you access.`
             )
             .setTimestamp();
         member.send({ embeds: [embed] }).catch(() => { });
@@ -355,7 +392,7 @@ async function handleAccessProtection(
             user: member.user,
             channelName: channel.name,
             channelId: newChannelId,
-            details: `Admin strictness: User not whitelisted - instant kick`,
+            details: `No access`,
             isTeamChannel: isTeamChannel,
         }).catch(() => { });
         
@@ -399,10 +436,8 @@ async function handleAccessProtection(
         const ownerName = owner?.displayName || 'the owner';
         const embed = new EmbedBuilder()
             .setColor(0xFF6B6B)
-            .setTitle('🚫 Access Denied')
             .setDescription(
-                `You were removed from **${channel.name}** because the ${channelTypeName} is **${reason}**.\n\n` +
-                `Ask **${ownerName}** to give you access to join.`
+                `You don't have access to **${channel.name}**.\n\nAsk **${ownerName}** to give you access.`
             )
             .setTimestamp();
         member.send({ embeds: [embed] }).catch(() => { });
@@ -412,7 +447,7 @@ async function handleAccessProtection(
             user: member.user,
             channelName: channel.name,
             channelId: newChannelId,
-            details: `Unauthorized access attempt blocked (${channelTypeName} is ${reason})`,
+            details: `Channel ${reason}`,
             isTeamChannel: isTeamChannel,
         }).catch(() => { });
         return true;
@@ -446,10 +481,8 @@ async function handleAccessProtection(
     const ownerName = owner?.displayName || 'the owner';
     const embed = new EmbedBuilder()
         .setColor(0xFF6B6B)
-        .setTitle('🚫 Access Denied')
         .setDescription(
-            `You were removed from **${channel.name}** because the ${channelTypeName} is **${reason}**.\n\n` +
-            `Ask **${ownerName}** to give you access to join.`
+            `You don't have access to **${channel.name}**.\n\nAsk **${ownerName}** to give you access.`
         )
         .setTimestamp();
     member.send({ embeds: [embed] }).catch(() => { });
@@ -459,7 +492,7 @@ async function handleAccessProtection(
         user: member.user,
         channelName: channel.name,
         channelId: newChannelId,
-        details: `Unauthorized access attempt blocked (${channelTypeName} is ${reason})`,
+        details: `Channel ${reason}`,
         isTeamChannel: false, 
     }).catch(() => { });
     return true;

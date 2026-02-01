@@ -139,9 +139,29 @@ class EnforcerService {
                 this.enforcingChannels.delete(channelId);
                 return;
             }
-            const channel = client.channels.cache.get(channelId) as VoiceChannel;
+            
+            // CRITICAL: Try cache first, but ALWAYS fetch from API before deleting from DB
+            // Cache may not be populated, especially during high load or after restart
+            let channel = client.channels.cache.get(channelId) as VoiceChannel | undefined;
+            
             if (!channel || channel.type !== ChannelType.GuildVoice) {
-                console.log(`[Enforcer] Channel ${channelId} not found. Cleaning up DB...`);
+                // Try to fetch from Discord API before deleting from DB
+                try {
+                    const guild = client.guilds.cache.get(dbState.guildId);
+                    if (guild) {
+                        const fetchedChannel = await guild.channels.fetch(channelId).catch(() => null);
+                        if (fetchedChannel && fetchedChannel.type === ChannelType.GuildVoice) {
+                            channel = fetchedChannel as VoiceChannel;
+                            console.log(`[Enforcer] ✅ Channel ${channelId} not in cache but fetched from API - proceeding`);
+                        }
+                    }
+                } catch (fetchErr) {
+                    console.log(`[Enforcer] Could not fetch channel ${channelId} from API:`, fetchErr);
+                }
+            }
+            
+            if (!channel || channel.type !== ChannelType.GuildVoice) {
+                console.log(`[Enforcer] ⚠️ Channel ${channelId} not found in cache OR API. Cleaning up DB...`);
                 await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => {});
                 await prisma.teamVoiceChannel.delete({ where: { channelId } }).catch(() => {});
                 this.enforcingChannels.delete(channelId);
