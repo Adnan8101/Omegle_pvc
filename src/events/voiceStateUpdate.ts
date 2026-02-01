@@ -295,6 +295,13 @@ async function handleAccessProtection(
     const isWhitelisted = whitelist.some(
         w => w.targetId === member.id || memberRoleIds.includes(w.targetId)
     );
+    
+    // Admin whitelist bypass ALL restrictions (strictness will NEVER work on them)
+    if (isWhitelisted) {
+        console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} is WHITELISTED - bypass ALL restrictions (strictness/locked/hidden/full)`);
+        return false;
+    }
+    
     const isLocked = dbState.isLocked;
     const isHidden = dbState.isHidden;
     let isFull = false;
@@ -604,23 +611,52 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
     if (member && hasTempDragPermission(channelId, member.id)) {
         const pvcData = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
         const teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
+        const ownerId = pvcData?.ownerId || teamData?.ownerId;
         
+        // Check if user should KEEP their permissions
+        const hasPermanentAccess = ownerId ? stateStore.hasPermanentAccess(guild.id, ownerId, member.id) : false;
+        const whitelist = await getWhitelist(guild.id);
+        const memberRoleIds = member.roles.cache.map(r => r.id);
+        const isWhitelisted = whitelist.some(
+            w => w.targetId === member.id || memberRoleIds.includes(w.targetId)
+        );
+        
+        // Check if user has explicit AU permit
+        let hasAUPermit = false;
         if (pvcData) {
-            await prisma.voicePermission.deleteMany({
-                where: {
-                    channelId,
-                    targetId: member.id,
-                    permission: 'permit',
-                },
-            }).catch(() => {});
+            const existingPermits = await prisma.voicePermission.findMany({
+                where: { channelId, targetId: member.id, permission: 'permit' }
+            });
+            hasAUPermit = existingPermits.length > 0;
         } else if (teamData) {
-            await prisma.teamVoicePermission.deleteMany({
-                where: {
-                    channelId,
-                    targetId: member.id,
-                    permission: 'permit',
-                },
-            }).catch(() => {});
+            const existingPermits = await prisma.teamVoicePermission.findMany({
+                where: { channelId, targetId: member.id, permission: 'permit' }
+            });
+            hasAUPermit = existingPermits.length > 0;
+        }
+        
+        // Only remove drag permissions if user doesn't have permanent access, AU, or admin whitelist
+        if (hasPermanentAccess || isWhitelisted || hasAUPermit) {
+            console.log(`[HandleLeave] ✅ User ${member.user.tag} has permanent access/AU/whitelist - KEEPING drag permit`);
+        } else {
+            console.log(`[HandleLeave] 🗑️ Removing temp drag permit for ${member.user.tag}`);
+            if (pvcData) {
+                await prisma.voicePermission.deleteMany({
+                    where: {
+                        channelId,
+                        targetId: member.id,
+                        permission: 'permit',
+                    },
+                }).catch(() => {});
+            } else if (teamData) {
+                await prisma.teamVoicePermission.deleteMany({
+                    where: {
+                        channelId,
+                        targetId: member.id,
+                        permission: 'permit',
+                    },
+                }).catch(() => {});
+            }
         }
         
         removeTempDragPermission(channelId, member.id);
