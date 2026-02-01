@@ -656,16 +656,32 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 }
                 const { recordBotEdit } = await import('../events/channelUpdate');
                 recordBotEdit(pvc.channelId);
-                await channel.permissionOverwrites.edit(pvc.ownerId, {
-                    ViewChannel: true, Connect: true, Speak: true, Stream: true,
-                    SendMessages: true, EmbedLinks: true, AttachFiles: true,
-                    MuteMembers: true, DeafenMembers: true, ManageChannels: true,
-                });
+                
+                // Verify owner exists before setting permissions
+                const ownerMember = await guild.members.fetch(pvc.ownerId).catch(() => null);
+                if (ownerMember) {
+                    await channel.permissionOverwrites.edit(pvc.ownerId, {
+                        ViewChannel: true, Connect: true, Speak: true, Stream: true,
+                        SendMessages: true, EmbedLinks: true, AttachFiles: true,
+                        MuteMembers: true, DeafenMembers: true, ManageChannels: true,
+                    }).catch(err => console.error(`[Refresh PVC] Failed to set owner permissions for ${pvc.ownerId}:`, err.message));
+                } else {
+                    console.log(`[Refresh PVC] ⚠️ Owner ${pvc.ownerId} not found in guild - skipping owner permissions`);
+                }
+                
+                // Set permissions for allowed users, with validation
                 for (const memberId of allAllowedIds) {
+                    // Validate user exists in guild
+                    const member = await guild.members.fetch(memberId).catch(() => null);
+                    if (!member) {
+                        console.log(`[Refresh PVC] ⚠️ User ${memberId} not found in guild - skipping`);
+                        continue;
+                    }
+                    
                     await channel.permissionOverwrites.edit(memberId, {
                         ViewChannel: true, Connect: true,
                         SendMessages: true, EmbedLinks: true, AttachFiles: true,
-                    });
+                    }).catch(err => console.error(`[Refresh PVC] Failed to set permissions for ${memberId}:`, err.message));
                 }
                 const existingOverwrites = channel.permissionOverwrites.cache;
                 for (const [targetId, overwrite] of existingOverwrites) {
@@ -761,16 +777,32 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 }
                 const { recordBotEdit } = await import('../events/channelUpdate');
                 recordBotEdit(tc.channelId);
-                await channel.permissionOverwrites.edit(tc.ownerId, {
-                    ViewChannel: true, Connect: true, Speak: true, Stream: true,
-                    SendMessages: true, EmbedLinks: true, AttachFiles: true,
-                    MuteMembers: true, DeafenMembers: true, ManageChannels: true,
-                });
+                
+                // Verify owner exists before setting permissions
+                const ownerMember = await guild.members.fetch(tc.ownerId).catch(() => null);
+                if (ownerMember) {
+                    await channel.permissionOverwrites.edit(tc.ownerId, {
+                        ViewChannel: true, Connect: true, Speak: true, Stream: true,
+                        SendMessages: true, EmbedLinks: true, AttachFiles: true,
+                        MuteMembers: true, DeafenMembers: true, ManageChannels: true,
+                    }).catch(err => console.error(`[Refresh PVC] Failed to set Team owner permissions for ${tc.ownerId}:`, err.message));
+                } else {
+                    console.log(`[Refresh PVC] ⚠️ Team owner ${tc.ownerId} not found in guild - skipping owner permissions`);
+                }
+                
+                // Set permissions for allowed users, with validation
                 for (const memberId of allAllowedIds) {
+                    // Validate user exists in guild
+                    const member = await guild.members.fetch(memberId).catch(() => null);
+                    if (!member) {
+                        console.log(`[Refresh PVC] ⚠️ User ${memberId} not found in guild - skipping`);
+                        continue;
+                    }
+                    
                     await channel.permissionOverwrites.edit(memberId, {
                         ViewChannel: true, Connect: true,
                         SendMessages: true, EmbedLinks: true, AttachFiles: true,
-                    });
+                    }).catch(err => console.error(`[Refresh PVC] Failed to set Team permissions for ${memberId}:`, err.message));
                 }
                 const existingOverwrites = channel.permissionOverwrites.cache;
                 for (const [targetId, overwrite] of existingOverwrites) {
