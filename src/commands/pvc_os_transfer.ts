@@ -69,14 +69,11 @@ export const command: Command = {
         await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
         try {
             if (isTeam) {
-                // Update voiceManager first
                 transferTeamOwnership(targetChannel.id, newOwnerUser.id);
-                // Then DB
                 await prisma.teamVoiceChannel.update({
                     where: { channelId: targetChannel.id },
                     data: { ownerId: newOwnerUser.id },
                 });
-                // Then stateStore
                 stateStore.updateChannelState(targetChannel.id, { ownerId: newOwnerUser.id });
                 await enforcer.enforceQuietly(targetChannel.id);
                 await logAction({
@@ -89,7 +86,6 @@ export const command: Command = {
                     isTeamChannel: true,
                 });
             } else {
-                // transferChannelOwnership already updates voiceManager, DB, and stateStore
                 await transferChannelOwnership(
                     interaction.guild,
                     targetChannel.id,

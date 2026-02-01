@@ -1,10 +1,8 @@
 import { PrismaClient } from '@prisma/client';
-
 const globalForPrisma = globalThis as unknown as {
     prisma: PrismaClient;
     dbState: DatabaseState;
 };
-
 interface DatabaseState {
     connected: boolean;
     lastConnectAttempt: number;
@@ -13,35 +11,20 @@ interface DatabaseState {
     queryCount: number;
     errorCount: number;
 }
-
-// PRODUCTION CONFIG - Optimized for high-load PVC operations (1000+ concurrent)
-// Balances connection pool size with preventing exhaustion
 const CONFIG = {
-    // Connection Pool - Sufficient for heavy load but controlled
-    // Using 20 connections allows handling many concurrent operations
-    // while leaving room for other services and admin connections
     POOL_SIZE: process.env.DB_POOL_SIZE ? parseInt(process.env.DB_POOL_SIZE) : 20,
-    POOL_TIMEOUT: 15,           // Wait 15s for connection from pool
-    CONNECT_TIMEOUT: 10,        // 10s to establish new connection
-    
-    // Query & Transaction Timeouts
-    QUERY_TIMEOUT: 10000,       // 10s max query execution
-    TRANSACTION_TIMEOUT: 20000, // 20s max transaction duration
-    
-    // Reconnection Strategy
-    MAX_BACKOFF: 30000,         // Max 30s backoff
-    BASE_BACKOFF: 1000,         // Start with 1s backoff
-    MAX_RETRIES: 3,             // Retry failed operations 3 times
-    
-    // Performance Optimization
-    STATEMENT_CACHE_SIZE: 100,  // Cache 100 prepared statements
-    PGBOUNCER_MODE: false,      // Set true if using PgBouncer
+    POOL_TIMEOUT: 15,           
+    CONNECT_TIMEOUT: 10,        
+    QUERY_TIMEOUT: 10000,       
+    TRANSACTION_TIMEOUT: 20000, 
+    MAX_BACKOFF: 30000,         
+    BASE_BACKOFF: 1000,         
+    MAX_RETRIES: 3,             
+    STATEMENT_CACHE_SIZE: 100,  
+    PGBOUNCER_MODE: false,      
 } as const;
-
 function buildConnectionUrl(): string {
     const baseUrl = process.env.DATABASE_URL || '';
-    
-    // Clean existing params to prevent duplicates
     const cleanUrl = baseUrl
         .replace(/[&?]connection_limit=\d+/g, '')
         .replace(/[&?]pool_timeout=\d+/g, '')
@@ -50,26 +33,19 @@ function buildConnectionUrl(): string {
         .replace(/[&?]pgbouncer=\w+/g, '')
         .replace(/[&?]idle_in_transaction_session_timeout=\d+/g, '')
         .replace(/[&?]connect_timeout=\d+/g, '');
-    
     const sep = cleanUrl.includes('?') ? '&' : '?';
-    
-    // Build minimal connection string to prevent exhaustion
     let params = `connection_limit=${CONFIG.POOL_SIZE}`;
     params += `&pool_timeout=${CONFIG.POOL_TIMEOUT}`;
     params += `&connect_timeout=${CONFIG.CONNECT_TIMEOUT}`;
     params += `&statement_cache_size=${CONFIG.STATEMENT_CACHE_SIZE}`;
-    params += `&idle_in_transaction_session_timeout=30000`; // Kill idle transactions after 30s
-    
+    params += `&idle_in_transaction_session_timeout=30000`; 
     if (CONFIG.PGBOUNCER_MODE) {
         params += '&pgbouncer=true';
     }
-    
     return `${cleanUrl}${sep}${params}`;
 }
-
 function createClient(): PrismaClient {
     const connectionUrl = buildConnectionUrl();
-    
     return new PrismaClient({
         log: [
             { emit: 'event', level: 'error' },
@@ -79,29 +55,24 @@ function createClient(): PrismaClient {
             db: { url: connectionUrl } 
         },
         transactionOptions: {
-            maxWait: 5000,                     // Wait max 5s to start transaction
-            timeout: CONFIG.TRANSACTION_TIMEOUT, // Transaction times out after 30s
-            isolationLevel: 'ReadCommitted',   // Balance between consistency & performance
+            maxWait: 5000,                     
+            timeout: CONFIG.TRANSACTION_TIMEOUT, 
+            isolationLevel: 'ReadCommitted',   
         },
     });
 }
 export const prisma: PrismaClient = globalForPrisma.prisma || createClient();
-
 if (!globalForPrisma.prisma) {
     globalForPrisma.prisma = prisma;
-    
-    // Setup error event listeners
     (prisma as any).$on('error', (e: any) => {
         console.error('[DB] ❌ Error event:', e);
         globalForPrisma.dbState.errorCount++;
         globalForPrisma.dbState.connected = false;
     });
-    
     (prisma as any).$on('warn', (e: any) => {
         console.warn('[DB] ⚠️ Warning:', e.message);
     });
 }
-
 globalForPrisma.dbState = globalForPrisma.dbState || {
     connected: false,
     lastConnectAttempt: 0,
@@ -110,13 +81,7 @@ globalForPrisma.dbState = globalForPrisma.dbState || {
     queryCount: 0,
     errorCount: 0,
 };
-
 let connectionInProgress = false;
-
-/**
- * Kill idle database connections that are wasting resources
- * Run this on startup to clean up stale connections from previous instances
- */
 async function killIdleConnections(): Promise<void> {
     try {
         const client = await prisma.$queryRawUnsafe(`
@@ -129,7 +94,6 @@ async function killIdleConnections(): Promise<void> {
                   AND pid <> pg_backend_pid()
             ) t WHERE terminated = true
         `);
-        
         const client2 = await prisma.$queryRawUnsafe(`
             SELECT COUNT(*) as killed FROM (
                 SELECT pg_terminate_backend(pid) as terminated
@@ -140,23 +104,17 @@ async function killIdleConnections(): Promise<void> {
                   AND pid <> pg_backend_pid()
             ) t WHERE terminated = true
         `);
-        
         console.log('[DB] 🧹 Killed idle connections');
     } catch (err: any) {
-        // Silently ignore - may not have permissions or no idle connections
     }
 }
-
 export function connectAsync(): void {
     if (connectionInProgress) return;
     if (globalForPrisma.dbState.connected) return;
-    
     const now = Date.now();
     if (now < globalForPrisma.dbState.backoffUntil) return;
-    
     connectionInProgress = true;
     globalForPrisma.dbState.lastConnectAttempt = now;
-    
     prisma.$connect()
         .then(() => prisma.$queryRaw`SELECT 1 as health_check`)
         .then(() => {
@@ -168,13 +126,11 @@ export function connectAsync(): void {
         .catch((err: Error) => {
             globalForPrisma.dbState.connected = false;
             globalForPrisma.dbState.consecutiveFailures++;
-            
             const backoff = Math.min(
                 CONFIG.BASE_BACKOFF * Math.pow(2, globalForPrisma.dbState.consecutiveFailures - 1),
                 CONFIG.MAX_BACKOFF
             );
             globalForPrisma.dbState.backoffUntil = Date.now() + backoff;
-            
             console.error(`[DB] ❌ Connection failed (retry in ${Math.round(backoff/1000)}s): ${err.message}`);
         })
         .finally(() => {
@@ -193,41 +149,31 @@ export async function withRetry<T>(
     baseDelay = 500
 ): Promise<T> {
     let lastError: Error | null = null;
-    
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-            // Ensure connection before operation
             if (!globalForPrisma.dbState.connected) {
                 connectAsync();
                 await new Promise(resolve => setTimeout(resolve, 200));
             }
-            
             const result = await operation();
             globalForPrisma.dbState.queryCount++;
             return result;
-            
         } catch (error: any) {
             lastError = error;
             globalForPrisma.dbState.errorCount++;
-            
             const errorCode = error.code || '';
             const errorMsg = error.message?.toLowerCase() || '';
-            
-            // Check if error is retryable
             const isRetryable = 
-                // Connection errors
-                errorCode === 'P1001' ||  // Can't reach database
-                errorCode === 'P1002' ||  // Database timeout
-                errorCode === 'P1008' ||  // Operations timed out
-                errorCode === 'P1017' ||  // Server closed connection
-                errorCode === 'P2024' ||  // Timed out fetching connection
-                errorCode === 'P2034' ||  // Transaction conflict
-                // Message-based detection
+                errorCode === 'P1001' ||  
+                errorCode === 'P1002' ||  
+                errorCode === 'P1008' ||  
+                errorCode === 'P1017' ||  
+                errorCode === 'P2024' ||  
+                errorCode === 'P2034' ||  
                 errorMsg.includes('connection') ||
                 errorMsg.includes('timeout') ||
                 errorMsg.includes('deadlock') ||
                 errorMsg.includes('too many clients');
-            
             if (!isRetryable || attempt === maxRetries) {
                 console.error(`[DB] ❌ Operation failed after ${attempt} attempts:`, {
                     code: errorCode,
@@ -235,35 +181,24 @@ export async function withRetry<T>(
                 });
                 throw error;
             }
-            
-            // Mark connection as potentially broken
             globalForPrisma.dbState.connected = false;
-            
-            // Exponential backoff with jitter
             const delay = baseDelay * Math.pow(2, attempt - 1);
             const jitter = Math.random() * 200;
             await new Promise(resolve => setTimeout(resolve, delay + jitter));
-            
             console.warn(`[DB] ⚠️ Retry ${attempt}/${maxRetries} after ${Math.round(delay)}ms (${errorCode || 'unknown error'})`);
         }
     }
-    
     throw lastError || new Error('Max retries reached');
 }
-
-// Periodic health check and cleanup (every 30s)
 let healthCheckInterval: NodeJS.Timeout | null = null;
-
 function startHealthCheck(): void {
     if (healthCheckInterval) return;
-    
     let cleanupCounter = 0;
     healthCheckInterval = setInterval(async () => {
         if (!globalForPrisma.dbState.connected) {
             connectAsync();
             return;
         }
-        
         try {
             await prisma.$queryRaw`SELECT 1 as ping`;
             5 minutes (10 health checks)
@@ -279,30 +214,21 @@ function startHealthCheck(): void {
         }
     }, 30000);
 }
-
-// Metrics reporting (every 5min)
 let metricsInterval: NodeJS.Timeout | null = null;
-
 function startMetrics(): void {
     if (metricsInterval) return;
-    
     metricsInterval = setInterval(() => {
         const uptime = Math.round((Date.now() - globalForPrisma.dbState.lastConnectAttempt) / 1000);
         console.log(`[DB] 📊 Metrics | Queries: ${globalForPrisma.dbState.queryCount} | Errors: ${globalForPrisma.dbState.errorCount} | Uptime: ${uptime}s`);
     }, 300000);
 }
 let shuttingDown = false;
-
 function shutdown(): void {
     if (shuttingDown) return;
     shuttingDown = true;
-    
     console.log('[DB] 🔄 Graceful shutdown initiated...');
-    
     if (healthCheckInterval) clearInterval(healthCheckInterval);
     if (metricsInterval) clearInterval(metricsInterval);
-    
-    // Force disconnect all connections in pool
     prisma.$disconnect()
         .then(() => {
             console.log('[DB] ✅ All connections closed');
@@ -313,7 +239,6 @@ function shutdown(): void {
             process.exit(1);
         });
 }
-
 if (!globalForPrisma.prisma) {
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);
@@ -321,31 +246,19 @@ if (!globalForPrisma.prisma) {
     try {
         await killIdleConnections();
     } catch (err) {
-        // Ignore errors - might fail on first connect
     }
-    
-    // cess.on('exit', shutdown);
 }
-
-// Initialize with aggressive cleanup to handle restarts
 (async () => {
     console.log(`[DB] 🚀 Minimal Pool Mode | Pool: ${CONFIG.POOL_SIZE} connections | Timeout: ${CONFIG.POOL_TIMEOUT}s | Retries: ${CONFIG.MAX_RETRIES}`);
     console.log(`[DB] 💡 Using minimal pool to prevent "too many connections" errors`);
-    
-    // Disconnect any stale connections from previous instance
     try {
         await prisma.$disconnect();
         console.log('[DB] 🧹 Cleaned up stale connections from previous instance');
     } catch (err) {
-        // Ignore errors on initial disconnect
     }
-    
-    // Wait a moment for connections to fully close
     await new Promise(resolve => setTimeout(resolve, 1000));
-    
     connectAsync();
     startHealthCheck();
     startMetrics();
 })();
-
 export default prisma;

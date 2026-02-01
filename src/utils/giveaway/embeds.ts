@@ -1,14 +1,10 @@
 import { EmbedBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { Giveaway } from '@prisma/client';
 import { Theme } from './theme';
-
 export function createGiveawayEmbed(g: Giveaway, participantCount: number): EmbedBuilder {
     const endTimeUnix = Math.floor(Number(g.endTime) / 1000);
-
     let description = `**Winners:** ${g.winnersCount}\n**Hosted By:** <@${g.hostId}>\n**Ends:** <t:${endTimeUnix}:R> (<t:${endTimeUnix}:f>)`;
-
     const reqs: string[] = [];
-
     if (g.roleRequirement) {
         reqs.push(`<a:yellowDot:1455059222541762643> **Required Role:** <@&${g.roleRequirement}>`);
     }
@@ -30,11 +26,9 @@ export function createGiveawayEmbed(g: Giveaway, participantCount: number): Embe
     if (g.captchaRequirement) {
         reqs.push("<a:yellowDot:1455059222541762643> **Captcha Verification**");
     }
-
     if (reqs.length > 0) {
         description += "\n\n**Requirements:**\n" + reqs.join("\n");
     }
-
     if (g.increaseChance) {
         let chanceText = "";
         if (g.increaseChance === 'role' && g.increaseChanceRole) {
@@ -52,22 +46,17 @@ export function createGiveawayEmbed(g: Giveaway, participantCount: number): Embe
             description += "\n\n" + chanceText;
         }
     }
-
     description += `\n\nReact with ${g.emoji} to enter!`;
-
     const embed = new EmbedBuilder()
         .setTitle(g.prize)
         .setDescription(description)
         .setColor(Theme.EmbedColor)
         .setFooter({ text: 'All the Best!' });
-
     if (g.thumbnail) {
         embed.setThumbnail(g.thumbnail);
     }
-
     return embed;
 }
-
 export function createGiveawayButton(giveawayId: number): ButtonBuilder {
     return new ButtonBuilder()
         .setLabel("Enter Giveaway")
@@ -75,28 +64,23 @@ export function createGiveawayButton(giveawayId: number): ButtonBuilder {
         .setCustomId(`enter_giveaway_${giveawayId}`)
         .setEmoji("🎉");
 }
-
 export function giveawayEndedEmbed(g: Giveaway, winners: string[], participantCount: number): EmbedBuilder {
     const giftEmoji = '<:fo_gift:1465936534346924046>';
     const dotEmoji = '<a:yellowDot:1455059222541762643>';
-    
     const winnerText = winners.length > 0 
         ? winners.map(id => `<@${id}>`).join(', ')
         : 'No valid entrants';
-
     const description = [
         `${giftEmoji} **${g.prize}** ${giftEmoji}`,
         `${dotEmoji} Hosted by: <@${g.hostId}>`,
         `${dotEmoji} Valid participant(s): ${participantCount}`,
         `${dotEmoji} Winner${winners.length > 1 ? 's' : ''}: ${winnerText}`
     ].join('\n');
-
     return new EmbedBuilder()
         .setDescription(description)
         .setColor(Theme.EmbedColor)
         .setTimestamp();
 }
-
 export function giveawayCancelledEmbed(g: Giveaway): EmbedBuilder {
     return new EmbedBuilder()
         .setTitle("Giveaway Cancelled")

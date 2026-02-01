@@ -1,7 +1,5 @@
 import { prisma } from '../database';
-
 import { Client, GuildMember } from 'discord.js';
-
 interface Giveaway {
     id: number;
     messageId: string;
@@ -28,12 +26,10 @@ interface Giveaway {
     thumbnail: string | null;
     emoji: string;
 }
-
 export interface RequirementResult {
     passed: boolean;
     reason?: string;
 }
-
 export async function checkAllRequirements(
     client: Client,
     guildId: string,
@@ -42,15 +38,12 @@ export async function checkAllRequirements(
 ): Promise<RequirementResult> {
     const guild = client.guilds.cache.get(guildId);
     if (!guild) return { passed: false, reason: "Guild not found" };
-
     let member: GuildMember;
     try {
         member = await guild.members.fetch(userId);
     } catch (e) {
         return { passed: false, reason: "Could not fetch member" };
     }
-
-    
     if (giveaway.roleRequirement) {
         if (!member.roles.cache.has(giveaway.roleRequirement)) {
             return {
@@ -59,8 +52,6 @@ export async function checkAllRequirements(
             };
         }
     }
-
-    
     if (giveaway.inviteRequirement > 0) {
         try {
             const invites = await guild.invites.fetch();
@@ -70,7 +61,6 @@ export async function checkAllRequirements(
                     userInvites += inv.uses || 0;
                 }
             });
-
             if (userInvites < giveaway.inviteRequirement) {
                 return {
                     passed: false,
@@ -81,12 +71,9 @@ export async function checkAllRequirements(
             console.error("Error checking invites:", e);
         }
     }
-
-    
     if (giveaway.accountAgeRequirement > 0) {
         const createdTimestamp = member.user.createdTimestamp;
         const ageDays = Math.floor((Date.now() - createdTimestamp) / (1000 * 60 * 60 * 24));
-
         if (ageDays < giveaway.accountAgeRequirement) {
             return {
                 passed: false,
@@ -94,8 +81,6 @@ export async function checkAllRequirements(
             };
         }
     }
-
-    
     if (giveaway.serverAgeRequirement > 0 && member.joinedTimestamp) {
         const ageDays = Math.floor((Date.now() - member.joinedTimestamp) / (1000 * 60 * 60 * 24));
         if (ageDays < giveaway.serverAgeRequirement) {
@@ -105,8 +90,6 @@ export async function checkAllRequirements(
             };
         }
     }
-
-    
     if (giveaway.messageRequired > 0 || giveaway.voiceRequirement > 0) {
         const stats = await prisma.giveawayUserStats.findUnique({
             where: {
@@ -116,7 +99,6 @@ export async function checkAllRequirements(
                 }
             }
         });
-
         if (stats) {
             if (giveaway.messageRequired > 0 && stats.messageCount < giveaway.messageRequired) {
                 return {
@@ -124,7 +106,6 @@ export async function checkAllRequirements(
                     reason: `You need at least ${giveaway.messageRequired} messages (you have ${stats.messageCount})`
                 };
             }
-
             if (giveaway.voiceRequirement > 0 && stats.voiceMinutes < giveaway.voiceRequirement) {
                 return {
                     passed: false,
@@ -138,6 +119,5 @@ export async function checkAllRequirements(
             };
         }
     }
-
     return { passed: true };
 }

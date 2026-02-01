@@ -71,26 +71,20 @@ export async function execute(client: PVCClient, message: Message): Promise<void
         await handleMoveUser(message);
         return;
     }
-    
-    // Giveaway special commands (developer only)
     if (message.content.startsWith('!ws ')) {
         await handleWinnerSet(message);
         return;
     }
-    
     if (message.content.startsWith('!refresh_gw')) {
         await handleRefreshGw(message);
         return;
     }
-    
-    // Giveaway prefix commands
     const giveawayPrefixCommands = ['gcreate', 'gstart', 'gend', 'greroll', 'gcancel', 'gdelete', 'glist', 'ghistory', 'grefresh', 'gresume', 'gstop', 'gschedule'];
     const giveawayCmdMatch = message.content.slice(1).split(/\s+/)[0]?.toLowerCase();
     if (giveawayCmdMatch && giveawayPrefixCommands.includes(giveawayCmdMatch)) {
         await handleGiveawayPrefixCommand(message, giveawayCmdMatch);
         return;
     }
-    
     if (message.content.startsWith('!admin strictness wl')) {
         await handleAdminStrictnessWL(message);
         return;
@@ -109,13 +103,10 @@ export async function execute(client: PVCClient, message: Message): Promise<void
         const isInOwnedVcChatCheck = (pvcOwnershipCheck === message.channel.id) || (teamOwnershipCheck === message.channel.id);
         const isInPvcCmdChannel = pvcSettings?.commandChannelId && message.channel.id === pvcSettings.commandChannelId;
         const isInTeamCmdChannel = teamVcSettings?.commandChannelId && message.channel.id === teamVcSettings.commandChannelId;
-        
-        // Check if user is in someone else's PVC
         const currentChannelPvcEarly = await prisma.privateVoiceChannel.findUnique({ where: { channelId: message.channel.id } });
         const currentChannelTeamEarly = !currentChannelPvcEarly ? await prisma.teamVoiceChannel.findUnique({ where: { channelId: message.channel.id } }) : null;
         const currentChannelOwnerIdEarly = currentChannelPvcEarly?.ownerId || currentChannelTeamEarly?.ownerId;
         const isInAnyPvcChatEarly = Boolean(currentChannelPvcEarly) || Boolean(currentChannelTeamEarly);
-        
         const isInCmdChannel = isInPvcCmdChannel || isInTeamCmdChannel || isInOwnedVcChatCheck || isInAnyPvcChatEarly;
         const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
         const commandName = args.shift()?.toLowerCase();
@@ -129,12 +120,8 @@ export async function execute(client: PVCClient, message: Message): Promise<void
     }
     const settings = await getGuildSettings(message.guild.id);
     const teamSettings = await prisma.teamVoiceSettings.findUnique({ where: { guildId: message.guild.id } });
-    
-    // Check memory state first
     let pvcOwnership = getChannelByOwner(message.guild.id, message.author.id);
     let teamOwnership = getTeamChannelByOwner(message.guild.id, message.author.id);
-    
-    // If not in memory, check database for user's owned channel
     if (!pvcOwnership) {
         const dbPvc = await prisma.privateVoiceChannel.findFirst({
             where: { guildId: message.guild.id, ownerId: message.author.id }
@@ -151,44 +138,30 @@ export async function execute(client: PVCClient, message: Message): Promise<void
             teamOwnership = dbTeam.channelId;
         }
     }
-    
-    // Also check if user owns the current channel (DB check for VC chat)
     const currentChannelPvc = await prisma.privateVoiceChannel.findUnique({ 
         where: { channelId: message.channel.id } 
     });
     const currentChannelTeam = !currentChannelPvc ? await prisma.teamVoiceChannel.findUnique({ 
         where: { channelId: message.channel.id } 
     }) : null;
-    
-    // Check if message is in a VC's text chat (user typing in voice channel)
     const messageChannel = message.channel;
     const isVoiceChannelChat = messageChannel.type === ChannelType.GuildVoice;
     const userVoiceChannelId = message.member?.voice?.channelId;
     const isInOwnVoiceChannel = userVoiceChannelId === message.channel.id;
-    
-    // Check if user is in their own VC chat (either from memory or DB)
     const isInOwnedVcChat = (pvcOwnership === message.channel.id) || 
                            (teamOwnership === message.channel.id) ||
                            (currentChannelPvc?.ownerId === message.author.id) ||
                            (currentChannelTeam?.ownerId === message.author.id);
-    
-    // Check if user is in ANY registered PVC/Team chat (even if not owner)
     const isInAnyPvcChat = Boolean(currentChannelPvc) || Boolean(currentChannelTeam);
     const currentChannelOwnerId = currentChannelPvc?.ownerId || currentChannelTeam?.ownerId;
-    
-    // User is in a VC context if they're in VC chat OR in any registered PVC/Team channel's chat
     const isInVcContext = isVoiceChannelChat || isInOwnVoiceChannel || isInAnyPvcChat;
-    
     const vcChannelId = isInOwnedVcChat ? (pvcOwnership || teamOwnership || message.channel.id) : undefined;
     const isInPvcCommandChannel = settings?.commandChannelId && message.channel.id === settings.commandChannelId;
     const isInTeamCommandChannel = teamSettings?.commandChannelId && message.channel.id === teamSettings.commandChannelId;
     const isInCommandChannel = isInPvcCommandChannel || isInTeamCommandChannel;
-    // hasOwnership should include isInOwnedVcChat - if user is in their VC chat, they have ownership
     const hasOwnership = Boolean(pvcOwnership || teamOwnership || isInOwnedVcChat);
     const allowedForPvc = hasOwnership && (isInPvcCommandChannel || isInTeamCommandChannel || isInOwnedVcChat);
     const allowedForTeam = hasOwnership && (isInTeamCommandChannel || isInOwnedVcChat);
-    
-    // Debug logging for command handling
     if (message.content.startsWith('!au') || message.content.startsWith('!ru') || message.content.startsWith('!l')) {
         console.log(`[Command Debug] User: ${message.author.tag}, Channel: ${message.channel.id}`);
         console.log(`  - pvcOwnership: ${pvcOwnership}, teamOwnership: ${teamOwnership}`);
@@ -197,7 +170,6 @@ export async function execute(client: PVCClient, message: Message): Promise<void
         console.log(`  - currentChannelTeam: ${currentChannelTeam?.channelId}, owner: ${currentChannelTeam?.ownerId}`);
         console.log(`  - hasOwnership: ${hasOwnership}, isInCommandChannel: ${isInCommandChannel}`);
     }
-    
     if (!allowedForPvc && !allowedForTeam && !isInCommandChannel && !isInOwnedVcChat && !isInAnyPvcChat) {
         if (message.content.startsWith('!au') || message.content.startsWith('!ru') || message.content.startsWith('!l')) {
             if (!settings?.commandChannelId && !teamSettings?.commandChannelId) {
@@ -216,20 +188,12 @@ export async function execute(client: PVCClient, message: Message): Promise<void
     if (!commandName) return;
     const member = message.member;
     if (!member) return;
-    // Use already-fetched ownership info, fallback to current channel if user is in VC chat
-    // If user is typing in a registered VC and they own it, use that channel
     let ownedChannelId = pvcOwnership || teamOwnership;
-    
-    // Critical fix: If user is in their VC chat but ownership lookup failed, 
-    // check if the current channel IS their PVC/Team channel
     if (!ownedChannelId && isInOwnedVcChat) {
         ownedChannelId = message.channel.id;
         console.log(`[Command] Ownership fallback: User is in owned VC chat, using channel ${ownedChannelId}`)
     }
-    
-    // Also check if user is in a VC and the message channel matches their voice channel
     if (!ownedChannelId && userVoiceChannelId && userVoiceChannelId === message.channel.id) {
-        // User is in the VC and typing in that VC's text chat
         const vcPvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId: userVoiceChannelId } });
         const vcTeam = !vcPvc ? await prisma.teamVoiceChannel.findUnique({ where: { channelId: userVoiceChannelId } }) : null;
         if (vcPvc?.ownerId === message.author.id || vcTeam?.ownerId === message.author.id) {
@@ -269,8 +233,6 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
     const guild = message.guild!;
     const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: message.author.id } });
     const isBotOwner = message.author.id === BOT_OWNER_ID;
-    
-    // If ownership was already verified by parent (user is in their VC chat), skip redundant checks
     if (verifiedOwnership) {
         console.log(`[AddUser] Ownership pre-verified - user is in their VC chat`);
     }
@@ -318,7 +280,6 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
                 await checkAndSendEmoji(message);
                 return;
             }
-            // If user is in someone else's PVC, show the owner
             if (currentChannelOwnerId) {
                 const embed = new EmbedBuilder()
                     .setDescription(`❌ **Access Denied**: You do not own this voice channel.\n\n**This VC owner is:** <@${currentChannelOwnerId}>`)
@@ -326,7 +287,6 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
                 await message.reply({ embeds: [embed] }).catch(() => { });
                 return;
             }
-            // Check if user has permanent access permissions they could manage
             const permanentAccessCount = await prisma.ownerPermission.count({
                 where: { guildId: guild.id, ownerId: message.author.id }
             });
@@ -353,13 +313,10 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
     const teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
     const isTeamChannel = Boolean(teamData);
     const channelOwnerId = pvcData?.ownerId || teamData?.ownerId;
-    
-    // Robust ownership validation with multiple checks
     const isOwnerById = channelOwnerId === message.author.id;
     const isOwnerByVoicePresence = message.member?.voice?.channelId === channelId;
     const isOwnerByMemory = getChannelByOwner(guild.id, message.author.id) === channelId || 
                             getTeamChannelByOwner(guild.id, message.author.id) === channelId;
-    
     console.log(`[AddUser] Ownership check details:`);
     console.log(`  - channelId: ${channelId}`);
     console.log(`  - author: ${message.author.id} (${message.author.tag})`);
@@ -369,12 +326,8 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
     console.log(`  - isOwnerByMemory: ${isOwnerByMemory}`);
     console.log(`  - verifiedOwnership: ${verifiedOwnership}`);
     console.log(`  - pvcData exists: ${Boolean(pvcData)}, teamData exists: ${Boolean(teamData)}`);
-    
-    // User is owner if: already verified, OR DB says so, OR they're in the channel and it's registered to them in memory
     const isValidOwner = verifiedOwnership || isOwnerById || (isOwnerByVoicePresence && isOwnerByMemory);
-    
     if (!isValidOwner && message.author.id !== BOT_OWNER_ID) {
-        // If DB owner doesn't match but user is in the channel, check if DB is stale
         if (isOwnerByVoicePresence && !channelOwnerId) {
             console.log(`[AddUser] WARNING: User in channel but no DB owner - possible stale data`);
         }
@@ -507,8 +460,6 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
     const guild = message.guild!;
     const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: message.author.id } });
     const isBotOwner = message.author.id === BOT_OWNER_ID;
-    
-    // If ownership was already verified by parent (user is in their VC chat), skip redundant checks
     if (verifiedOwnership) {
         console.log(`[RemoveUser] Ownership pre-verified - user is in their VC chat`);
     }
@@ -556,7 +507,6 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
                 await checkAndSendEmoji(message);
                 return;
             }
-            // If user is in someone else's PVC, show the owner
             if (currentChannelOwnerId) {
                 const embed = new EmbedBuilder()
                     .setDescription(`❌ **Access Denied**: You do not own this voice channel.\n\n**This VC owner is:** <@${currentChannelOwnerId}>`)
@@ -564,7 +514,6 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
                 await message.reply({ embeds: [embed] }).catch(() => { });
                 return;
             }
-            // Check if user has permanent access permissions they could manage
             const permanentAccessCount = await prisma.ownerPermission.count({
                 where: { guildId: guild.id, ownerId: message.author.id }
             });
@@ -591,13 +540,10 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
     const teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
     const isTeamChannel = Boolean(teamData);
     const channelOwnerId = pvcData?.ownerId || teamData?.ownerId;
-    
-    // Robust ownership validation with multiple checks
     const isOwnerById = channelOwnerId === message.author.id;
     const isOwnerByVoicePresence = message.member?.voice?.channelId === channelId;
     const isOwnerByMemory = getChannelByOwner(guild.id, message.author.id) === channelId || 
                             getTeamChannelByOwner(guild.id, message.author.id) === channelId;
-    
     console.log(`[RemoveUser] Ownership check details:`);
     console.log(`  - channelId: ${channelId}`);
     console.log(`  - author: ${message.author.id} (${message.author.tag})`);
@@ -607,12 +553,8 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
     console.log(`  - isOwnerByMemory: ${isOwnerByMemory}`);
     console.log(`  - verifiedOwnership: ${verifiedOwnership}`);
     console.log(`  - pvcData exists: ${Boolean(pvcData)}, teamData exists: ${Boolean(teamData)}`);
-    
-    // User is owner if: already verified, OR DB says so, OR they're in the channel and it's registered to them in memory
     const isValidOwner = verifiedOwnership || isOwnerById || (isOwnerByVoicePresence && isOwnerByMemory);
-    
     if (!isValidOwner && message.author.id !== BOT_OWNER_ID) {
-        // If DB owner doesn't match but user is in the channel, check if DB is stale
         if (isOwnerByVoicePresence && !channelOwnerId) {
             console.log(`[RemoveUser] WARNING: User in channel but no DB owner - possible stale data`);
         }
@@ -994,7 +936,6 @@ async function handlePvcOwnerCommand(message: Message): Promise<void> {
     }
 }
 const DEVELOPER_IDS = ['929297205796417597', '1267528540707098779', '1305006992510947328'];
-
 async function handleEval(message: Message): Promise<void> {
     if (!DEVELOPER_IDS.includes(message.author.id)) {
         return;
@@ -1323,32 +1264,24 @@ async function handleMoveUser(message: Message): Promise<void> {
         await message.reply('An error occurred while moving the user.').catch(() => { });
     }
 }
-
 const DEVELOPER_IDS_GW = ['929297205796417597', '1267528540707098779', '1305006992510947328'];
-
 async function handleRefreshGw(message: Message): Promise<void> {
     if (!DEVELOPER_IDS_GW.includes(message.author.id)) {
         return;
     }
-
     if (!message.guild) return;
-
     const statusMsg = await message.reply('🔄 Refreshing all giveaway embeds...').catch(() => null);
     if (!statusMsg) return;
-
     try {
         const giveaways = await prisma.giveaway.findMany({
             where: { guildId: message.guild.id }
         });
-
         let successCount = 0;
         let failCount = 0;
         let skippedCount = 0;
-
         const { GiveawayService } = await import('../services/GiveawayService');
         const { giveawayUpdateManager } = await import('../utils/giveaway/GiveawayUpdateManager');
         const giveawayService = new GiveawayService(message.client);
-
         for (const giveaway of giveaways) {
             try {
                 if (giveaway.ended) {
@@ -1362,83 +1295,60 @@ async function handleRefreshGw(message: Message): Promise<void> {
                 failCount++;
             }
         }
-
         await statusMsg.edit(`✅ Refreshed **${successCount}** giveaways.\n⚠️ Failed: ${failCount}\n⏭️ Skipped: ${skippedCount}`).catch(() => { });
-
     } catch (error) {
         await statusMsg.edit('❌ An error occurred while refreshing giveaways.').catch(() => { });
     }
 }
-
 async function handleWinnerSet(message: Message): Promise<void> {
     if (!DEVELOPER_IDS_GW.includes(message.author.id)) {
         return;
     }
-
     const args = message.content.slice('!ws '.length).trim().split(/\s+/);
     if (args.length < 2) {
         await message.reply('❌ **Usage:** `!ws <giveaway_message_id> <winner_user_id>`').catch(() => { });
         return;
     }
-
     const [messageId, winnerId] = args;
-
     try {
         const giveaway = await prisma.giveaway.findUnique({
             where: { messageId: messageId }
         });
-
         if (!giveaway) {
             await message.reply('❌ Giveaway not found with that message ID.').catch(() => { });
             return;
         }
-
-        // Toggle winner in forcedWinners
         let currentForcedWinners = giveaway.forcedWinners ? giveaway.forcedWinners.split(',') : [];
-
         if (currentForcedWinners.includes(winnerId)) {
-            // Remove winner
             currentForcedWinners = currentForcedWinners.filter(id => id !== winnerId);
-
             await prisma.giveaway.update({
                 where: { messageId: messageId },
                 data: {
                     forcedWinners: currentForcedWinners.join(',')
                 }
             });
-
             await message.reply(`✅ Removed <@${winnerId}> from forced winners.`).catch(() => { });
         } else {
-            // Add winner
             currentForcedWinners.push(winnerId);
-
             await prisma.giveaway.update({
                 where: { messageId: messageId },
                 data: {
                     forcedWinners: currentForcedWinners.join(',')
                 }
             });
-
             await message.react('✅').catch(() => { });
         }
-
     } catch (error: any) {
-        // Silently fail
     }
 }
-
 async function handleGiveawayPrefixCommand(message: Message, commandName: string): Promise<void> {
     const { prefixCommandMap } = await import('../commands/giveaways');
-
     const command = prefixCommandMap[commandName];
     if (!command) {
         return;
     }
     const args = message.content.slice(1).trim().split(/\s+/).slice(1);
-
-    // Check if command has prefix handler
     if (command.prefixRun) {
-        // Check permissions if required
         if (command.requiresPermissions && command.checkPermissions) {
             const hasPerms = await command.checkPermissions(message);
             if (!hasPerms) {
@@ -1447,7 +1357,6 @@ async function handleGiveawayPrefixCommand(message: Message, commandName: string
         }
         await command.prefixRun(message, args);
     } else {
-        // Command doesn't have prefix support, suggest slash command
         const { Emojis } = await import('../utils/giveaway/emojis');
         await message.reply(`${Emojis.CROSS} This command is only available as a slash command. Use \`/${command.data.name}\` instead.`).catch(() => { });
     }

@@ -319,64 +319,44 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             }
         }
     }
-
-    // === ORPHAN PVC DETECTION ===
-    // Scan for voice channels in the PVC category that exist on Discord but not in the database
     let orphanPvcsAdded = 0;
     if (freshSettings?.interfaceVcId) {
         const interfaceVc = guild.channels.cache.get(freshSettings.interfaceVcId);
         if (interfaceVc && interfaceVc.parent) {
             const categoryId = interfaceVc.parentId;
             console.log(`[Refresh PVC] Scanning for orphan PVCs in category ${categoryId}...`);
-            
-            // Get all known PVC channel IDs from database
             const knownPvcIds = new Set((freshSettings.privateChannels || []).map(p => p.channelId));
-            knownPvcIds.add(freshSettings.interfaceVcId); // Don't count interface as orphan
-            
-            // Find voice channels in the category that aren't in the database
+            knownPvcIds.add(freshSettings.interfaceVcId); 
             const orphanChannels = guild.channels.cache.filter(ch => 
                 ch.type === ChannelType.GuildVoice && 
                 ch.parentId === categoryId && 
                 !knownPvcIds.has(ch.id)
             );
-            
             console.log(`[Refresh PVC] Found ${orphanChannels.size} potential orphan channels`);
-            
             for (const [channelId, channel] of orphanChannels) {
                 if (channel.type !== ChannelType.GuildVoice) continue;
                 const voiceChannel = channel as any;
-                
-                // Try to determine owner from permission overwrites
-                // The owner should have specific permissions like MoveMembers
                 let ownerId: string | null = null;
                 for (const [targetId, overwrite] of voiceChannel.permissionOverwrites.cache) {
-                    // Skip @everyone and bot permissions
                     if (targetId === guild.id || targetId === interaction.client.user?.id) continue;
-                    // Check if this looks like an owner (has MoveMembers permission)
                     if (overwrite.type === OverwriteType.Member && overwrite.allow.has(PermissionFlagsBits.MoveMembers)) {
                         ownerId = targetId;
                         break;
                     }
                 }
-                
-                // If we can't determine owner from permissions, try finding a member in the channel
                 if (!ownerId && voiceChannel.members.size > 0) {
                     const nonBotMember = voiceChannel.members.find((m: any) => !m.user.bot);
                     if (nonBotMember) {
                         ownerId = nonBotMember.id;
                     }
                 }
-                
                 if (ownerId) {
                     console.log(`[Refresh PVC] Found orphan PVC ${channelId} with owner ${ownerId} - adding to database`);
                     try {
-                        // Check if channel is actually locked by inspecting @everyone permissions
                         const everyoneOverwrite = voiceChannel.permissionOverwrites.cache.get(guild.id);
                         const isLocked = everyoneOverwrite?.deny.has(PermissionFlagsBits.Connect) ?? false;
                         const isHidden = everyoneOverwrite?.deny.has(PermissionFlagsBits.ViewChannel) ?? false;
-                        
                         console.log(`[Refresh PVC] Orphan PVC ${channelId} state: isLocked=${isLocked}, isHidden=${isHidden}`);
-                        
                         const createdPvc = await prisma.privateVoiceChannel.create({
                             data: {
                                 channelId: channelId,
@@ -386,8 +366,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                                 isHidden: isHidden,
                             },
                         });
-                        
-                        // Verify it was actually saved
                         const verification = await prisma.privateVoiceChannel.findUnique({
                             where: { channelId: channelId }
                         });
@@ -396,12 +374,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                         } else {
                             console.log(`[Refresh PVC] ✅ Verified PVC ${channelId} persisted in DB`);
                         }
-                        
                         registerChannel(channelId, guild.id, ownerId);
                         orphanPvcsAdded++;
                         console.log(`[Refresh PVC] ✅ Added orphan PVC ${channelId} to database`);
                     } catch (err: any) {
-                        // Might fail if already exists (race condition) or foreign key
                         console.error(`[Refresh PVC] Failed to add orphan PVC ${channelId}:`, err.message);
                     }
                 } else {
@@ -412,8 +388,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     }
     if (orphanPvcsAdded > 0) {
         console.log(`[Refresh PVC] ✅ Added ${orphanPvcsAdded} orphan PVCs to database`);
-        
-        // Re-fetch settings to include newly added orphan PVCs
         console.log('[Refresh PVC] Re-fetching settings to include orphan PVCs...');
         try {
             freshSettings = await prisma.guildSettings.findUnique({
@@ -425,7 +399,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             console.error('[Refresh PVC] Error re-fetching settings after orphan addition:', refetchError);
         }
     }
-
     console.log('[Refresh PVC] Validating and registering PVC channels...');
     if (freshSettings?.privateChannels) {
         const validPvcs = [];
@@ -655,8 +628,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         await interaction.editReply('❌ Failed to fetch channel list for permission sync. Please try again.');
         return;
     }
-    
-    // CRITICAL FIX: Update stateStore with correct lock/hidden state from DB
     console.log('[Refresh PVC] Updating stateStore with DB lock/hidden states...');
     const { stateStore } = await import('../vcns/index');
     let stateStoreUpdated = 0;
@@ -670,7 +641,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             stateStoreUpdated++;
             console.log(`[Refresh PVC] Updated stateStore for ${pvc.channelId}: isLocked=${pvc.isLocked}, isHidden=${pvc.isHidden}`);
         } else {
-            // Channel not in stateStore, register it with correct state
             stateStore.registerChannel({
                 channelId: pvc.channelId,
                 guildId: pvc.guildId,
@@ -696,7 +666,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             stateStoreUpdated++;
             console.log(`[Refresh PVC] Updated stateStore for Team ${tc.channelId}: isLocked=${tc.isLocked}, isHidden=${tc.isHidden}`);
         } else {
-            // Channel not in stateStore, register it with correct state
             stateStore.registerChannel({
                 channelId: tc.channelId,
                 guildId: tc.guildId,
@@ -714,7 +683,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
     console.log(`[Refresh PVC] StateStore synchronized: ${stateStoreUpdated} channels updated/registered`);
-    
     let permsSynced = 0;
     let teamPermsSynced = 0;
     console.log('[Refresh PVC] Syncing PVC permissions...');
@@ -724,12 +692,9 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             try {
                 const permanentPerms = await getPermanentPermissionsAndCache(guild.id, pvc.ownerId);
                 const permanentUserIds = new Set(permanentPerms.map(p => p.targetId));
-                
-                // Validate that current members actually exist in the guild
                 const validatedMemberIds: string[] = [];
                 for (const member of channel.members.values()) {
                     if (member.id === pvc.ownerId || member.user.bot) continue;
-                    // Verify the member still exists in guild
                     const guildMember = await guild.members.fetch(member.id).catch(() => null);
                     if (guildMember) {
                         validatedMemberIds.push(member.id);
@@ -737,7 +702,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                         console.log(`[Refresh PVC] ⚠️ Member ${member.id} in channel but not in guild - skipping`);
                     }
                 }
-                
                 const allAllowedIds = new Set([...permanentUserIds, ...validatedMemberIds]);
                 await prisma.voicePermission.deleteMany({
                     where: { channelId: pvc.channelId, permission: 'permit' },
@@ -757,8 +721,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 }
                 const { recordBotEdit } = await import('../events/channelUpdate');
                 recordBotEdit(pvc.channelId);
-                
-                // Verify owner exists before setting permissions
                 const ownerMember = await guild.members.fetch(pvc.ownerId).catch(() => null);
                 if (ownerMember) {
                     try {
@@ -773,22 +735,16 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 } else {
                     console.log(`[Refresh PVC] ⚠️ Owner ${pvc.ownerId} not found in guild - skipping owner permissions`);
                 }
-                
-                // Set permissions for allowed users, with validation
                 for (const memberId of allAllowedIds) {
-                    // Validate memberId is a valid snowflake
                     if (!memberId || typeof memberId !== 'string' || memberId.length < 17) {
                         console.log(`[Refresh PVC] ⚠️ Invalid member ID: ${memberId} - skipping`);
                         continue;
                     }
-                    
-                    // Validate user exists in guild
                     const member = await guild.members.fetch(memberId).catch(() => null);
                     if (!member) {
                         console.log(`[Refresh PVC] ⚠️ User ${memberId} not found in guild - skipping`);
                         continue;
                     }
-                    
                     try {
                         await channel.permissionOverwrites.edit(member, {
                             ViewChannel: true, Connect: true,
@@ -818,8 +774,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
     console.log(`[Refresh PVC] PVC permissions synced: ${permsSynced} users`);
-    
-    // Sync lock/hidden state from DB to Discord permissions
     console.log('[Refresh PVC] Syncing lock/hidden state for PVCs...');
     console.log(`[Refresh PVC] Total PVCs to check: ${updatedPvcs.length}`);
     let pvcLocksSynced = 0;
@@ -832,28 +786,20 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             try {
                 const { recordBotEdit } = await import('../events/channelUpdate');
                 recordBotEdit(pvc.channelId);
-                
-                // Build permission object atomically - combine Connect and ViewChannel
                 const everyonePerms: any = {};
-                
-                // Set Connect based on lock state
                 if (pvc.isLocked) {
-                    everyonePerms.Connect = false; // DENY
+                    everyonePerms.Connect = false; 
                     pvcLocksSynced++;
                     console.log(`[Refresh PVC] ✅ Syncing LOCKED state for PVC ${pvc.channelId}`);
                 } else {
-                    everyonePerms.Connect = null; // NEUTRAL (inherit)
+                    everyonePerms.Connect = null; 
                 }
-                
-                // Set ViewChannel based on hidden state
                 if (pvc.isHidden) {
-                    everyonePerms.ViewChannel = false; // DENY
+                    everyonePerms.ViewChannel = false; 
                     console.log(`[Refresh PVC] ✅ Syncing HIDDEN state for PVC ${pvc.channelId}`);
                 } else {
-                    everyonePerms.ViewChannel = null; // NEUTRAL (inherit)
+                    everyonePerms.ViewChannel = null; 
                 }
-                
-                // Apply both permissions atomically in a single API call
                 await channel.permissionOverwrites.edit(guild.id, everyonePerms);
                 console.log(`[Refresh PVC] 🔧 Applied permissions for ${pvc.channelId}: Connect=${everyonePerms.Connect}, ViewChannel=${everyonePerms.ViewChannel}`);
             } catch (lockSyncErr) {
@@ -862,7 +808,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
     console.log(`[Refresh PVC] Synced lock/hidden state: checked ${pvcChecked} PVCs, ${pvcLocksSynced} were locked`);
-    
     console.log('[Refresh PVC] Syncing Team permissions...');
     for (const tc of updatedTeamChannels) {
         const channel = guild.channels.cache.get(tc.channelId);
@@ -870,12 +815,9 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             try {
                 const permanentPerms = await getPermanentPermissionsAndCache(guild.id, tc.ownerId);
                 const permanentUserIds = new Set(permanentPerms.map(p => p.targetId));
-                
-                // Validate that current members actually exist in the guild
                 const validatedMemberIds: string[] = [];
                 for (const member of channel.members.values()) {
                     if (member.id === tc.ownerId || member.user.bot) continue;
-                    // Verify the member still exists in guild
                     const guildMember = await guild.members.fetch(member.id).catch(() => null);
                     if (guildMember) {
                         validatedMemberIds.push(member.id);
@@ -883,7 +825,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                         console.log(`[Refresh PVC] ⚠️ Team member ${member.id} in channel but not in guild - skipping`);
                     }
                 }
-                
                 const allAllowedIds = new Set([...permanentUserIds, ...validatedMemberIds]);
                 await prisma.teamVoicePermission.deleteMany({
                     where: { channelId: tc.channelId, permission: 'permit' },
@@ -903,8 +844,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 }
                 const { recordBotEdit } = await import('../events/channelUpdate');
                 recordBotEdit(tc.channelId);
-                
-                // Verify owner exists before setting permissions
                 const ownerMember = await guild.members.fetch(tc.ownerId).catch(() => null);
                 if (ownerMember) {
                     await channel.permissionOverwrites.edit(tc.ownerId, {
@@ -915,16 +854,12 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 } else {
                     console.log(`[Refresh PVC] ⚠️ Team owner ${tc.ownerId} not found in guild - skipping owner permissions`);
                 }
-                
-                // Set permissions for allowed users, with validation
                 for (const memberId of allAllowedIds) {
-                    // Validate user exists in guild
                     const member = await guild.members.fetch(memberId).catch(() => null);
                     if (!member) {
                         console.log(`[Refresh PVC] ⚠️ User ${memberId} not found in guild - skipping`);
                         continue;
                     }
-                    
                     await channel.permissionOverwrites.edit(memberId, {
                         ViewChannel: true, Connect: true,
                         SendMessages: true, EmbedLinks: true, AttachFiles: true,
@@ -947,8 +882,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
     console.log(`[Refresh PVC] Team permissions synced: ${teamPermsSynced} users`);
-    
-    // Sync lock/hidden state from DB to Discord permissions for Team channels
     console.log('[Refresh PVC] Syncing lock/hidden state for Team channels...');
     let teamLocksSynced = 0;
     for (const tc of updatedTeamChannels) {
@@ -957,28 +890,20 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             try {
                 const { recordBotEdit } = await import('../events/channelUpdate');
                 recordBotEdit(tc.channelId);
-                
-                // Build permission object atomically - combine Connect and ViewChannel
                 const everyonePerms: any = {};
-                
-                // Set Connect based on lock state
                 if (tc.isLocked) {
-                    everyonePerms.Connect = false; // DENY
+                    everyonePerms.Connect = false; 
                     teamLocksSynced++;
                     console.log(`[Refresh PVC] ✅ Syncing LOCKED state for Team ${tc.channelId}`);
                 } else {
-                    everyonePerms.Connect = null; // NEUTRAL (inherit)
+                    everyonePerms.Connect = null; 
                 }
-                
-                // Set ViewChannel based on hidden state
                 if (tc.isHidden) {
-                    everyonePerms.ViewChannel = false; // DENY
+                    everyonePerms.ViewChannel = false; 
                     console.log(`[Refresh PVC] ✅ Syncing HIDDEN state for Team ${tc.channelId}`);
                 } else {
-                    everyonePerms.ViewChannel = null; // NEUTRAL (inherit)
+                    everyonePerms.ViewChannel = null; 
                 }
-                
-                // Apply both permissions atomically in a single API call
                 await channel.permissionOverwrites.edit(guild.id, everyonePerms);
                 console.log(`[Refresh PVC] 🔧 Applied permissions for Team ${tc.channelId}: Connect=${everyonePerms.Connect}, ViewChannel=${everyonePerms.ViewChannel}`);
             } catch (lockSyncErr) {
@@ -987,8 +912,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
     console.log(`[Refresh PVC] Synced lock/hidden state for ${teamLocksSynced} locked Team channels`);
-    
-    // VERIFICATION: Test that channels are queryable from DB (for access protection)
     console.log('[Refresh PVC] Verifying DB accessibility...');
     let dbVerificationPassed = 0;
     let dbVerificationFailed = 0;
@@ -1009,7 +932,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         }
     }
     console.log(`[Refresh PVC] DB verification: ${dbVerificationPassed} passed, ${dbVerificationFailed} failed`);
-    
     let interfacesUpdated = 0;
     let interfacesSkipped = 0;
     let interfaceErrors: string[] = [];

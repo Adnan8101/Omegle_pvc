@@ -41,26 +41,15 @@ export async function loadGuildSettings(): Promise<void> {
         }
     }
 }
-
-/**
- * Sync in-memory cache with database for a specific guild.
- * This ensures the cache always reflects what's in the DB.
- */
 export async function syncGuildFromDatabase(guildId: string): Promise<{ synced: number }> {
     let synced = 0;
     const guild = client.guilds.cache.get(guildId);
     if (!guild) return { synced };
-
-    // Get current in-memory state
     const cachedPVCs = getGuildChannels(guildId);
     const cachedIds = new Set(cachedPVCs.map(p => p.channelId));
-
-    // Get database state
     const dbPVCs = await prisma.privateVoiceChannel.findMany({
         where: { guildId },
     });
-
-    // Register any PVCs that are in DB but not in cache
     for (const pvc of dbPVCs) {
         if (!cachedIds.has(pvc.channelId)) {
             const channel = guild.channels.cache.get(pvc.channelId);
@@ -70,12 +59,9 @@ export async function syncGuildFromDatabase(guildId: string): Promise<{ synced: 
             }
         }
     }
-
-    // Also sync team channels
     const dbTeamChannels = await prisma.teamVoiceChannel.findMany({
         where: { guildId },
     });
-
     for (const tc of dbTeamChannels) {
         const channel = guild.channels.cache.get(tc.channelId);
         if (channel && channel.type === ChannelType.GuildVoice) {
@@ -83,13 +69,8 @@ export async function syncGuildFromDatabase(guildId: string): Promise<{ synced: 
             synced++;
         }
     }
-
     return { synced };
 }
-
-/**
- * Sync all guilds from database - useful for recovery
- */
 export async function syncAllFromDatabase(): Promise<{ synced: number }> {
     let totalSynced = 0;
     for (const [guildId] of client.guilds.cache) {
@@ -105,11 +86,11 @@ export function startCleanupInterval(): void {
     if (cleanupInterval) return;
     setTimeout(async () => {
         await cleanupStaleChannels();
-        await syncAllFromDatabase(); // Ensure cache is in sync after cleanup
+        await syncAllFromDatabase(); 
     }, 30000);
     cleanupInterval = setInterval(async () => {
         await cleanupStaleChannels();
-        await syncAllFromDatabase(); // Periodic sync to catch any missed registrations
+        await syncAllFromDatabase(); 
     }, 5 * 60 * 1000);
 }
 export function stopCleanupInterval(): void {

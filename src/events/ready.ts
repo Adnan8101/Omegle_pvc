@@ -26,7 +26,6 @@ export async function execute(client: PVCClient): Promise<void> {
                 }
             }
             for (const pvc of settings.privateChannels) {
-                // Try cache first, then fetch if needed
                 let channel = guild.channels.cache.get(pvc.channelId);
                 if (!channel) {
                     try {
@@ -37,7 +36,6 @@ export async function execute(client: PVCClient): Promise<void> {
                     registerChannel(pvc.channelId, pvc.guildId, pvc.ownerId);
                     registeredCount++;
                 } else {
-                    // Channel doesn't exist, clean up DB
                     await prisma.privateVoiceChannel.delete({
                         where: { channelId: pvc.channelId },
                     }).catch(() => { });
@@ -49,7 +47,6 @@ export async function execute(client: PVCClient): Promise<void> {
         for (const tc of teamChannels) {
             const guild = client.guilds.cache.get(tc.guildId);
             if (!guild) continue;
-            // Try cache first, then fetch if needed
             let channel = guild.channels.cache.get(tc.channelId);
             if (!channel) {
                 try {

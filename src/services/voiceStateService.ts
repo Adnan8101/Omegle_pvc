@@ -4,34 +4,27 @@ import { enforcer } from './enforcerService';
 import { invalidateChannelPermissions } from '../utils/cache';
 import { client } from '../client';
 import { stateStore } from '../vcns/index';
-
 export class VoiceStateService {
     static async getVCState(channelId: string): Promise<any | null> {
         try {
             console.log(`[VoiceStateService] 🔍 getVCState called for channelId: ${channelId}`);
-            
             let state = await prisma.privateVoiceChannel.findUnique({
                 where: { channelId },
                 include: { permissions: true },
             });
-            
             if (state) {
                 console.log(`[VoiceStateService] ✅ Found PVC in DB: channelId=${channelId}, ownerId=${state.ownerId}, isLocked=${state.isLocked}`);
                 return state;
             }
-            
             console.log(`[VoiceStateService] ⚠️ Not found in privateVoiceChannel, checking teamVoiceChannel...`);
-            
             state = await prisma.teamVoiceChannel.findUnique({
                 where: { channelId },
                 include: { permissions: true },
             }) as any;
-            
             if (state) {
                 console.log(`[VoiceStateService] ✅ Found Team VC in DB: channelId=${channelId}, ownerId=${state.ownerId}`);
                 return state;
             }
-            
             console.log(`[VoiceStateService] ❌ Channel ${channelId} NOT FOUND in any database table`);
             return null;
         } catch (error: any) {
@@ -47,10 +40,6 @@ export class VoiceStateService {
         const state = await this.getVCState(channelId);
         return state?.ownerId || null;
     }
-    
-    /**
-     * Sync channel state to stateStore after DB update
-     */
     private static syncToStateStore(channelId: string, updates: Partial<{ isLocked: boolean; isHidden: boolean; userLimit: number }>): void {
         const existing = stateStore.getChannelState(channelId);
         if (existing) {
@@ -58,10 +47,8 @@ export class VoiceStateService {
             console.log(`[VoiceStateService] Synced state to stateStore for ${channelId}:`, updates);
         }
     }
-    
     static async setLock(channelId: string, isLocked: boolean): Promise<void> {
         const channel = client.channels.cache.get(channelId) as VoiceChannel | undefined;
-        
         if (isLocked) {
             if (channel && channel.type === ChannelType.GuildVoice) {
                 const state = await this.getVCState(channelId);
@@ -115,16 +102,12 @@ export class VoiceStateService {
                 }
             }
         }
-        
-        // Update database first
         const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
         if (pvc) {
             await prisma.privateVoiceChannel.update({
                 where: { channelId },
                 data: { isLocked },
             });
-            
-            // Verify the update was successful
             const verification = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
             if (verification?.isLocked !== isLocked) {
                 console.error(`[VoiceStateService] ❌ Lock update verification FAILED! Expected isLocked=${isLocked}, got isLocked=${verification?.isLocked}`);
@@ -138,8 +121,6 @@ export class VoiceStateService {
                     where: { channelId },
                     data: { isLocked },
                 });
-                
-                // Verify the update was successful
                 const verification = await prisma.teamVoiceChannel.findUnique({ where: { channelId } });
                 if (verification?.isLocked !== isLocked) {
                     console.error(`[VoiceStateService] ❌ Team lock update verification FAILED! Expected isLocked=${isLocked}, got isLocked=${verification?.isLocked}`);
@@ -148,48 +129,32 @@ export class VoiceStateService {
                 }
             } else {
                 console.error(`[VoiceStateService] ❌ CRITICAL: Channel ${channelId} NOT FOUND in database! Cannot set lock state. This channel needs /refresh_pvc to be re-registered.`);
-                return; // Don't proceed if channel not in DB
+                return; 
             }
         }
-        
-        // Sync to stateStore
         this.syncToStateStore(channelId, { isLocked });
-        
-        // CRITICAL: Immediately update Discord permission for @everyone role
-        // Don't rely solely on enforcer which may be delayed/rate-limited
         if (channel && channel.type === ChannelType.GuildVoice) {
             try {
                 const { recordBotEdit } = await import('../events/channelUpdate');
                 recordBotEdit(channelId);
-                
-                // Get current permission state to preserve other settings
                 const currentOverwrite = channel.permissionOverwrites.cache.get(channel.guild.id);
-                
-                // Build permission update object - only modify Connect
                 const permUpdate: any = {
-                    Connect: isLocked ? false : null, // false = deny, null = neutral (inherit)
+                    Connect: isLocked ? false : null, 
                 };
-                
-                // Preserve ViewChannel if it exists
                 if (currentOverwrite?.deny.has(PermissionFlagsBits.ViewChannel)) {
                     permUpdate.ViewChannel = false;
                 } else if (currentOverwrite?.allow.has(PermissionFlagsBits.ViewChannel)) {
                     permUpdate.ViewChannel = true;
                 }
-                
-                // Apply permission atomically
                 await channel.permissionOverwrites.edit(channel.guild.id, permUpdate);
                 console.log(`[VoiceStateService] Lock ${isLocked ? 'enabled' : 'disabled'} - Connect=${isLocked ? 'DENY' : 'NEUTRAL'} for channel ${channelId}`);
             } catch (error) {
                 console.error(`[VoiceStateService] Failed to update Discord permission for lock:`, error);
             }
         }
-        
-        // Also call enforcer to ensure full state sync
         await enforcer.enforceQuietly(channelId);
     }
     static async setHidden(channelId: string, isHidden: boolean): Promise<void> {
-        // Update database first
         const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
         if (pvc) {
             await prisma.privateVoiceChannel.update({
@@ -205,41 +170,27 @@ export class VoiceStateService {
                 });
             }
         }
-        
-        // Sync to stateStore
         this.syncToStateStore(channelId, { isHidden });
-        
-        // CRITICAL: Immediately update Discord permission for @everyone role
         const channel = client.channels.cache.get(channelId) as VoiceChannel | undefined;
         if (channel && channel.type === ChannelType.GuildVoice) {
             try {
                 const { recordBotEdit } = await import('../events/channelUpdate');
                 recordBotEdit(channelId);
-                
-                // Get current permission state to preserve other settings
                 const currentOverwrite = channel.permissionOverwrites.cache.get(channel.guild.id);
-                
-                // Build permission update object - only modify ViewChannel
                 const permUpdate: any = {
-                    ViewChannel: isHidden ? false : null, // false = deny, null = neutral (inherit)
+                    ViewChannel: isHidden ? false : null, 
                 };
-                
-                // Preserve Connect if it exists
                 if (currentOverwrite?.deny.has(PermissionFlagsBits.Connect)) {
                     permUpdate.Connect = false;
                 } else if (currentOverwrite?.allow.has(PermissionFlagsBits.Connect)) {
                     permUpdate.Connect = true;
                 }
-                
-                // Apply permission atomically
                 await channel.permissionOverwrites.edit(channel.guild.id, permUpdate);
                 console.log(`[VoiceStateService] Hidden ${isHidden ? 'enabled' : 'disabled'} - ViewChannel=${isHidden ? 'DENY' : 'NEUTRAL'} for channel ${channelId}`);
             } catch (error) {
                 console.error(`[VoiceStateService] Failed to update Discord permission for hidden:`, error);
             }
         }
-        
-        // Also call enforcer to ensure full state sync
         await enforcer.enforceQuietly(channelId);
     }
     static async setUserLimit(channelId: string, limit: number): Promise<void> {
@@ -258,7 +209,6 @@ export class VoiceStateService {
                 });
             }
         }
-        // Sync to stateStore
         this.syncToStateStore(channelId, { userLimit: limit });
         await enforcer.enforceQuietly(channelId);
     }

@@ -125,16 +125,13 @@ export class Scheduler extends EventEmitter {
             }
             pulledCount++;
             console.log(`[Scheduler] 📥 Pulled intent ${intent.id} (${intent.action}) from queue`);
-            
-            // CRITICAL FIX #5: Handle RETRY_SCHEDULED intents
             if (intent.status === IntentStatus.RETRY_SCHEDULED && intent.nextRetryAt) {
                 const now = Date.now();
                 if (now < intent.nextRetryAt) {
-                    // Not yet ready for retry - schedule for later
                     const executeAt = intent.nextRetryAt;
                     const scheduled: ScheduledIntent = {
                         intent,
-                        decision: { execute: true, notify: false }, // Retry already decided
+                        decision: { execute: true, notify: false }, 
                         scheduledAt: now,
                         executeAt,
                     };
@@ -142,11 +139,9 @@ export class Scheduler extends EventEmitter {
                     intent.status = IntentStatus.SCHEDULED;
                     continue;
                 }
-                // Ready for retry now - reset status and proceed
                 intent.status = IntentStatus.PENDING;
                 intent.nextRetryAt = undefined;
             }
-            
             this.scheduleIntent(intent);
         }
         stateStore.setQueueDepth(intentQueue.size());

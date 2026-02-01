@@ -1,4 +1,3 @@
-// Giveaway Commands Index
 import gcreate from './create';
 import gstart from './start';
 import gend from './end';
@@ -13,8 +12,6 @@ import gstop from './stop';
 import gschedule from './schedule';
 import refresh_gw from './refresh_gw';
 import dummy from './dummy';
-
-// Export all giveaway commands
 export const giveawayCommands: Record<string, any> = {
     gcreate,
     gstart,
@@ -31,8 +28,6 @@ export const giveawayCommands: Record<string, any> = {
     refresh_gw,
     dummy
 };
-
-// Command name to module mapping for prefix commands
 export const prefixCommandMap: Record<string, any> = {
     'gcreate': gcreate,
     'gstart': gstart,
@@ -49,5 +44,4 @@ export const prefixCommandMap: Record<string, any> = {
     'refresh_gw': refresh_gw,
     'dummy': dummy
 };
-
 export default giveawayCommands;

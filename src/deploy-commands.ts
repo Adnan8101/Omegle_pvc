@@ -24,11 +24,7 @@ import { command as deployCommandsCmd } from './commands/deploy_commands';
 import { command as funBan } from './commands/fun_ban';
 import { command as counting } from './commands/counting';
 import { command as ping } from './commands/ping';
-
-// Giveaway commands
 import { giveawayCommands } from './commands/giveaways';
-
-// Base commands array
 const baseCommands = [
     pvcSetup.data.toJSON(),
     adminStrictness.data.toJSON(),
@@ -55,12 +51,9 @@ const baseCommands = [
     counting.data.toJSON(),
     ping.data.toJSON(),
 ];
-
-// Add giveaway commands to the array
 const giveawayCommandsArray = Object.values(giveawayCommands)
     .filter((cmd: any) => cmd.data)
     .map((cmd: any) => cmd.data.toJSON());
-
 const commands = [...baseCommands, ...giveawayCommandsArray];
 const rest = new REST().setToken(Config.token);
 async function deployCommands() {
@@ -68,12 +61,10 @@ async function deployCommands() {
         console.log(`Started refreshing ${commands.length} application (/) commands.`);
         console.log(`Base commands: ${baseCommands.length}`);
         console.log(`Giveaway commands: ${giveawayCommandsArray.length}`);
-        
         const route = Config.guildId
             ? Routes.applicationGuildCommands(Config.clientId, Config.guildId)
             : Routes.applicationCommands(Config.clientId);
         await rest.put(route, { body: commands });
-        
         console.log(`Successfully reloaded ${commands.length} application (/) commands.`);
         process.exit(0);
     } catch (error) {

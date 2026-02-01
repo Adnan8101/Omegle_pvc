@@ -104,10 +104,8 @@ export class DecisionEngine {
         return this.approve();
     }
     private checkResourceState(intent: Intent<unknown>): Decision {
-        // Check if resource is locked by someone OTHER than this intent
         const lockHolder = lockManager.getHolder(intent.resourceId);
         if (lockHolder && lockHolder !== intent.id) {
-            // Resource is locked by another operation
             if (intent.priority <= IntentPriority.CRITICAL) {
                 return this.approve(500, 'Resource locked - short wait');
             }
@@ -116,8 +114,6 @@ export class DecisionEngine {
                 'Resource is locked by another operation',
             );
         }
-        // Note: If lockHolder === intent.id, the intent owns the lock (acquired by queue) - allow execution
-        
         if (this.isVCOperation(intent.action)) {
             const channelState = stateStore.getChannelState(intent.resourceId);
             if (this.requiresExistingChannel(intent.action)) {

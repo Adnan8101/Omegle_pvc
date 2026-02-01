@@ -68,8 +68,6 @@ export function registerChannel(channelId: string, guildId: string, ownerId: str
     };
     channelStates.set(channelId, state);
     ownerToChannel.set(`${guildId}:${ownerId}`, channelId);
-    
-    // Also register in stateStore for VCNS consistency (async, fire and forget)
     import('../vcns/index').then(({ stateStore }) => {
         if (!stateStore.getChannelState(channelId)) {
             stateStore.registerChannel({
@@ -84,7 +82,7 @@ export function registerChannel(channelId: string, guildId: string, ownerId: str
                 lastModified: Date.now(),
             });
         }
-    }).catch(() => {}); // Ignore if VCNS not ready yet
+    }).catch(() => {}); 
 }
 export function unregisterChannel(channelId: string): void {
     const state = channelStates.get(channelId);
@@ -94,8 +92,6 @@ export function unregisterChannel(channelId: string): void {
     }
     joinOrder.delete(channelId);
     tempPermittedUsers.delete(channelId);
-    
-    // Also unregister from stateStore
     import('../vcns/index').then(({ stateStore }) => {
         stateStore.unregisterChannel(channelId);
     }).catch(() => {});
@@ -254,8 +250,6 @@ export function registerTeamChannel(channelId: string, guildId: string, ownerId:
     };
     teamChannelStates.set(channelId, state);
     teamOwnerToChannel.set(`${guildId}:${ownerId}`, channelId);
-    
-    // Also register in stateStore for VCNS consistency
     import('../vcns/index').then(({ stateStore }) => {
         if (!stateStore.getChannelState(channelId)) {
             stateStore.registerChannel({
@@ -281,8 +275,6 @@ export function unregisterTeamChannel(channelId: string): void {
     }
     joinOrder.delete(channelId);
     tempPermittedUsers.delete(channelId);
-    
-    // Also unregister from stateStore
     import('../vcns/index').then(({ stateStore }) => {
         stateStore.unregisterChannel(channelId);
     }).catch(() => {});

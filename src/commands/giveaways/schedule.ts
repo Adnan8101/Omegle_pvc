@@ -9,37 +9,24 @@ import {
     toBigInt
 } from '../../utils/giveaway/timeUtils';
 import { prisma } from '../../utils/database';
-
 function getScheduledTime(timeStr: string, timezone: string): number | null {
-
     const regex = /^([0-1]?[0-9]|2[0-3]):([0-5][0-9])$/;
     if (!regex.test(timeStr)) return null;
-
-
     if (!moment.tz.zone(timezone)) return null;
-
     const now = moment.tz(timezone);
     const [h, m] = timeStr.split(':').map(Number);
-
-
     const scheduled = moment.tz(timezone)
         .set({ hour: h, minute: m, second: 0, millisecond: 0 });
-
-
     if (scheduled.isBefore(now)) {
         scheduled.add(1, 'day');
     }
-
     return scheduled.valueOf();
 }
-
 export default {
     data: new SlashCommandBuilder()
         .setName('gschedule')
         .setDescription('Schedule a giveaway for a specific time')
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-
-        // Required options
         .addStringOption(option =>
             option.setName('prize').setDescription('Prize to give away').setRequired(true))
         .addIntegerOption(option =>
@@ -53,8 +40,6 @@ export default {
                 .setDescription('Timezone (e.g. Asia/Kolkata, UTC, America/New_York)')
                 .setRequired(true)
                 .setAutocomplete(true))
-
-        // Optional options
         .addChannelOption(option =>
             option.setName('channel').setDescription('Channel to start the giveaway in'))
         .addBooleanOption(option =>
@@ -90,7 +75,6 @@ export default {
         .addRoleOption(option =>
             option.setName('increase_chance_role')
                 .setDescription('Role for increased chances (required if increase_chance is role or role_booster)')),
-
     async autocomplete(interaction: AutocompleteInteraction) {
         const focusedValue = interaction.options.getFocused();
         const choices: string[] = moment.tz.names();
@@ -99,22 +83,17 @@ export default {
             filtered.map((choice: string) => ({ name: choice, value: choice })),
         );
     },
-
     async execute(interaction: ChatInputCommandInteraction) {
         if (!await hasGiveawayPermissions(interaction)) {
             return;
         }
-
         await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
-
         const timeStr = interaction.options.getString('time', true);
         const timezone = interaction.options.getString('timezone', true);
         const prize = interaction.options.getString('prize', true);
         const winners = interaction.options.getInteger('winners', true);
         const durationStr = interaction.options.getString('duration', true);
         const channel = interaction.options.getChannel('channel') as TextChannel || interaction.channel as TextChannel;
-
-
         const roleReq = interaction.options.getRole('role_req');
         const inviteReq = interaction.options.getInteger('invite_req') || 0;
         const captchaReq = interaction.options.getBoolean('captcha') || false;
@@ -128,14 +107,11 @@ export default {
         const announcementMedia = interaction.options.getString('announce_media');
         const increaseChance = interaction.options.getString('increase_chance') || null;
         const increaseChanceRole = interaction.options.getRole('increase_chance_role');
-
-        // Validate increase_chance_role requirement
         if (increaseChance && (increaseChance === 'role' || increaseChance === 'role_booster') && !increaseChanceRole) {
             return interaction.editReply({
                 content: `${Emojis.CROSS} You must select a role for \`increase_chance_role\` when using role-based increased chances.`
             });
         }
-
         await this.run(interaction, channel, timeStr, timezone, winners, prize, durationStr, {
             roleReq: roleReq?.id,
             inviteReq,
@@ -152,20 +128,15 @@ export default {
             increaseChanceRole: increaseChanceRole?.id
         });
     },
-
     async prefixRun(message: any, args: string[]) {
         const command = message.client.application.commands.cache.find((c: any) => c.name === 'gschedule');
         const commandId = command ? command.id : '0';
-
         const embed = new EmbedBuilder()
             .setColor(Theme.EmbedColor)
             .setDescription(`${Emojis.CROSS} The \`!gschedule\` command has been moved to slash commands only.\n\nPlease use </gschedule:${commandId}> instead!`);
-
         await message.reply({ embeds: [embed] });
     },
-
     async run(ctx: any, channel: TextChannel, timeStr: string, timezone: string, winners: number, prize: string, durationStr: string, opts: any) {
-
         const reply = async (msg: any) => {
             if (ctx.deferred || ctx.replied) {
                 return await ctx.editReply(msg);
@@ -173,32 +144,24 @@ export default {
                 return await ctx.reply(msg);
             }
         };
-
-
         const validation = validateDuration(durationStr);
         if (!validation.isValid) {
             const msg = { content: `${Emojis.CROSS} ${validation.error}`, flags: [MessageFlags.Ephemeral] };
             return await reply(msg);
         }
-
         const durationMs = parseDuration(durationStr);
         if (!durationMs) {
             const msg = { content: `${Emojis.CROSS} Invalid duration format.`, flags: [MessageFlags.Ephemeral] };
             return await reply(msg);
         }
-
-
         const startTimeMs = getScheduledTime(timeStr, timezone);
         if (!startTimeMs) {
             const msg = { content: `${Emojis.CROSS} Invalid time or timezone.\n**Time format**: HH:mm\n**Timezone**: Valid IANA Zone (e.g., Asia/Kolkata, UTC)\nYour input: ${timeStr} in ${timezone}`, flags: [MessageFlags.Ephemeral] };
             return await reply(msg);
         }
-
-
         if (opts.announce && !opts.announcement && !opts.announcementMedia) {
             await this.handleAnnouncementInput(ctx, channel, timeStr, timezone, startTimeMs, winners, prize, durationMs, opts);
         } else {
-
             const payload = {
                 duration: durationMs,
                 roleRequirement: opts.roleReq || null,
@@ -214,13 +177,10 @@ export default {
                 increaseChance: opts.increaseChance || null,
                 increaseChanceRole: opts.increaseChanceRole || null
             };
-
             await this.saveScheduledGiveaway(ctx, channel, startTimeMs, winners, prize, timezone, payload);
         }
     },
-
     async handleAnnouncementInput(ctx: ChatInputCommandInteraction, channel: TextChannel, timeStr: string, timezone: string, startTimeMs: number, winners: number, prize: string, durationMs: number, opts: any) {
-
         const promptEmbed = new EmbedBuilder()
             .setTitle('📢 Add Giveaway Announcement')
             .setDescription([
@@ -237,7 +197,6 @@ export default {
             ].join('\n'))
             .setColor(Theme.EmbedColor)
             .setFooter({ text: 'Send your message now or click Skip below' });
-
         const skipRow = new ActionRowBuilder<ButtonBuilder>()
             .addComponents(
                 new ButtonBuilder()
@@ -246,13 +205,9 @@ export default {
                     .setStyle(ButtonStyle.Secondary)
                     .setEmoji('⏭️')
             );
-
         await ctx.editReply({ embeds: [promptEmbed], components: [skipRow] });
-
-
         const filter = (m: Message) => m.author.id === ctx.user.id && m.channel.id === ctx.channel!.id;
         const messageChannel = ctx.channel as TextChannel;
-
         const buttonPromise = ctx.fetchReply().then((msg: any) =>
             msg.awaitMessageComponent({
                 filter: (btn: ButtonInteraction) => btn.user.id === ctx.user.id && btn.customId === 'skip_message_input',
@@ -260,18 +215,14 @@ export default {
                 componentType: ComponentType.Button
             }).catch(() => null)
         );
-
         const messagePromise = messageChannel.awaitMessages({ filter, max: 1, time: 180000, errors: ['time'] }).catch(() => null);
-
         const result = await Promise.race([buttonPromise, messagePromise]);
-
         if (!result) {
             const timeoutEmbed = new EmbedBuilder()
                 .setDescription(`${Emojis.CROSS} Timed out. Giveaway not scheduled.`)
                 .setColor(Theme.ErrorColor);
             return await ctx.editReply({ embeds: [timeoutEmbed], components: [] });
         }
-
         if (result instanceof Map) {
             const collected = result;
             if (collected.size === 0) {
@@ -297,31 +248,22 @@ export default {
                 increaseChance: opts.increaseChance || null,
                 increaseChanceRole: opts.increaseChanceRole || null
             };
-
             await skipButton.deferUpdate();
             return await this.saveScheduledGiveaway(ctx, channel, startTimeMs, winners, prize, timezone, payload);
         }
-
         const collected = result as Map<string, Message>;
-
         const userMessage = Array.from(collected.values())[0];
         const announcementText = userMessage.content || '';
         const announcementMedia = userMessage.attachments.first()?.url || null;
-
-
         await userMessage.delete().catch(() => { });
-
-
         const previewEmbed = new EmbedBuilder()
             .setTitle('👀 Announcement Preview')
             .setDescription(announcementText || '*No text*')
             .setColor(Theme.EmbedColor)
             .setFooter({ text: 'This will be posted when the giveaway starts' });
-
         if (announcementMedia) {
             previewEmbed.setImage(announcementMedia);
         }
-
         const row = new ActionRowBuilder<ButtonBuilder>()
             .addComponents(
                 new ButtonBuilder()
@@ -340,17 +282,13 @@ export default {
                     .setStyle(ButtonStyle.Danger)
                     .setEmoji('❌')
             );
-
         const previewMsg = await ctx.editReply({ embeds: [previewEmbed], components: [row] });
-
-
         try {
             const selection = await previewMsg.awaitMessageComponent({
                 filter: (btn) => btn.user.id === ctx.user.id,
                 time: 180000,
                 componentType: ComponentType.Button
             });
-
             if (selection.customId === 'save_announcement') {
                 const payload = {
                     duration: durationMs,
@@ -367,12 +305,10 @@ export default {
                     increaseChance: opts.increaseChance || null,
                     increaseChanceRole: opts.increaseChanceRole || null
                 };
-
                 await selection.update({ embeds: [], components: [] });
                 await this.saveScheduledGiveaway(ctx, channel, startTimeMs, winners, prize, timezone, payload);
             } else if (selection.customId === 'edit_announcement') {
                 await selection.deferUpdate();
-
                 await this.handleAnnouncementInput(ctx, channel, timeStr, timezone, startTimeMs, winners, prize, durationMs, opts);
             } else {
                 const cancelEmbed = new EmbedBuilder()
@@ -387,7 +323,6 @@ export default {
             await ctx.editReply({ embeds: [timeoutEmbed], components: [] });
         }
     },
-
     async saveScheduledGiveaway(ctx: any, channel: TextChannel, startTimeMs: number, winners: number, prize: string, timezone: string, payload: any) {
         const reply = async (msg: any) => {
             if (ctx.deferred || ctx.replied) {
@@ -396,7 +331,6 @@ export default {
                 return await ctx.reply(msg);
             }
         };
-
         try {
             await prisma.scheduledGiveaway.create({
                 data: {
@@ -409,7 +343,6 @@ export default {
                     payload: JSON.stringify(payload)
                 }
             });
-
             const timestamp = Math.floor(startTimeMs / 1000);
             const successEmbed = new EmbedBuilder()
                 .setTitle(`${Emojis.TICK} Giveaway Scheduled!`)
@@ -423,9 +356,7 @@ export default {
                 ].join('\n'))
                 .setColor(Theme.SuccessColor)
                 .setTimestamp();
-
             await reply({ embeds: [successEmbed], components: [] });
-
         } catch (error) {
             await reply({ content: `${Emojis.CROSS} Failed to schedule giveaway.`, flags: [MessageFlags.Ephemeral] });
         }

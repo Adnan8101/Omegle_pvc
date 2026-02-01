@@ -175,21 +175,13 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
         }
     }
     const messageChannel = interaction.channel;
-    
-    // First check memory state (faster and handles race condition when DB write is in background)
     let memoryPvcChannel = getChannelByOwner(guild.id, userId);
     let memoryTeamChannel = getTeamChannelByOwner(guild.id, userId);
-    
-    // Then check database as fallback
     const dbPvc = await prisma.privateVoiceChannel.findFirst({ where: { guildId: guild.id, ownerId: userId } });
     const dbTeam = !dbPvc ? await prisma.teamVoiceChannel.findFirst({ where: { guildId: guild.id, ownerId: userId } }) : null;
-    
-    // Use memory state first, then DB
     const ownedChannelId = memoryPvcChannel || memoryTeamChannel || dbPvc?.channelId || dbTeam?.channelId;
     let isTeamChannel = Boolean(memoryTeamChannel || dbTeam);
     let targetChannelId = ownedChannelId;
-    
-    // Register in memory if found from DB but not in memory
     if (dbPvc && !memoryPvcChannel) {
         const { registerChannel } = await import('../../utils/voiceManager');
         registerChannel(dbPvc.channelId, dbPvc.guildId, dbPvc.ownerId);
@@ -511,41 +503,33 @@ async function handleClaim(
         await interaction.reply({ content: 'You must be in a voice channel to claim it.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-    
-    // Check memory first (both PVC and Team), then fallback to DB
     let channelState = getChannelState(voiceChannelId);
     let teamChannelState = getTeamChannelState(voiceChannelId);
     let isTeamChannel = false;
     let ownerId: string | undefined;
-    
     if (channelState) {
         ownerId = channelState.ownerId;
     } else if (teamChannelState) {
         ownerId = teamChannelState.ownerId;
         isTeamChannel = true;
     } else {
-        // Fallback to DB
         const pvcData = await prisma.privateVoiceChannel.findUnique({ where: { channelId: voiceChannelId } });
         const teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({ where: { channelId: voiceChannelId } }) : null;
         if (pvcData) {
             ownerId = pvcData.ownerId;
-            // Register in memory for future use
             registerChannel(voiceChannelId, pvcData.guildId, pvcData.ownerId);
             channelState = getChannelState(voiceChannelId);
         } else if (teamData) {
             ownerId = teamData.ownerId;
             isTeamChannel = true;
-            // Register in memory for future use
             registerTeamChannel(voiceChannelId, teamData.guildId, teamData.ownerId, teamData.teamType.toLowerCase() as any);
             teamChannelState = getTeamChannelState(voiceChannelId);
         }
     }
-    
     if (!ownerId) {
         await interaction.reply({ content: 'This is not a private voice channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-    
     const userId = interaction.user.id;
     const guild = interaction.guild!;
     const channel = guild.channels.cache.get(voiceChannelId);
@@ -557,18 +541,13 @@ async function handleClaim(
         await interaction.reply({ content: 'The owner is still in the channel. You cannot claim it.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-    
-    // Transfer ownership in memory
     if (isTeamChannel) {
         transferTeamOwnership(voiceChannelId, userId);
-        // Also update stateStore if it exists there
         stateStore.transferOwnership(voiceChannelId, userId);
     } else {
         transferOwnership(voiceChannelId, userId);
-        // Also update stateStore if it exists there
         stateStore.transferOwnership(voiceChannelId, userId);
     }
-    
     const newOwner = await guild.members.fetch(userId);
     recordBotEdit(voiceChannelId);
     await vcnsBridge.removePermission({
@@ -587,8 +566,6 @@ async function handleClaim(
         },
     });
     await channel.setName(newOwner.displayName).catch(() => { });
-    
-    // Update DB based on channel type
     if (isTeamChannel) {
         await prisma.teamVoiceChannel.update({
             where: { channelId: voiceChannelId },
@@ -600,7 +577,6 @@ async function handleClaim(
             data: { ownerId: userId },
         }).catch((err: any) => console.error('[handleClaim] Failed to update PVC DB:', err));
     }
-    
     await interaction.reply({ content: '👑 You have claimed ownership of this voice channel.', flags: [MessageFlags.Ephemeral] });
 }
 async function handleDelete(interaction: ButtonInteraction): Promise<void> {
@@ -651,14 +627,10 @@ async function handleDelete(interaction: ButtonInteraction): Promise<void> {
         return;
     }
     let allPVCs = getGuildChannels(guild.id);
-    
-    // If cache is empty, try loading from database as fallback
     if (allPVCs.length === 0) {
         const dbPVCs = await prisma.privateVoiceChannel.findMany({
             where: { guildId: guild.id },
         });
-        
-        // Re-register any PVCs found in DB that are still valid Discord channels
         for (const pvc of dbPVCs) {
             const channel = guild.channels.cache.get(pvc.channelId);
             if (channel) {
@@ -666,11 +638,8 @@ async function handleDelete(interaction: ButtonInteraction): Promise<void> {
                 registerChannel(pvc.channelId, pvc.guildId, pvc.ownerId);
             }
         }
-        
-        // Re-fetch from cache after registration
         allPVCs = getGuildChannels(guild.id);
     }
-    
     if (allPVCs.length === 0) {
         await interaction.reply({
             content: 'There are no active private voice channels.',
@@ -709,21 +678,15 @@ async function handleDeleteConfirm(interaction: ButtonInteraction): Promise<void
     const parts = customId.replace('pvc_delete_confirm:', '').split(':');
     const channelId = parts[0];
     const isTeamChannel = parts[1] === 'true';
-    
-    // Try to get channel from cache or fetch it
     let channel = guild.channels.cache.get(channelId);
     if (!channel) {
         try {
             channel = await guild.channels.fetch(channelId) as any;
         } catch {
-            // Channel doesn't exist in Discord - just clean up DB
         }
     }
-    
     try {
         const channelName = channel?.name || 'Unknown';
-        
-        // DELETE FROM DISCORD FIRST
         if (channel) {
             await vcnsBridge.deleteVC({
                 guild,
@@ -731,8 +694,6 @@ async function handleDeleteConfirm(interaction: ButtonInteraction): Promise<void
                 isTeam: isTeamChannel,
             });
         }
-        
-        // THEN clean up DB and memory
         if (isTeamChannel) {
             const { unregisterTeamChannel } = await import('../../utils/voiceManager');
             unregisterTeamChannel(channelId);
@@ -743,7 +704,6 @@ async function handleDeleteConfirm(interaction: ButtonInteraction): Promise<void
             await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
             await prisma.voicePermission.deleteMany({ where: { channelId } }).catch(() => { });
         }
-        
         await logAction({
             action: isTeamChannel ? LogAction.TEAM_CHANNEL_DELETED : LogAction.CHANNEL_DELETED,
             guild: guild,
@@ -777,21 +737,15 @@ async function handleAdminDelete(interaction: ButtonInteraction): Promise<void> 
         return;
     }
     const channelId = customId.replace('pvc_admin_delete:', '');
-    
-    // Try to get channel from cache or fetch it
     let channel = guild.channels.cache.get(channelId);
     if (!channel) {
         try {
             channel = await guild.channels.fetch(channelId) as any;
         } catch {
-            // Channel doesn't exist in Discord
         }
     }
-    
     try {
         const channelName = channel?.name || 'Unknown';
-        
-        // DELETE FROM DISCORD FIRST
         if (channel) {
             await vcnsBridge.deleteVC({
                 guild,
@@ -799,12 +753,9 @@ async function handleAdminDelete(interaction: ButtonInteraction): Promise<void> 
                 isTeam: false,
             });
         }
-        
-        // THEN clean up DB and memory
         unregisterChannel(channelId);
         await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
         await prisma.voicePermission.deleteMany({ where: { channelId } }).catch(() => { });
-        
         await interaction.update({
             content: `Channel **${channelName}** deleted successfully.`,
             embeds: [],

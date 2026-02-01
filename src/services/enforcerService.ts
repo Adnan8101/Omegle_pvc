@@ -139,13 +139,8 @@ class EnforcerService {
                 this.enforcingChannels.delete(channelId);
                 return;
             }
-            
-            // CRITICAL: Try cache first, but ALWAYS fetch from API before deleting from DB
-            // Cache may not be populated, especially during high load or after restart
             let channel = client.channels.cache.get(channelId) as VoiceChannel | undefined;
-            
             if (!channel || channel.type !== ChannelType.GuildVoice) {
-                // Try to fetch from Discord API before deleting from DB
                 try {
                     const guild = client.guilds.cache.get(dbState.guildId);
                     if (guild) {
@@ -159,7 +154,6 @@ class EnforcerService {
                     console.log(`[Enforcer] Could not fetch channel ${channelId} from API:`, fetchErr);
                 }
             }
-            
             if (!channel || channel.type !== ChannelType.GuildVoice) {
                 console.log(`[Enforcer] ⚠️ Channel ${channelId} not found in cache OR API. Cleaning up DB...`);
                 await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => {});
@@ -195,23 +189,12 @@ class EnforcerService {
             });
             const everyoneDeny: bigint[] = [];
             const everyoneAllow: bigint[] = [];
-            
-            // When locked: explicitly DENY Connect for @everyone
-            // When unlocked: do NOT set Connect at all (leave as neutral/inherit)
             if (dbState.isLocked) {
                 everyoneDeny.push(PermissionFlagsBits.Connect);
             }
-            // Note: When not locked, we intentionally don't add Connect to allow - let it inherit
-            
-            // When hidden: explicitly DENY ViewChannel for @everyone
-            // When visible: do NOT set ViewChannel at all (leave as neutral/inherit)
             if (dbState.isHidden) {
                 everyoneDeny.push(PermissionFlagsBits.ViewChannel);
             }
-            // Note: When not hidden, we intentionally don't add ViewChannel to allow - let it inherit
-            
-            // Only add @everyone overwrite if there's something to deny
-            // If both arrays are empty, we don't need an @everyone overwrite at all
             if (everyoneDeny.length > 0 || everyoneAllow.length > 0) {
                 overwrites.push({
                     id: channel.guild.id,
@@ -315,16 +298,11 @@ class EnforcerService {
                 await this.kickMemberInstantly(member, channel.name, dbState.ownerId, 'blocked');
                 continue;
             }
-            
-            // ADMIN STRICTNESS: ONLY applies when channel is RESTRICTED (locked, hidden, or full)
-            // When channel is open, strictness does NOT apply - anyone can stay
             const isRestricted = isLocked || isHidden || isFull;
-            
             if (strictnessEnabled && isRestricted) {
                 const isWhitelisted = whitelist.some(
                     w => w.targetId === memberId || memberRoleIds.includes(w.targetId)
                 );
-                
                 console.log(`[Enforcer-Strictness] 🔍 Checking ${member.user.tag}:`, {
                     memberId,
                     isWhitelisted,
@@ -333,40 +311,30 @@ class EnforcerService {
                     isHidden,
                     isFull
                 });
-                
                 if (isWhitelisted) {
-                    // Whitelisted user - allow access
                     console.log(`[Enforcer-Strictness] ✅ ${member.user.tag} is WHITELISTED - access ALLOWED`);
                     continue;
                 }
-                
-                // NOT whitelisted + strictness ON + channel RESTRICTED = INSTANT KICK
                 const restrictionReason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
                 console.log(`[Enforcer-Strictness] 🚨 ${member.user.tag} is NOT whitelisted, channel is ${restrictionReason} - INSTANT KICK`);
                 await this.kickMemberInstantly(member, channel.name, dbState.ownerId, `not whitelisted - channel ${restrictionReason} (admin strictness)`);
                 continue;
             }
-            
-            // Strictness is OFF OR channel is OPEN - apply normal access rules
             if (!isRestricted) {
                 console.log(`[Enforcer] ✅ Channel open - ${member.user.tag} allowed (strictness ${strictnessEnabled ? 'ON but channel open' : 'OFF'})`);
                 continue;
             }
-            
             const isPermitted = permittedUserIds.has(memberId) ||
                 memberRoleIds.some(roleId => permittedRoleIds.has(roleId));
             if (isPermitted) {
                 console.log(`[Enforcer] ✅ ${member.user.tag} has AU/permit - allowed`);
                 continue;
             }
-            
             const hasPermanentAccess = stateStore.hasPermanentAccess(guild.id, dbState.ownerId, memberId);
             if (hasPermanentAccess) {
                 console.log(`[Enforcer] ✅ ${member.user.tag} has permanent access - allowed`);
                 continue;
             }
-            
-            // NO admin bypass - even admins/server owner must have AU or permanent access
             const reason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
             console.log(`[Enforcer] 🚫 KICKING ${member.user.tag} - channel is ${reason}, no AU or permanent access`);
             await this.kickMemberInstantly(member, channel.name, dbState.ownerId, reason);
@@ -430,8 +398,6 @@ class EnforcerService {
             }
             await member.send({ embeds: [embed] }).catch(() => {});
             console.log(`[Enforcer] Kicked ${member.user.tag} from channel INSTANTLY (${reason})`);
-            
-            // Log the action
             const { logAction, LogAction } = await import('../utils/logger');
             await logAction({
                 action: LogAction.USER_REMOVED,

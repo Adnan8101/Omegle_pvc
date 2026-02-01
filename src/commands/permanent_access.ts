@@ -47,13 +47,10 @@ export const command: Command = {
             await interaction.reply({ content: 'This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
             return;
         }
-
         const subcommand = interaction.options.getSubcommand();
         const guildId = interaction.guild.id;
         const vcOwnerUser = interaction.options.getUser('vc_owner');
         const ownerId = vcOwnerUser ? vcOwnerUser.id : interaction.user.id;
-
-        // Check permission: only the actual owner can manage their permanent access list
         if (vcOwnerUser && vcOwnerUser.id !== interaction.user.id) {
             await interaction.reply({
                 content: '❌ You can only manage your own permanent access list.',
@@ -61,7 +58,6 @@ export const command: Command = {
             });
             return;
         }
-
         if (subcommand === 'add') {
             const targetUser = interaction.options.getUser('user', true);
             if (targetUser.id === ownerId) {

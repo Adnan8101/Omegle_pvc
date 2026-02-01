@@ -137,9 +137,6 @@ export class IntentQueue extends EventEmitter {
             this.emit('intentExpired', intent);
             return false;
         }
-        
-        // CRITICAL FIX #1: Don't increment attempts here - do it when worker starts
-        // This prevents retry exhaustion due to crashes/errors before execution
         if (intent.attempts >= intent.maxAttempts) {
             intent.status = IntentStatus.FAILED;
             return false;

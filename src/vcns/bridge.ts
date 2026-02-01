@@ -14,29 +14,20 @@ import {
     VCCreatePayload,
 } from './types';
 import { buildVC } from './vcBuilder';
-
-// MASS KICK DETECTION: Track kick frequency to prevent API rate limits
 const guildKickTracking = new Map<string, { count: number, resetTime: number }>();
-const MASS_KICK_THRESHOLD = 10; // kicks per 5 seconds = potential mass scenario
-const TRACKING_WINDOW = 5000; // 5 seconds
-
+const MASS_KICK_THRESHOLD = 10; 
+const TRACKING_WINDOW = 5000; 
 function shouldForceQueue(guildId: string): boolean {
     const now = Date.now();
     const tracking = guildKickTracking.get(guildId) || { count: 0, resetTime: now + TRACKING_WINDOW };
-    
-    // Reset if window expired
     if (now > tracking.resetTime) {
         tracking.count = 0;
         tracking.resetTime = now + TRACKING_WINDOW;
     }
-    
     tracking.count++;
     guildKickTracking.set(guildId, tracking);
-    
-    // Force queue if we're seeing mass kicks
     return tracking.count > MASS_KICK_THRESHOLD;
 }
-
 interface BridgeResult<T = void> {
     success: boolean;
     queued: boolean;
@@ -133,7 +124,6 @@ export class VCNSBridge {
         console.log(`[Bridge] 📤 Submitting VC create intent for user ${targetOwnerId}`);
         const result = vcns.requestVCCreate(payload, targetOwnerId);
         console.log(`[Bridge] 📥 Intent submitted - queued: ${result.queued}, intentId: ${result.intentId}`);
-        
         if (!result.queued) {
             console.log(`[Bridge] ❌ Intent was NOT queued - returning failure`);
             return {
@@ -143,8 +133,6 @@ export class VCNSBridge {
                 error: 'Failed to queue creation',
             };
         }
-        
-        // Wait for the intent to complete and get the channelId
         console.log(`[Bridge] ⏳ Waiting for intent ${result.intentId} to complete (30s timeout)...`);
         try {
             const workerResult = await waitForIntent(result.intentId, 30000);
@@ -234,17 +222,12 @@ export class VCNSBridge {
             guildId = guildIdOrOptions;
             targetChannelId = channelId!;
         }
-        // Check system health to decide routing
         const systemState = stateStore.getSystemState();
         const isHealthy = !systemState.circuitBreakerOpen && vcns.isActive();
-        
         if (isHealthy) {
-            // Route through intent system when healthy - proper queue management
             console.log(`[Bridge] 📤 Submitting VC delete intent for channel ${targetChannelId}`);
             const result = vcns.requestVCDelete(guildId, targetChannelId, reason);
-            
             if (result.queued && result.intentId) {
-                // Wait for intent completion
                 try {
                     const outcome = await waitForIntent(result.intentId, 30000);
                     stateStore.unregisterChannel(targetChannelId);
@@ -259,32 +242,25 @@ export class VCNSBridge {
                     return { success: false, queued: true, intentId: result.intentId, error: error.message };
                 }
             }
-            
             return { success: false, queued: false, error: 'Failed to queue delete intent' };
         }
-        
-        // Fallback: System is degraded - use direct deletion
         console.warn(`[Bridge] ⚠️ System degraded - using fallback delete for ${targetChannelId}`);
         try {
             if (guild) {
-                // Try cache first, then fetch if not found
                 let channel = guild.channels.cache.get(targetChannelId);
                 if (!channel) {
                     try {
                         channel = await guild.channels.fetch(targetChannelId) as any;
                     } catch {
-                        // Channel doesn't exist in Discord anymore - that's fine
                         console.log(`[Bridge] Channel ${targetChannelId} not found in Discord (already deleted)`);
                     }
                 }
-                
                 if (channel) {
-                    // Only use fallback when system is degraded (allowWhenHealthy=false)
                     await this.executeFallback(
                         `vc:delete:${guildId}`,
                         async () => channel!.delete(reason),
                         IntentPriority.HIGH,
-                        false, // SAFETY: Only allowed when system is NOT healthy
+                        false, 
                     );
                     rateGovernor.recordAction(IntentAction.VC_DELETE, 25);
                 }
@@ -356,16 +332,13 @@ export class VCNSBridge {
             targetChannelId = guildIdOrOptions.channelId;
             kickReason = guildIdOrOptions.reason;
             isImmediate = guildIdOrOptions.isImmediate ?? false;
-            
-            // MASS KICK PROTECTION: Force queue routing if mass scenario detected
             if (isImmediate && shouldForceQueue(guildId)) {
                 console.warn(
                     `[VCNS Bridge] 🚨 Mass kick detected (>${MASS_KICK_THRESHOLD}/5s) in guild ${guildId}. ` +
                     `Forcing queue routing for user ${targetUserId} to prevent API rate limits.`
                 );
-                isImmediate = false; // Force through intent queue
+                isImmediate = false; 
             }
-            
             if (isImmediate) {
                 console.log(`[VCNS Bridge] ⚡ IMMEDIATE kick for user ${targetUserId} in guild ${guildId} (reason: ${kickReason})`);
                 try {
@@ -386,7 +359,6 @@ export class VCNSBridge {
             targetChannelId = channelId!;
             kickReason = reason;
         }
-        
         console.log(`[VCNS Bridge] 🔄 Queueing kick intent for user ${targetUserId} in guild ${guildId} (reason: ${kickReason})`);
         const result = vcns.requestUserKick(guildId, targetUserId, targetChannelId, kickReason);
         console.log(`[VCNS Bridge] ${result.queued ? '✅' : '❌'} Kick intent ${result.queued ? 'queued successfully' : 'failed to queue'} - ID: ${result.intentId}, ETA: ${result.eta}`);
@@ -401,17 +373,14 @@ export class VCNSBridge {
         member: GuildMember,
         reason: string,
     ): Promise<boolean> {
-        // CRITICAL FIX #2: Hard-gate immediate paths - only for circuit breaker open
         const systemState = stateStore.getSystemState();
         const isHealthy = !systemState.circuitBreakerOpen && vcns.isActive();
-        
         if (isHealthy) {
             throw new Error(
                 `[VCNS Bridge] kickUserImmediate forbidden while system healthy. ` +
                 `Use kickUser() intent system. User: ${member.id}, Reason: ${reason}`
             );
         }
-        
         try {
             await member.voice.disconnect(reason);
             rateGovernor.recordAction(IntentAction.USER_KICK, 20);

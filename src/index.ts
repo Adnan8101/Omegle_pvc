@@ -34,16 +34,10 @@ import { vcns } from './vcns';
 import { command as funBan } from './commands/fun_ban';
 import { command as counting } from './commands/counting';
 import { command as ping } from './commands/ping';
-
-
-// Giveaway Commands
 import { giveawayCommands } from './commands/giveaways';
-
-// Giveaway Scheduler Service
 import { GiveawaySchedulerService } from './services/GiveawaySchedulerService';
 import { giveawayUpdateManager } from './utils/giveaway/GiveawayUpdateManager';
 let giveawayScheduler: GiveawaySchedulerService | null = null;
-
 client.commands.set(pvcSetup.data.name, pvcSetup);
 client.commands.set(adminStrictness.data.name, adminStrictness);
 client.commands.set(teamAdminStrictness.data.name, teamAdminStrictness);
@@ -69,21 +63,16 @@ client.commands.set(showAccess.data.name, showAccess);
 client.commands.set(funBan.data.name, funBan);
 client.commands.set(counting.data.name, counting);
 client.commands.set(ping.data.name, ping);
-
-// Register Giveaway Commands
 for (const [name, command] of Object.entries(giveawayCommands)) {
     if (command.data) {
         client.commands.set(command.data.name, command);
     }
 }
-
 client.once(readyEvent.name, async () => {
     await readyEvent.execute(client);
     startCleanupInterval();
     await vcns.start();
     console.log('[VCNS] Virtual Central Nervous System started');
-    
-    // Start Giveaway Scheduler
     giveawayScheduler = new GiveawaySchedulerService(client);
     giveawayScheduler.start();
     console.log('[Giveaway] Scheduler started');

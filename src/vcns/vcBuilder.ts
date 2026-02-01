@@ -25,7 +25,7 @@ export interface VCBuildOptions {
     customPermissions?: OverwriteResolvable[];
     skipDbWrite?: boolean;
     skipLock?: boolean;
-    lockHolder?: string; // CRITICAL FIX #3: Allow caller to specify lock holder
+    lockHolder?: string; 
 }
 export interface VCBuildResult {
     success: boolean;
@@ -46,16 +46,13 @@ export async function buildVC(options: VCBuildOptions): Promise<VCBuildResult> {
         return { success: false, error: 'Category not found', retryable: false };
     }
     const lockKey = vcCreateLockKey(guildId, ownerId);
-    // CRITICAL FIX #3: Use provided lockHolder or fallback (for immediate path compatibility)
     const effectiveLockHolder = lockHolder || `vcBuilder:${ownerId}`;
     const needsLock = !skipLock;
-    
     if (needsLock) {
         if (!lockManager.acquire(lockKey, effectiveLockHolder, VCNS_CONFIG.VC_CREATE_LOCK_DURATION_MS, 'VC creation')) {
             return { success: false, error: 'Creation lock failed - operation in progress', retryable: true };
         }
     }
-    
     try {
         const existingChannel = stateStore.getChannelByOwner(guildId, ownerId);
         if (existingChannel) {
@@ -72,26 +69,20 @@ export async function buildVC(options: VCBuildOptions): Promise<VCBuildResult> {
             permissionOverwrites,
         }) as VoiceChannel;
         recordBotEdit(channel.id);
-        
-        // CRITICAL: Write to database FIRST before registering in memory
-        // This ensures the channel exists in DB before any access checks can run
         if (!skipDbWrite) {
             try {
                 await writeToDatabase(channel.id, guildId, ownerId, isTeamChannel, teamType);
             } catch (dbError: any) {
-                // DB write failed - delete the Discord channel to keep things consistent
                 console.error(`[VCBuilder] ❌ DB write failed, deleting Discord channel ${channel.id}:`, dbError.message);
                 await channel.delete('DB write failed - cleanup').catch(() => {});
                 return { success: false, error: `Database write failed: ${dbError.message}`, retryable: false };
             }
         }
-        
-        // Now register in memory - DB is already persisted
         stateStore.registerChannel({
             channelId: channel.id,
             guildId,
             ownerId,
-            isLocked: false, // OPEN by default - everyone can join
+            isLocked: false, 
             isHidden: false,
             userLimit: userLimit ?? 0,
             isTeamChannel,
@@ -101,7 +92,6 @@ export async function buildVC(options: VCBuildOptions): Promise<VCBuildResult> {
         });
         rateGovernor.recordAction(IntentAction.VC_CREATE, 30);
         rateGovernor.recordSuccess(`channel:${guildId}`);
-        
         return {
             success: true,
             channelId: channel.id,
@@ -116,8 +106,6 @@ export async function buildVC(options: VCBuildOptions): Promise<VCBuildResult> {
     }
 }
 function buildDefaultPermissions(guild: Guild, ownerId: string): OverwriteResolvable[] {
-    // Channel is OPEN by default - everyone can join
-    // User can lock/hide it later using the interface
     return [
         {
             id: ownerId,
@@ -149,8 +137,6 @@ async function writeToDatabase(
 ): Promise<boolean> {
     try {
         console.log(`[VCBuilder] 📝 Writing channel ${channelId} to database (guild: ${guildId}, owner: ${ownerId}, team: ${isTeamChannel})`);
-        
-        // CRITICAL: Ensure parent settings exist before creating channel (foreign key constraint)
         if (isTeamChannel) {
             const teamSettings = await prisma.teamVoiceSettings.findUnique({
                 where: { guildId }
@@ -168,7 +154,6 @@ async function writeToDatabase(
                 throw new Error(`GuildSettings not found for guild ${guildId}`);
             }
         }
-        
         if (isTeamChannel) {
             await prisma.teamVoiceChannel.create({
                 data: {
@@ -176,7 +161,7 @@ async function writeToDatabase(
                     guildId,
                     ownerId,
                     teamType: teamType!,
-                    isLocked: false, // OPEN by default
+                    isLocked: false, 
                     isHidden: false,
                 },
             });
@@ -186,26 +171,21 @@ async function writeToDatabase(
                     channelId,
                     guildId,
                     ownerId,
-                    isLocked: false, // OPEN by default
+                    isLocked: false, 
                     isHidden: false,
                 },
             });
         }
-        
-        // CRITICAL: Verify the write actually persisted
         const verification = isTeamChannel 
             ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } })
             : await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
-        
         if (!verification) {
             console.error(`[VCBuilder] ❌ CRITICAL: Channel ${channelId} created but NOT found in database after write!`);
             throw new Error(`Channel ${channelId} not found in database after write`);
         }
-        
         console.log(`[VCBuilder] ✅ Channel ${channelId} written and VERIFIED in database successfully`);
         return true;
     } catch (error: any) {
-        // CRITICAL: Log full error including code for debugging foreign key issues
         console.error(`[VCBuilder] ❌ Database write failed for channel ${channelId}:`, {
             error: error.message,
             code: error.code,
@@ -215,7 +195,6 @@ async function writeToDatabase(
             isTeamChannel,
             teamType
         });
-        // Re-throw so caller knows the write failed
         throw error;
     }
 }

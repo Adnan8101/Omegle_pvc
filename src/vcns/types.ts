@@ -46,7 +46,7 @@ export enum IntentStatus {
     DROPPED = 'dropped',       
     EXPIRED = 'expired',       
     CANCELLED = 'cancelled',
-    RETRY_SCHEDULED = 'retry_scheduled', // CRITICAL FIX #5: Persistent retry tracking
+    RETRY_SCHEDULED = 'retry_scheduled', 
 }
 export enum ResourceType {
     VOICE_CHANNEL = 'voice_channel',
@@ -75,7 +75,7 @@ export interface Intent<T = unknown> {
     error?: string;
     parentId?: string;
     meta: IntentMeta;
-    nextRetryAt?: number; // CRITICAL FIX #5: Persistent retry scheduling timestamp
+    nextRetryAt?: number; 
 }
 export interface IntentSource {
     type: 'user' | 'system' | 'event' | 'scheduler' | 'enforcer';

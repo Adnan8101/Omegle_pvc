@@ -2,19 +2,16 @@ import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits, 
 import { GiveawayService } from '../../services/GiveawayService';
 import { hasGiveawayPermissions } from '../../utils/giveaway/permissions';
 import { Emojis } from '../../utils/giveaway/emojis';
-
 export default {
     data: new SlashCommandBuilder()
         .setName('gcancel')
         .setDescription('Cancel a giveaway')
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
         .addStringOption(option => option.setName('message_id').setDescription('The message ID of the giveaway').setRequired(true)),
-
     async execute(interaction: ChatInputCommandInteraction) {
         if (!await hasGiveawayPermissions(interaction)) {
             return;
         }
-
         try {
             const service = new GiveawayService(interaction.client);
             await service.cancelGiveaway(interaction.options.getString('message_id', true));
@@ -23,13 +20,11 @@ export default {
             await interaction.reply({ content: `${Emojis.CROSS} ${error.message}`, flags: [MessageFlags.Ephemeral] });
         }
     },
-
     async prefixRun(message: any, args: string[]) {
         if (!message.member?.permissions.has('ManageGuild')) {
             return;
         }
         if (args.length === 0) return message.reply(`${Emojis.CROSS} Usage: \`!gcancel <message_id>\``);
-
         try {
             const service = new GiveawayService(message.client);
             await service.cancelGiveaway(args[0]);

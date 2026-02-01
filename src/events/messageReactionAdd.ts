@@ -4,7 +4,6 @@ import { client } from '../client';
 import { safeSetChannelName } from '../utils/discordApi';
 import { logAction, LogAction } from '../utils/logger';
 import { handleGiveawayReactionAdd, handleGiveawayReactionRemove } from './giveawayReactionHandler';
-
 export async function handleMessageReactionAdd(reaction: MessageReaction | PartialMessageReaction, user: User | PartialUser): Promise<void> {
     if (user.bot) return;
     if (reaction.partial) {
@@ -21,10 +20,7 @@ export async function handleMessageReactionAdd(reaction: MessageReaction | Parti
             return;
         }
     }
-    
-    // Handle giveaway reactions
     await handleGiveawayReactionAdd(reaction as MessageReaction, user as User, client);
-    
     if (reaction.emoji.name !== '✅') return;
     const message = reaction.message;
     if (!message.guild) return;
@@ -62,7 +58,6 @@ export async function handleMessageReactionAdd(reaction: MessageReaction | Parti
         details: `Renamed to "${pendingRequest.newName}" - Approved by ${user.username}`,
     });
 }
-
 export async function handleMessageReactionRemove(reaction: MessageReaction | PartialMessageReaction, user: User | PartialUser): Promise<void> {
     if (user.bot) return;
     if (reaction.partial) {
@@ -79,7 +74,5 @@ export async function handleMessageReactionRemove(reaction: MessageReaction | Pa
             return;
         }
     }
-    
-    // Handle giveaway reaction removal
     await handleGiveawayReactionRemove(reaction as MessageReaction, user as User, client);
 }

@@ -2,14 +2,12 @@ import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits, 
 import { GiveawayService } from '../../services/GiveawayService';
 import { hasGiveawayPermissions } from '../../utils/giveaway/permissions';
 import { Emojis } from '../../utils/giveaway/emojis';
-
 export default {
     data: new SlashCommandBuilder()
         .setName('gdelete')
         .setDescription('Delete a giveaway completely')
         .addStringOption(option =>
             option.setName('message_id').setDescription('Message ID (active) or ID (scheduled)').setRequired(true)),
-
     async execute(interaction: ChatInputCommandInteraction) {
         if (!await hasGiveawayPermissions(interaction)) {
             return;
@@ -17,7 +15,6 @@ export default {
         const inputId = interaction.options.getString('message_id', true);
         await this.run(interaction, inputId);
     },
-
     async prefixRun(message: any, args: string[]) {
         if (!message.member?.permissions.has(PermissionFlagsBits.ManageGuild)) {
             return;
@@ -27,7 +24,6 @@ export default {
         }
         await this.run(message, args[0]);
     },
-
     async run(ctx: any, inputId: string) {
         const service = new GiveawayService(ctx.client);
         try {
@@ -47,7 +43,6 @@ export default {
                     }
                 } catch (e) { }
             }
-
             await service.deleteGiveaway(inputId);
             const msg = `${Emojis.TICK} Giveaway deleted.`;
             if (ctx.reply) {
