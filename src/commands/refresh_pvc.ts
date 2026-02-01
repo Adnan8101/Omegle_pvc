@@ -690,46 +690,47 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     
     // Sync lock/hidden state from DB to Discord permissions
     console.log('[Refresh PVC] Syncing lock/hidden state for PVCs...');
+    console.log(`[Refresh PVC] Total PVCs to check: ${updatedPvcs.length}`);
     let pvcLocksSynced = 0;
+    let pvcChecked = 0;
     for (const pvc of updatedPvcs) {
         const channel = guild.channels.cache.get(pvc.channelId);
         if (channel && channel.type === ChannelType.GuildVoice) {
+            pvcChecked++;
+            console.log(`[Refresh PVC] Checking PVC ${pvc.channelId} - isLocked: ${pvc.isLocked}, isHidden: ${pvc.isHidden}`);
             try {
                 const { recordBotEdit } = await import('../events/channelUpdate');
                 recordBotEdit(pvc.channelId);
                 
-                // Sync lock state: if locked in DB, set @everyone Connect to deny
+                // Build permission object atomically - combine Connect and ViewChannel
+                const everyonePerms: any = {};
+                
+                // Set Connect based on lock state
                 if (pvc.isLocked) {
-                    await channel.permissionOverwrites.edit(guild.id, {
-                        Connect: false, // Deny
-                    });
+                    everyonePerms.Connect = false; // DENY
                     pvcLocksSynced++;
-                    console.log(`[Refresh PVC] ✅ Synced LOCKED state for PVC ${pvc.channelId}`);
+                    console.log(`[Refresh PVC] ✅ Syncing LOCKED state for PVC ${pvc.channelId}`);
                 } else {
-                    // If unlocked, set Connect to neutral (null = inherit)
-                    await channel.permissionOverwrites.edit(guild.id, {
-                        Connect: null,
-                    });
+                    everyonePerms.Connect = null; // NEUTRAL (inherit)
                 }
                 
-                // Sync hidden state: if hidden in DB, set @everyone ViewChannel to deny
+                // Set ViewChannel based on hidden state
                 if (pvc.isHidden) {
-                    await channel.permissionOverwrites.edit(guild.id, {
-                        ViewChannel: false, // Deny
-                    });
-                    console.log(`[Refresh PVC] ✅ Synced HIDDEN state for PVC ${pvc.channelId}`);
+                    everyonePerms.ViewChannel = false; // DENY
+                    console.log(`[Refresh PVC] ✅ Syncing HIDDEN state for PVC ${pvc.channelId}`);
                 } else {
-                    // If visible, set ViewChannel to neutral (null = inherit)
-                    await channel.permissionOverwrites.edit(guild.id, {
-                        ViewChannel: null,
-                    });
+                    everyonePerms.ViewChannel = null; // NEUTRAL (inherit)
                 }
+                
+                // Apply both permissions atomically in a single API call
+                await channel.permissionOverwrites.edit(guild.id, everyonePerms);
+                console.log(`[Refresh PVC] 🔧 Applied permissions for ${pvc.channelId}: Connect=${everyonePerms.Connect}, ViewChannel=${everyonePerms.ViewChannel}`);
             } catch (lockSyncErr) {
                 console.error(`[Refresh PVC] Error syncing lock/hidden state for PVC ${pvc.channelId}:`, lockSyncErr);
             }
         }
     }
-    console.log(`[Refresh PVC] Synced lock/hidden state for ${pvcLocksSynced} locked PVCs`);
+    console.log(`[Refresh PVC] Synced lock/hidden state: checked ${pvcChecked} PVCs, ${pvcLocksSynced} were locked`);
     
     console.log('[Refresh PVC] Syncing Team permissions...');
     for (const tc of updatedTeamChannels) {
@@ -799,32 +800,29 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                 const { recordBotEdit } = await import('../events/channelUpdate');
                 recordBotEdit(tc.channelId);
                 
-                // Sync lock state: if locked in DB, set @everyone Connect to deny
+                // Build permission object atomically - combine Connect and ViewChannel
+                const everyonePerms: any = {};
+                
+                // Set Connect based on lock state
                 if (tc.isLocked) {
-                    await channel.permissionOverwrites.edit(guild.id, {
-                        Connect: false, // Deny
-                    });
+                    everyonePerms.Connect = false; // DENY
                     teamLocksSynced++;
-                    console.log(`[Refresh PVC] ✅ Synced LOCKED state for Team ${tc.channelId}`);
+                    console.log(`[Refresh PVC] ✅ Syncing LOCKED state for Team ${tc.channelId}`);
                 } else {
-                    // If unlocked, set Connect to neutral (null = inherit)
-                    await channel.permissionOverwrites.edit(guild.id, {
-                        Connect: null,
-                    });
+                    everyonePerms.Connect = null; // NEUTRAL (inherit)
                 }
                 
-                // Sync hidden state: if hidden in DB, set @everyone ViewChannel to deny
+                // Set ViewChannel based on hidden state
                 if (tc.isHidden) {
-                    await channel.permissionOverwrites.edit(guild.id, {
-                        ViewChannel: false, // Deny
-                    });
-                    console.log(`[Refresh PVC] ✅ Synced HIDDEN state for Team ${tc.channelId}`);
+                    everyonePerms.ViewChannel = false; // DENY
+                    console.log(`[Refresh PVC] ✅ Syncing HIDDEN state for Team ${tc.channelId}`);
                 } else {
-                    // If visible, set ViewChannel to neutral (null = inherit)
-                    await channel.permissionOverwrites.edit(guild.id, {
-                        ViewChannel: null,
-                    });
+                    everyonePerms.ViewChannel = null; // NEUTRAL (inherit)
                 }
+                
+                // Apply both permissions atomically in a single API call
+                await channel.permissionOverwrites.edit(guild.id, everyonePerms);
+                console.log(`[Refresh PVC] 🔧 Applied permissions for Team ${tc.channelId}: Connect=${everyonePerms.Connect}, ViewChannel=${everyonePerms.ViewChannel}`);
             } catch (lockSyncErr) {
                 console.error(`[Refresh PVC] Error syncing lock/hidden state for Team ${tc.channelId}:`, lockSyncErr);
             }

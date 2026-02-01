@@ -123,11 +123,24 @@ export class VoiceStateService {
                 const { recordBotEdit } = await import('../events/channelUpdate');
                 recordBotEdit(channelId);
                 
-                // Directly update @everyone permission - explicitly set Connect to the correct state
-                await channel.permissionOverwrites.edit(channel.guild.id, {
+                // Get current permission state to preserve other settings
+                const currentOverwrite = channel.permissionOverwrites.cache.get(channel.guild.id);
+                
+                // Build permission update object - only modify Connect
+                const permUpdate: any = {
                     Connect: isLocked ? false : null, // false = deny, null = neutral (inherit)
-                });
-                console.log(`[VoiceStateService] Lock ${isLocked ? 'enabled' : 'disabled'} - Connect permission set to ${isLocked ? 'DENY' : 'NEUTRAL'} for channel ${channelId}`);
+                };
+                
+                // Preserve ViewChannel if it exists
+                if (currentOverwrite?.deny.has(PermissionFlagsBits.ViewChannel)) {
+                    permUpdate.ViewChannel = false;
+                } else if (currentOverwrite?.allow.has(PermissionFlagsBits.ViewChannel)) {
+                    permUpdate.ViewChannel = true;
+                }
+                
+                // Apply permission atomically
+                await channel.permissionOverwrites.edit(channel.guild.id, permUpdate);
+                console.log(`[VoiceStateService] Lock ${isLocked ? 'enabled' : 'disabled'} - Connect=${isLocked ? 'DENY' : 'NEUTRAL'} for channel ${channelId}`);
             } catch (error) {
                 console.error(`[VoiceStateService] Failed to update Discord permission for lock:`, error);
             }
@@ -164,11 +177,24 @@ export class VoiceStateService {
                 const { recordBotEdit } = await import('../events/channelUpdate');
                 recordBotEdit(channelId);
                 
-                // Directly update @everyone permission - explicitly set ViewChannel to the correct state
-                await channel.permissionOverwrites.edit(channel.guild.id, {
+                // Get current permission state to preserve other settings
+                const currentOverwrite = channel.permissionOverwrites.cache.get(channel.guild.id);
+                
+                // Build permission update object - only modify ViewChannel
+                const permUpdate: any = {
                     ViewChannel: isHidden ? false : null, // false = deny, null = neutral (inherit)
-                });
-                console.log(`[VoiceStateService] Hidden ${isHidden ? 'enabled' : 'disabled'} - ViewChannel permission set to ${isHidden ? 'DENY' : 'NEUTRAL'} for channel ${channelId}`);
+                };
+                
+                // Preserve Connect if it exists
+                if (currentOverwrite?.deny.has(PermissionFlagsBits.Connect)) {
+                    permUpdate.Connect = false;
+                } else if (currentOverwrite?.allow.has(PermissionFlagsBits.Connect)) {
+                    permUpdate.Connect = true;
+                }
+                
+                // Apply permission atomically
+                await channel.permissionOverwrites.edit(channel.guild.id, permUpdate);
+                console.log(`[VoiceStateService] Hidden ${isHidden ? 'enabled' : 'disabled'} - ViewChannel=${isHidden ? 'DENY' : 'NEUTRAL'} for channel ${channelId}`);
             } catch (error) {
                 console.error(`[VoiceStateService] Failed to update Discord permission for hidden:`, error);
             }
