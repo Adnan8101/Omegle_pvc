@@ -267,6 +267,8 @@ async function handleAccessProtection(
     if (dbPermissions.length > 0) {
         console.log(`[VCNS-ACCESS] 🎟️ All permissions in DB:`, dbPermissions.map((p: any) => `${p.targetId}:${p.permission}`).join(', '));
     }
+    
+    // Check for channel permits (includes both permanent !au permits and temporary lock/hide permits)
     const hasDirectPermit = dbPermissions.some(
         (p: any) => p.targetId === member.id && p.permission === 'permit'
     );
@@ -274,9 +276,11 @@ async function handleAccessProtection(
         (p: any) => memberRoleIds.includes(p.targetId) && p.targetType === 'role' && p.permission === 'permit'
     );
     const hasChannelPermit = hasDirectPermit || hasRolePermit;
+    
     console.log(`[VCNS-ACCESS] 🎟️ Permit check for ${member.id}: direct=${hasDirectPermit}, role=${hasRolePermit}, has=${hasChannelPermit}`);
+    
     if (hasChannelPermit) {
-        console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} has CHANNEL PERMIT (!au) - bypass all restrictions`);
+        console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} has CHANNEL PERMIT (permanent !au OR temporary lock/hide) - bypass all restrictions`);
         return false;
     }
     console.log(`[VCNS-ACCESS] ⚙️ Loading guild settings for admin strictness...`);
@@ -325,11 +329,12 @@ async function handleAccessProtection(
         isRestricted
     });
     if (strictnessEnabled && isRestricted) {
-        if (isWhitelisted) {
-            console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} is WHITELISTED - access granted (strictness ON, channel restricted)`);
+        if (isWhitelisted || hasChannelPermit) {
+            console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} is ${isWhitelisted ? 'WHITELISTED' : 'has CHANNEL PERMIT'} - access granted (strictness ON, channel restricted)`);
             return false; 
         }
-        console.log(`[VCNS-ACCESS] 🚨 STRICTNESS VIOLATION: ${member.user.tag} is NOT whitelisted, channel is restricted - INSTANT KICK`);
+        
+        console.log(`[VCNS-ACCESS] 🚨 STRICTNESS VIOLATION: ${member.user.tag} is NOT whitelisted/permitted, channel is restricted - INSTANT KICK`);
         const channelTypeName = isTeamChannel ? 'team voice channel' : 'voice channel';
         const restrictionReason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
         try {
@@ -569,10 +574,52 @@ async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
 async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> {
     const { channelId, guild, member } = state;
     if (!channelId) return;
+    
     console.log(`[HandleLeave] User ${member?.user?.username} (${member?.id}) left channel ${channelId}`);
+    
+    // Clean up temporary lock permits when user leaves
+    if (member) {
+        const { hasTempLockPermit, removeTempLockPermit } = await import('../utils/voiceManager');
+        
+        if (hasTempLockPermit(channelId, member.id)) {
+            console.log(`[HandleLeave] 🔓 Removing temporary lock permit for ${member.user.tag} (${member.id})`);
+            
+            // Remove from memory tracking
+            removeTempLockPermit(channelId, member.id);
+            
+            // Remove from database
+            const pvcData = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+            const teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
+            
+            if (pvcData) {
+                await prisma.voicePermission.deleteMany({
+                    where: {
+                        channelId,
+                        targetId: member.id,
+                        permission: 'permit',
+                    },
+                }).catch(() => {});
+                console.log(`[HandleLeave] ✅ Removed temp permit from DB (PVC) for ${member.user.tag}`);
+            } else if (teamData) {
+                await prisma.teamVoicePermission.deleteMany({
+                    where: {
+                        channelId,
+                        targetId: member.id,
+                        permission: 'permit',
+                    },
+                }).catch(() => {});
+                console.log(`[HandleLeave] ✅ Removed temp permit from DB (Team) for ${member.user.tag}`);
+            }
+            
+            invalidateChannelPermissions(channelId);
+        }
+    }
+    
+    // Handle temp drag permissions
     if (member && hasTempDragPermission(channelId, member.id)) {
         const pvcData = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
         const teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
+        
         if (pvcData) {
             await prisma.voicePermission.deleteMany({
                 where: {
@@ -590,6 +637,7 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
                 },
             }).catch(() => {});
         }
+        
         removeTempDragPermission(channelId, member.id);
         invalidateChannelPermissions(channelId);
     }
@@ -991,8 +1039,11 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
             try {
                 const ownerPermissions = await getCachedOwnerPerms(guild.id, member.id);
                 if (ownerPermissions.length > 0) {
+                    console.log(`[VCNS-CREATE] 🔑 Applying ${ownerPermissions.length} permanent access grants for owner ${member.user.tag}`);
+                    
                     const validPermissions: typeof ownerPermissions = [];
                     const invalidTargetIds: string[] = [];
+                    
                     for (const perm of ownerPermissions) {
                         const isValidTarget = perm.targetType === 'role'
                             ? guild.roles.cache.has(perm.targetId)
@@ -1003,7 +1054,9 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                             invalidTargetIds.push(perm.targetId);
                         }
                     }
+                    
                     if (invalidTargetIds.length > 0) {
+                        console.log(`[VCNS-CREATE] 🗑️ Removing ${invalidTargetIds.length} invalid permanent access grants`);
                         await prisma.ownerPermission.deleteMany({
                             where: {
                                 guildId: guild.id,
@@ -1012,8 +1065,12 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                             },
                         }).catch(() => { });
                     }
+                    
                     if (validPermissions.length > 0) {
+                        console.log(`[VCNS-CREATE] ✅ Applying ${validPermissions.length} valid permanent access grants`);
                         recordBotEdit(newChannel.id);
+                        
+                        // Apply Discord permissions
                         for (const perm of validPermissions) {
                             await vcnsBridge.editPermission({
                                 guild,
@@ -1025,6 +1082,26 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                                 },
                             });
                         }
+                        
+                        // Also add to database as permanent permits (not temporary)
+                        for (const perm of validPermissions) {
+                            await prisma.voicePermission.create({
+                                data: {
+                                    channelId: newChannel.id,
+                                    targetId: perm.targetId,
+                                    targetType: perm.targetType,
+                                    permission: 'permit',
+                                },
+                            }).catch((err) => {
+                                // Ignore if already exists
+                                if (!err.message?.includes('Unique constraint')) {
+                                    console.error(`[VCNS-CREATE] Failed to add DB permit for ${perm.targetId}:`, err);
+                                }
+                            });
+                        }
+                        
+                        invalidateChannelPermissions(newChannel.id);
+                        console.log(`[VCNS-CREATE] ✅ Permanent access grants applied successfully`);
                     }
                 }
             } catch (err) {
@@ -1302,6 +1379,7 @@ async function createTeamChannel(client: PVCClient, state: VoiceState, teamType:
         recordBotEdit(newChannel.id);
         registerTeamChannel(newChannel.id, guild.id, member.id, teamType);
         addUserToJoinOrder(newChannel.id, member.id);
+        
         await prisma.teamVoiceChannel.create({
             data: {
                 channelId: newChannel.id,
@@ -1311,6 +1389,82 @@ async function createTeamChannel(client: PVCClient, state: VoiceState, teamType:
                 createdAt: new Date(),
             },
         });
+        
+        // Apply permanent access grants in background
+        (async () => {
+            try {
+                const ownerPermissions = await getCachedOwnerPerms(guild.id, member.id);
+                if (ownerPermissions.length > 0) {
+                    console.log(`[TEAM-CREATE] 🔑 Applying ${ownerPermissions.length} permanent access grants for owner ${member.user.tag}`);
+                    
+                    const validPermissions: typeof ownerPermissions = [];
+                    const invalidTargetIds: string[] = [];
+                    
+                    for (const perm of ownerPermissions) {
+                        const isValidTarget = perm.targetType === 'role'
+                            ? guild.roles.cache.has(perm.targetId)
+                            : guild.members.cache.has(perm.targetId) || await guild.members.fetch(perm.targetId).catch(() => null);
+                        if (isValidTarget) {
+                            validPermissions.push(perm);
+                        } else {
+                            invalidTargetIds.push(perm.targetId);
+                        }
+                    }
+                    
+                    if (invalidTargetIds.length > 0) {
+                        console.log(`[TEAM-CREATE] 🗑️ Removing ${invalidTargetIds.length} invalid permanent access grants`);
+                        await prisma.ownerPermission.deleteMany({
+                            where: {
+                                guildId: guild.id,
+                                ownerId: member.id,
+                                targetId: { in: invalidTargetIds },
+                            },
+                        }).catch(() => { });
+                    }
+                    
+                    if (validPermissions.length > 0) {
+                        console.log(`[TEAM-CREATE] ✅ Applying ${validPermissions.length} valid permanent access grants`);
+                        recordBotEdit(newChannel.id);
+                        
+                        // Apply Discord permissions
+                        for (const perm of validPermissions) {
+                            await vcnsBridge.editPermission({
+                                guild,
+                                channelId: newChannel.id,
+                                targetId: perm.targetId,
+                                permissions: {
+                                    ViewChannel: true,
+                                    Connect: true,
+                                },
+                            });
+                        }
+                        
+                        // Also add to database as permanent permits
+                        for (const perm of validPermissions) {
+                            await prisma.teamVoicePermission.create({
+                                data: {
+                                    channelId: newChannel.id,
+                                    targetId: perm.targetId,
+                                    targetType: perm.targetType,
+                                    permission: 'permit',
+                                },
+                            }).catch((err) => {
+                                // Ignore if already exists
+                                if (!err.message?.includes('Unique constraint')) {
+                                    console.error(`[TEAM-CREATE] Failed to add DB permit for ${perm.targetId}:`, err);
+                                }
+                            });
+                        }
+                        
+                        invalidateChannelPermissions(newChannel.id);
+                        console.log(`[TEAM-CREATE] ✅ Permanent access grants applied successfully`);
+                    }
+                }
+            } catch (err) {
+                console.error(`[TEAM-CREATE] Owner permissions error:`, err);
+            }
+        })();
+        
         releaseCreationLock(guild.id, member.id);
         const freshMember = await guild.members.fetch(member.id);
         if (freshMember.voice.channelId) {

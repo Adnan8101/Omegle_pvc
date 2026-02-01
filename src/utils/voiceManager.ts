@@ -12,6 +12,9 @@ const joinOrder = new Map<string, string[]>();
 const tempPermittedUsers = new Map<string, Set<string>>();
 const creationLocks = new Map<string, Promise<void>>();
 const userCooldowns = new Map<string, number>();
+
+// Track users with temporary lock permits (only valid while they stay in VC)
+const tempLockPermits = new Map<string, Set<string>>(); // channelId -> Set<userId>
 const COOLDOWNS = {
     CREATE_CHANNEL: 5000,
     JOIN_PROTECTED: 2000,
@@ -92,6 +95,7 @@ export function unregisterChannel(channelId: string): void {
     }
     joinOrder.delete(channelId);
     tempPermittedUsers.delete(channelId);
+    tempLockPermits.delete(channelId); // Clean up temp lock permits
     import('../vcns/index').then(({ stateStore }) => {
         stateStore.unregisterChannel(channelId);
     }).catch(() => {});
@@ -275,6 +279,7 @@ export function unregisterTeamChannel(channelId: string): void {
     }
     joinOrder.delete(channelId);
     tempPermittedUsers.delete(channelId);
+    tempLockPermits.delete(channelId); // Clean up temp lock permits
     import('../vcns/index').then(({ stateStore }) => {
         stateStore.unregisterChannel(channelId);
     }).catch(() => {});
@@ -313,4 +318,38 @@ export async function loadAllTeamInterfaces(): Promise<void> {
     } catch (error) {
         console.error('[VoiceManager] Failed to load team interfaces:', error);
     }
+}
+
+// Temporary lock permit management
+export function addTempLockPermit(channelId: string, userId: string): void {
+    const existing = tempLockPermits.get(channelId) || new Set();
+    existing.add(userId);
+    tempLockPermits.set(channelId, existing);
+    console.log(`[VoiceManager] Added temp lock permit for user ${userId} in channel ${channelId}`);
+}
+
+export function hasTempLockPermit(channelId: string, userId: string): boolean {
+    const users = tempLockPermits.get(channelId);
+    return users?.has(userId) || false;
+}
+
+export function removeTempLockPermit(channelId: string, userId: string): void {
+    const users = tempLockPermits.get(channelId);
+    if (users) {
+        users.delete(userId);
+        if (users.size === 0) {
+            tempLockPermits.delete(channelId);
+        }
+        console.log(`[VoiceManager] Removed temp lock permit for user ${userId} in channel ${channelId}`);
+    }
+}
+
+export function clearTempLockPermits(channelId: string): void {
+    tempLockPermits.delete(channelId);
+    console.log(`[VoiceManager] Cleared all temp lock permits for channel ${channelId}`);
+}
+
+export function getTempLockPermits(channelId: string): string[] {
+    const users = tempLockPermits.get(channelId);
+    return users ? Array.from(users) : [];
 }

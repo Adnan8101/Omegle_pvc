@@ -49,14 +49,24 @@ export class VoiceStateService {
     }
     static async setLock(channelId: string, isLocked: boolean): Promise<void> {
         const channel = client.channels.cache.get(channelId) as VoiceChannel | undefined;
+        
         if (isLocked) {
+            // When locking: give temporary permits to all current members (except owner)
             if (channel && channel.type === ChannelType.GuildVoice) {
                 const state = await this.getVCState(channelId);
                 if (state) {
                     const ownerId = state.ownerId;
                     const currentMembers = Array.from(channel.members.values())
                         .filter(m => !m.user.bot && m.id !== ownerId);
+                    
+                    console.log(`[VoiceStateService] 🔒 Locking channel ${channelId} - giving TEMPORARY permits to ${currentMembers.length} members`);
+                    
                     for (const member of currentMembers) {
+                        // Track in memory as temporary permit
+                        const { addTempLockPermit } = await import('../utils/voiceManager');
+                        addTempLockPermit(channelId, member.id);
+                        
+                        // Also add to database for access protection to see
                         const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
                         if (pvc) {
                             const existingPerm = await prisma.voicePermission.findUnique({
@@ -67,7 +77,17 @@ export class VoiceStateService {
                                     },
                                 },
                             }).catch(() => null);
-                            if (!existingPerm) {
+                            
+                            if (!existingPerm || existingPerm.permission !== 'permit') {
+                                // Delete any existing permission first
+                                await prisma.voicePermission.deleteMany({
+                                    where: {
+                                        channelId,
+                                        targetId: member.id,
+                                    },
+                                }).catch(() => {});
+                                
+                                // Create temporary permit
                                 await prisma.voicePermission.create({
                                     data: {
                                         channelId,
@@ -76,6 +96,8 @@ export class VoiceStateService {
                                         permission: 'permit',
                                     },
                                 }).catch(() => {}); 
+                                
+                                console.log(`[VoiceStateService] ✅ Added temp permit (DB) for ${member.user.tag} (${member.id})`);
                             }
                         } else {
                             const existingPerm = await prisma.teamVoicePermission.findUnique({
@@ -86,7 +108,17 @@ export class VoiceStateService {
                                     },
                                 },
                             }).catch(() => null);
-                            if (!existingPerm) {
+                            
+                            if (!existingPerm || existingPerm.permission !== 'permit') {
+                                // Delete any existing permission first
+                                await prisma.teamVoicePermission.deleteMany({
+                                    where: {
+                                        channelId,
+                                        targetId: member.id,
+                                    },
+                                }).catch(() => {});
+                                
+                                // Create temporary permit
                                 await prisma.teamVoicePermission.create({
                                     data: {
                                         channelId,
@@ -95,19 +127,24 @@ export class VoiceStateService {
                                         permission: 'permit',
                                     },
                                 }).catch(() => {}); 
+                                
+                                console.log(`[VoiceStateService] ✅ Added temp permit (DB) for ${member.user.tag} (${member.id})`);
                             }
                         }
                     }
+                    
                     invalidateChannelPermissions(channelId);
                 }
             }
         }
+        
         const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
         if (pvc) {
             await prisma.privateVoiceChannel.update({
                 where: { channelId },
                 data: { isLocked },
             });
+            
             const verification = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
             if (verification?.isLocked !== isLocked) {
                 console.error(`[VoiceStateService] ❌ Lock update verification FAILED! Expected isLocked=${isLocked}, got isLocked=${verification?.isLocked}`);
@@ -121,6 +158,7 @@ export class VoiceStateService {
                     where: { channelId },
                     data: { isLocked },
                 });
+                
                 const verification = await prisma.teamVoiceChannel.findUnique({ where: { channelId } });
                 if (verification?.isLocked !== isLocked) {
                     console.error(`[VoiceStateService] ❌ Team lock update verification FAILED! Expected isLocked=${isLocked}, got isLocked=${verification?.isLocked}`);
@@ -132,29 +170,125 @@ export class VoiceStateService {
                 return; 
             }
         }
+        
         this.syncToStateStore(channelId, { isLocked });
+        
         if (channel && channel.type === ChannelType.GuildVoice) {
             try {
                 const { recordBotEdit } = await import('../events/channelUpdate');
                 recordBotEdit(channelId);
+                
                 const currentOverwrite = channel.permissionOverwrites.cache.get(channel.guild.id);
                 const permUpdate: any = {
                     Connect: isLocked ? false : null, 
                 };
+                
                 if (currentOverwrite?.deny.has(PermissionFlagsBits.ViewChannel)) {
                     permUpdate.ViewChannel = false;
                 } else if (currentOverwrite?.allow.has(PermissionFlagsBits.ViewChannel)) {
                     permUpdate.ViewChannel = true;
                 }
+                
                 await channel.permissionOverwrites.edit(channel.guild.id, permUpdate);
                 console.log(`[VoiceStateService] Lock ${isLocked ? 'enabled' : 'disabled'} - Connect=${isLocked ? 'DENY' : 'NEUTRAL'} for channel ${channelId}`);
             } catch (error) {
                 console.error(`[VoiceStateService] Failed to update Discord permission for lock:`, error);
             }
         }
+        
         await enforcer.enforceQuietly(channelId);
     }
     static async setHidden(channelId: string, isHidden: boolean): Promise<void> {
+        const channel = client.channels.cache.get(channelId) as VoiceChannel | undefined;
+        
+        if (isHidden) {
+            // When hiding: give temporary permits to all current members (except owner)
+            if (channel && channel.type === ChannelType.GuildVoice) {
+                const state = await this.getVCState(channelId);
+                if (state) {
+                    const ownerId = state.ownerId;
+                    const currentMembers = Array.from(channel.members.values())
+                        .filter(m => !m.user.bot && m.id !== ownerId);
+                    
+                    console.log(`[VoiceStateService] 🙈 Hiding channel ${channelId} - giving TEMPORARY permits to ${currentMembers.length} members`);
+                    
+                    for (const member of currentMembers) {
+                        // Track in memory as temporary permit
+                        const { addTempLockPermit } = await import('../utils/voiceManager');
+                        addTempLockPermit(channelId, member.id);
+                        
+                        // Also add to database for access protection to see
+                        const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+                        if (pvc) {
+                            const existingPerm = await prisma.voicePermission.findUnique({
+                                where: {
+                                    channelId_targetId: {
+                                        channelId,
+                                        targetId: member.id,
+                                    },
+                                },
+                            }).catch(() => null);
+                            
+                            if (!existingPerm || existingPerm.permission !== 'permit') {
+                                // Delete any existing permission first
+                                await prisma.voicePermission.deleteMany({
+                                    where: {
+                                        channelId,
+                                        targetId: member.id,
+                                    },
+                                }).catch(() => {});
+                                
+                                // Create temporary permit
+                                await prisma.voicePermission.create({
+                                    data: {
+                                        channelId,
+                                        targetId: member.id,
+                                        targetType: 'user',
+                                        permission: 'permit',
+                                    },
+                                }).catch(() => {}); 
+                                
+                                console.log(`[VoiceStateService] ✅ Added temp permit (DB) for ${member.user.tag} (${member.id})`);
+                            }
+                        } else {
+                            const existingPerm = await prisma.teamVoicePermission.findUnique({
+                                where: {
+                                    channelId_targetId: {
+                                        channelId,
+                                        targetId: member.id,
+                                    },
+                                },
+                            }).catch(() => null);
+                            
+                            if (!existingPerm || existingPerm.permission !== 'permit') {
+                                // Delete any existing permission first
+                                await prisma.teamVoicePermission.deleteMany({
+                                    where: {
+                                        channelId,
+                                        targetId: member.id,
+                                    },
+                                }).catch(() => {});
+                                
+                                // Create temporary permit
+                                await prisma.teamVoicePermission.create({
+                                    data: {
+                                        channelId,
+                                        targetId: member.id,
+                                        targetType: 'user',
+                                        permission: 'permit',
+                                    },
+                                }).catch(() => {}); 
+                                
+                                console.log(`[VoiceStateService] ✅ Added temp permit (DB) for ${member.user.tag} (${member.id})`);
+                            }
+                        }
+                    }
+                    
+                    invalidateChannelPermissions(channelId);
+                }
+            }
+        }
+        
         const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
         if (pvc) {
             await prisma.privateVoiceChannel.update({
@@ -170,16 +304,19 @@ export class VoiceStateService {
                 });
             }
         }
+        
         this.syncToStateStore(channelId, { isHidden });
-        const channel = client.channels.cache.get(channelId) as VoiceChannel | undefined;
+        
         if (channel && channel.type === ChannelType.GuildVoice) {
             try {
                 const { recordBotEdit } = await import('../events/channelUpdate');
                 recordBotEdit(channelId);
+                
                 const currentOverwrite = channel.permissionOverwrites.cache.get(channel.guild.id);
                 const permUpdate: any = {
                     ViewChannel: isHidden ? false : null, 
                 };
+                
                 if (currentOverwrite?.deny.has(PermissionFlagsBits.Connect)) {
                     permUpdate.Connect = false;
                 } else if (currentOverwrite?.allow.has(PermissionFlagsBits.Connect)) {
@@ -280,6 +417,11 @@ export class VoiceStateService {
                 where: { channelId, targetId, permission: 'permit' },
             });
         }
+        
+        // Also remove from temp lock permits if it exists
+        const { removeTempLockPermit } = await import('../utils/voiceManager');
+        removeTempLockPermit(channelId, targetId);
+        
         invalidateChannelPermissions(channelId);
         await enforcer.enforceQuietly(channelId);
     }

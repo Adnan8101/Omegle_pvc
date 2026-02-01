@@ -64,6 +64,20 @@ export async function execute(client: PVCClient): Promise<void> {
             }
         }
         console.log(`[Ready] ✅ Registered ${registeredCount} channels, cleaned ${cleanedCount} stale entries`);
+        
+        // Load permanent access grants into stateStore
+        const { stateStore } = await import('../vcns/index');
+        const ownerPermissions = await prisma.ownerPermission.findMany();
+        
+        if (ownerPermissions.length > 0) {
+            console.log(`[Ready] 🔑 Loading ${ownerPermissions.length} permanent access grants...`);
+            stateStore.loadPermanentAccess(ownerPermissions.map(p => ({
+                guildId: p.guildId,
+                ownerId: p.ownerId,
+                targetId: p.targetId,
+            })));
+            console.log(`[Ready] ✅ Loaded permanent access grants into stateStore`);
+        }
     } catch (error) {
         console.error('[Ready] Error loading PVC state:', error);
     }
