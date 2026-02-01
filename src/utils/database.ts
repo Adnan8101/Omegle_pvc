@@ -14,24 +14,27 @@ interface DatabaseState {
     errorCount: number;
 }
 
-// PRODUCTION CONFIG - Optimized for 1000+ concurrent PVC operations
+// PRODUCTION CONFIG - Optimized for stable database connections
+// Fixed pool size to prevent "too many connections" errors
 const CONFIG = {
-    // Connection Pool - Scale based on load
-    POOL_SIZE: process.env.DB_POOL_SIZE ? parseInt(process.env.DB_POOL_SIZE) : 100,
-    POOL_TIMEOUT: 60,           // Wait 60s for connection from pool
-    CONNECT_TIMEOUT: 30,        // 30s to establish new connection
+    // Connection Pool - Conservative settings to prevent exhaustion
+    // Most PostgreSQL servers have 100 total connection limit
+    // Reserve connections for other services/admin tasks
+    POOL_SIZE: process.env.DB_POOL_SIZE ? parseInt(process.env.DB_POOL_SIZE) : 10,
+    POOL_TIMEOUT: 20,           // Wait 20s for connection from pool
+    CONNECT_TIMEOUT: 10,        // 10s to establish new connection
     
     // Query & Transaction Timeouts
-    QUERY_TIMEOUT: 30000,       // 30s max query execution
-    TRANSACTION_TIMEOUT: 60000, // 60s max transaction duration
+    QUERY_TIMEOUT: 15000,       // 15s max query execution
+    TRANSACTION_TIMEOUT: 30000, // 30s max transaction duration
     
     // Reconnection Strategy
-    MAX_BACKOFF: 120000,        // Max 2min backoff
-    BASE_BACKOFF: 2000,         // Start with 2s backoff
-    MAX_RETRIES: 5,             // Retry failed operations 5 times
+    MAX_BACKOFF: 60000,         // Max 1min backoff
+    BASE_BACKOFF: 1000,         // Start with 1s backoff
+    MAX_RETRIES: 3,             // Retry failed operations 3 times
     
     // Performance Optimization
-    STATEMENT_CACHE_SIZE: 500,  // Cache 500 prepared statements
+    STATEMENT_CACHE_SIZE: 100,  // Cache 100 prepared statements
     PGBOUNCER_MODE: false,      // Set true if using PgBouncer
 } as const;
 
@@ -73,8 +76,8 @@ function createClient(): PrismaClient {
             db: { url: connectionUrl } 
         },
         transactionOptions: {
-            maxWait: 10000,                    // Wait max 10s to start transaction
-            timeout: CONFIG.TRANSACTION_TIMEOUT, // Transaction times out after 60s
+            maxWait: 5000,                     // Wait max 5s to start transaction
+            timeout: CONFIG.TRANSACTION_TIMEOUT, // Transaction times out after 30s
             isolationLevel: 'ReadCommitted',   // Balance between consistency & performance
         },
     });
@@ -254,9 +257,16 @@ function shutdown(): void {
     if (healthCheckInterval) clearInterval(healthCheckInterval);
     if (metricsInterval) clearInterval(metricsInterval);
     
+    // Force disconnect all connections in pool
     prisma.$disconnect()
-        .then(() => console.log('[DB] ✅ Disconnected'))
-        .catch(() => console.error('[DB] ❌ Error during disconnect'));
+        .then(() => {
+            console.log('[DB] ✅ All connections closed');
+            process.exit(0);
+        })
+        .catch((err) => {
+            console.error('[DB] ❌ Error during disconnect:', err.message);
+            process.exit(1);
+        });
 }
 
 if (!globalForPrisma.prisma) {
@@ -266,7 +276,8 @@ if (!globalForPrisma.prisma) {
 }
 
 // Initialize connection and monitoring
-console.log(`[DB] 🚀 PRODUCTION MODE | Pool: ${CONFIG.POOL_SIZE} | Timeout: ${CONFIG.POOL_TIMEOUT}s | Retries: ${CONFIG.MAX_RETRIES}`);
+console.log(`[DB] 🚀 Optimized Mode | Pool: ${CONFIG.POOL_SIZE} connections | Timeout: ${CONFIG.POOL_TIMEOUT}s | Retries: ${CONFIG.MAX_RETRIES}`);
+console.log(`[DB] 💡 Pool size reduced to prevent "too many connections" errors`);
 connectAsync();
 startHealthCheck();
 startMetrics();
