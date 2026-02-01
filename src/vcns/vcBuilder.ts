@@ -90,6 +90,15 @@ export async function buildVC(options: VCBuildOptions): Promise<VCBuildResult> {
             operationPending: false,
             lastModified: Date.now(),
         });
+        
+        // Also register to voiceManager for dual-tracking
+        const { registerChannel, registerTeamChannel } = await import('../utils/voiceManager');
+        if (isTeamChannel) {
+            registerTeamChannel(channel.id, guildId, ownerId, teamType?.toLowerCase() as any, false);
+        } else {
+            registerChannel(channel.id, guildId, ownerId, false);
+        }
+        
         rateGovernor.recordAction(IntentAction.VC_CREATE, 30);
         rateGovernor.recordSuccess(`channel:${guildId}`);
         return {

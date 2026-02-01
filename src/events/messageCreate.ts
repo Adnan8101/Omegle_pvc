@@ -5,6 +5,7 @@ import prisma from '../utils/database';
 import { getChannelByOwner, getTeamChannelByOwner } from '../utils/voiceManager';
 import { getGuildSettings, batchUpsertPermissions, batchUpsertOwnerPermissions, batchDeleteOwnerPermissions, invalidateChannelPermissions, invalidateOwnerPermissions, invalidateWhitelist } from '../utils/cache';
 import { vcnsBridge } from '../vcns/bridge';
+import { stateStore } from '../vcns/stateStore';
 import { isPvcPaused } from '../utils/pauseManager';
 import { trackCommandUsage, clearCommandTracking, trackAccessGrant, markAccessSuggested, trackAuFrequency } from '../utils/commandTracker';
 import { recordBotEdit } from './channelUpdate';
@@ -332,8 +333,46 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
             return;
         }
     }
-    const pvcData = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
-    const teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
+    let pvcData = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+    let teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
+    
+    // Auto-recovery: If channel exists in memory but not DB, recover it
+    if (!pvcData && !teamData) {
+        const memoryState = stateStore.getChannelState(channelId);
+        if (memoryState) {
+            console.log(`[AddUser] ⚠️ Channel ${channelId} in MEMORY but not DB - attempting auto-recovery...`);
+            try {
+                if (memoryState.isTeamChannel) {
+                    await prisma.teamVoiceChannel.create({
+                        data: {
+                            channelId,
+                            guildId: memoryState.guildId,
+                            ownerId: memoryState.ownerId,
+                            teamType: (memoryState.teamType?.toUpperCase() as 'DUO' | 'TRIO' | 'SQUAD') || 'DUO',
+                            isLocked: memoryState.isLocked || false,
+                            isHidden: memoryState.isHidden || false,
+                        },
+                    });
+                    teamData = await prisma.teamVoiceChannel.findUnique({ where: { channelId } });
+                } else {
+                    await prisma.privateVoiceChannel.create({
+                        data: {
+                            channelId,
+                            guildId: memoryState.guildId,
+                            ownerId: memoryState.ownerId,
+                            isLocked: memoryState.isLocked || false,
+                            isHidden: memoryState.isHidden || false,
+                        },
+                    });
+                    pvcData = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+                }
+                console.log(`[AddUser] ✅ Auto-recovered channel ${channelId} to database!`);
+            } catch (recoveryErr: any) {
+                console.error(`[AddUser] ❌ Auto-recovery failed:`, recoveryErr.message);
+            }
+        }
+    }
+    
     const isTeamChannel = Boolean(teamData);
     const channelOwnerId = pvcData?.ownerId || teamData?.ownerId;
     const isOwnerById = channelOwnerId === message.author.id;
@@ -477,7 +516,26 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
                 }
             }
         }
-    } catch { }
+    } catch (error: any) {
+        console.error(`[AddUser] Error:`, error);
+        const errorEmbed = new EmbedBuilder()
+            .setTitle('Command Failed')
+            .setColor(0xFF0000);
+        
+        if (error.code === 'P2003') {
+            errorEmbed.setDescription(
+                'Database sync error. Retry the command now.\n' +
+                'If issue persists, rejoin the interface channel.'
+            );
+        } else {
+            errorEmbed.setDescription(
+                'Failed to add users. Error: ' + (error.message?.substring(0, 200) || 'Unknown error') +
+                '\n\nRetry the command or contact support.'
+            );
+        }
+        
+        await message.reply({ embeds: [errorEmbed] }).catch(() => { });
+    }
 }
 async function handleRemoveUser(message: Message, channelId: string | undefined, args: string[], isInCommandChannel: boolean = true, verifiedOwnership: boolean = false, currentChannelOwnerId?: string): Promise<void> {
     const guild = message.guild!;
@@ -582,8 +640,46 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
             return;
         }
     }
-    const pvcData = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
-    const teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
+    let pvcData = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+    let teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
+    
+    // Auto-recovery: If channel exists in memory but not DB, recover it
+    if (!pvcData && !teamData) {
+        const memoryState = stateStore.getChannelState(channelId);
+        if (memoryState) {
+            console.log(`[RemoveUser] ⚠️ Channel ${channelId} in MEMORY but not DB - attempting auto-recovery...`);
+            try {
+                if (memoryState.isTeamChannel) {
+                    await prisma.teamVoiceChannel.create({
+                        data: {
+                            channelId,
+                            guildId: memoryState.guildId,
+                            ownerId: memoryState.ownerId,
+                            teamType: (memoryState.teamType?.toUpperCase() as 'DUO' | 'TRIO' | 'SQUAD') || 'DUO',
+                            isLocked: memoryState.isLocked || false,
+                            isHidden: memoryState.isHidden || false,
+                        },
+                    });
+                    teamData = await prisma.teamVoiceChannel.findUnique({ where: { channelId } });
+                } else {
+                    await prisma.privateVoiceChannel.create({
+                        data: {
+                            channelId,
+                            guildId: memoryState.guildId,
+                            ownerId: memoryState.ownerId,
+                            isLocked: memoryState.isLocked || false,
+                            isHidden: memoryState.isHidden || false,
+                        },
+                    });
+                    pvcData = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+                }
+                console.log(`[RemoveUser] ✅ Auto-recovered channel ${channelId} to database!`);
+            } catch (recoveryErr: any) {
+                console.error(`[RemoveUser] ❌ Auto-recovery failed:`, recoveryErr.message);
+            }
+        }
+    }
+    
     const isTeamChannel = Boolean(teamData);
     const channelOwnerId = pvcData?.ownerId || teamData?.ownerId;
     const isOwnerById = channelOwnerId === message.author.id;
@@ -705,7 +801,26 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
                 await message.reply({ embeds: [hintEmbed] }).catch(() => { });
             }
         }
-    } catch { }
+    } catch (error: any) {
+        console.error(`[RemoveUser] Error:`, error);
+        const errorEmbed = new EmbedBuilder()
+            .setTitle('Command Failed')
+            .setColor(0xFF0000);
+        
+        if (error.code === 'P2003') {
+            errorEmbed.setDescription(
+                'Database sync error. Retry the command now.\n' +
+                'If issue persists, rejoin the interface channel.'
+            );
+        } else {
+            errorEmbed.setDescription(
+                'Failed to remove users. Error: ' + (error.message?.substring(0, 200) || 'Unknown error') +
+                '\n\nRetry the command or contact support.'
+            );
+        }
+        
+        await message.reply({ embeds: [errorEmbed] }).catch(() => { });
+    }
 }
 async function handleList(message: Message, channelId: string | undefined): Promise<void> {
     const guild = message.guild!;

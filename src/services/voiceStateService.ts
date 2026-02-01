@@ -5,6 +5,48 @@ import { invalidateChannelPermissions } from '../utils/cache';
 import { client } from '../client';
 import { stateStore } from '../vcns/index';
 export class VoiceStateService {
+    /**
+     * Auto-recovery: Attempt to restore a channel from memory to database
+     * Returns true if recovery was successful or not needed
+     */
+    private static async autoRecover(channelId: string): Promise<boolean> {
+        const memoryState = stateStore.getChannelState(channelId);
+        if (!memoryState) {
+            return false; // Channel not in memory either
+        }
+        
+        console.log(`[VoiceStateService] ⚠️ Auto-recovery: Channel ${channelId} in MEMORY but not DB`);
+        try {
+            if (memoryState.isTeamChannel) {
+                await prisma.teamVoiceChannel.create({
+                    data: {
+                        channelId,
+                        guildId: memoryState.guildId,
+                        ownerId: memoryState.ownerId,
+                        teamType: (memoryState.teamType?.toUpperCase() as 'DUO' | 'TRIO' | 'SQUAD') || 'DUO',
+                        isLocked: memoryState.isLocked || false,
+                        isHidden: memoryState.isHidden || false,
+                    },
+                });
+            } else {
+                await prisma.privateVoiceChannel.create({
+                    data: {
+                        channelId,
+                        guildId: memoryState.guildId,
+                        ownerId: memoryState.ownerId,
+                        isLocked: memoryState.isLocked || false,
+                        isHidden: memoryState.isHidden || false,
+                    },
+                });
+            }
+            console.log(`[VoiceStateService] ✅ Auto-recovery successful for ${channelId}`);
+            return true;
+        } catch (error: any) {
+            console.error(`[VoiceStateService] ❌ Auto-recovery failed for ${channelId}:`, error.message);
+            return false;
+        }
+    }
+    
     static async getVCState(channelId: string): Promise<any | null> {
         try {
             console.log(`[VoiceStateService] 🔍 getVCState called for channelId: ${channelId}`);
@@ -470,23 +512,34 @@ export class VoiceStateService {
         await enforcer.enforceQuietly(channelId);
     }
     static async addPermit(channelId: string, targetId: string, targetType: 'user' | 'role'): Promise<void> {
-        const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+        let pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+        let team = !pvc ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
+        
+        // Auto-recovery if channel not found in DB
+        if (!pvc && !team) {
+            const recovered = await this.autoRecover(channelId);
+            if (recovered) {
+                pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+                team = !pvc ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
+            }
+        }
+        
         if (pvc) {
             await prisma.voicePermission.upsert({
                 where: { channelId_targetId: { channelId, targetId } },
                 update: { permission: 'permit', targetType },
                 create: { channelId, targetId, targetType, permission: 'permit' },
             });
+        } else if (team) {
+            await prisma.teamVoicePermission.upsert({
+                where: { channelId_targetId: { channelId, targetId } },
+                update: { permission: 'permit', targetType },
+                create: { channelId, targetId, targetType, permission: 'permit' },
+            });
         } else {
-            const team = await prisma.teamVoiceChannel.findUnique({ where: { channelId } });
-            if (team) {
-                await prisma.teamVoicePermission.upsert({
-                    where: { channelId_targetId: { channelId, targetId } },
-                    update: { permission: 'permit', targetType },
-                    create: { channelId, targetId, targetType, permission: 'permit' },
-                });
-            }
+            throw new Error(`Channel ${channelId} not found in database and auto-recovery failed`);
         }
+        
         invalidateChannelPermissions(channelId);
         await enforcer.enforceQuietly(channelId);
     }
@@ -510,23 +563,34 @@ export class VoiceStateService {
         await enforcer.enforceQuietly(channelId);
     }
     static async addBan(channelId: string, targetId: string, targetType: 'user' | 'role'): Promise<void> {
-        const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+        let pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+        let team = !pvc ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
+        
+        // Auto-recovery if channel not found in DB
+        if (!pvc && !team) {
+            const recovered = await this.autoRecover(channelId);
+            if (recovered) {
+                pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+                team = !pvc ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
+            }
+        }
+        
         if (pvc) {
             await prisma.voicePermission.upsert({
                 where: { channelId_targetId: { channelId, targetId } },
                 update: { permission: 'ban', targetType },
                 create: { channelId, targetId, targetType, permission: 'ban' },
             });
+        } else if (team) {
+            await prisma.teamVoicePermission.upsert({
+                where: { channelId_targetId: { channelId, targetId } },
+                update: { permission: 'ban', targetType },
+                create: { channelId, targetId, targetType, permission: 'ban' },
+            });
         } else {
-            const team = await prisma.teamVoiceChannel.findUnique({ where: { channelId } });
-            if (team) {
-                await prisma.teamVoicePermission.upsert({
-                    where: { channelId_targetId: { channelId, targetId } },
-                    update: { permission: 'ban', targetType },
-                    create: { channelId, targetId, targetType, permission: 'ban' },
-                });
-            }
+            throw new Error(`Channel ${channelId} not found in database and auto-recovery failed`);
         }
+        
         invalidateChannelPermissions(channelId);
         await enforcer.enforceQuietly(channelId);
     }
