@@ -153,19 +153,40 @@ export async function execute(client: PVCClient, message: Message): Promise<void
         where: { channelId: message.channel.id } 
     }) : null;
     
+    // Check if message is in a VC's text chat (user typing in voice channel)
+    const messageChannel = message.channel;
+    const isVoiceChannelChat = messageChannel.type === ChannelType.GuildVoice;
+    const userVoiceChannelId = message.member?.voice?.channelId;
+    const isInOwnVoiceChannel = userVoiceChannelId === message.channel.id;
+    
     // Check if user is in their own VC chat (either from memory or DB)
     const isInOwnedVcChat = (pvcOwnership === message.channel.id) || 
                            (teamOwnership === message.channel.id) ||
                            (currentChannelPvc?.ownerId === message.author.id) ||
                            (currentChannelTeam?.ownerId === message.author.id);
     
+    // User is in a VC context if they're in VC chat OR in any registered PVC/Team channel's chat
+    const isInVcContext = isVoiceChannelChat || isInOwnVoiceChannel || Boolean(currentChannelPvc) || Boolean(currentChannelTeam);
+    
     const vcChannelId = isInOwnedVcChat ? (pvcOwnership || teamOwnership || message.channel.id) : undefined;
     const isInPvcCommandChannel = settings?.commandChannelId && message.channel.id === settings.commandChannelId;
     const isInTeamCommandChannel = teamSettings?.commandChannelId && message.channel.id === teamSettings.commandChannelId;
     const isInCommandChannel = isInPvcCommandChannel || isInTeamCommandChannel;
-    const hasOwnership = Boolean(pvcOwnership || teamOwnership);
+    // hasOwnership should include isInOwnedVcChat - if user is in their VC chat, they have ownership
+    const hasOwnership = Boolean(pvcOwnership || teamOwnership || isInOwnedVcChat);
     const allowedForPvc = hasOwnership && (isInPvcCommandChannel || isInTeamCommandChannel || isInOwnedVcChat);
     const allowedForTeam = hasOwnership && (isInTeamCommandChannel || isInOwnedVcChat);
+    
+    // Debug logging for command handling
+    if (message.content.startsWith('!au') || message.content.startsWith('!ru') || message.content.startsWith('!l')) {
+        console.log(`[Command Debug] User: ${message.author.tag}, Channel: ${message.channel.id}`);
+        console.log(`  - pvcOwnership: ${pvcOwnership}, teamOwnership: ${teamOwnership}`);
+        console.log(`  - isInOwnedVcChat: ${isInOwnedVcChat}, isVoiceChannelChat: ${isVoiceChannelChat}`);
+        console.log(`  - currentChannelPvc: ${currentChannelPvc?.channelId}, owner: ${currentChannelPvc?.ownerId}`);
+        console.log(`  - currentChannelTeam: ${currentChannelTeam?.channelId}, owner: ${currentChannelTeam?.ownerId}`);
+        console.log(`  - hasOwnership: ${hasOwnership}, isInCommandChannel: ${isInCommandChannel}`);
+    }
+    
     if (!allowedForPvc && !allowedForTeam && !isInCommandChannel && !isInOwnedVcChat) {
         if (message.content.startsWith('!au') || message.content.startsWith('!ru') || message.content.startsWith('!l')) {
             if (!settings?.commandChannelId && !teamSettings?.commandChannelId) {
@@ -184,8 +205,27 @@ export async function execute(client: PVCClient, message: Message): Promise<void
     if (!commandName) return;
     const member = message.member;
     if (!member) return;
-    // Use already-fetched ownership info
-    const ownedChannelId = pvcOwnership || teamOwnership;
+    // Use already-fetched ownership info, fallback to current channel if user is in VC chat
+    // If user is typing in a registered VC and they own it, use that channel
+    let ownedChannelId = pvcOwnership || teamOwnership;
+    
+    // Critical fix: If user is in their VC chat but ownership lookup failed, 
+    // check if the current channel IS their PVC/Team channel
+    if (!ownedChannelId && isInOwnedVcChat) {
+        ownedChannelId = message.channel.id;
+        console.log(`[Command] Ownership fallback: User is in owned VC chat, using channel ${ownedChannelId}`)
+    }
+    
+    // Also check if user is in a VC and the message channel matches their voice channel
+    if (!ownedChannelId && userVoiceChannelId && userVoiceChannelId === message.channel.id) {
+        // User is in the VC and typing in that VC's text chat
+        const vcPvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId: userVoiceChannelId } });
+        const vcTeam = !vcPvc ? await prisma.teamVoiceChannel.findUnique({ where: { channelId: userVoiceChannelId } }) : null;
+        if (vcPvc?.ownerId === message.author.id || vcTeam?.ownerId === message.author.id) {
+            ownedChannelId = userVoiceChannelId;
+            console.log(`[Command] Ownership fallback: User voice channel matches, using ${ownedChannelId}`);
+        }
+    }
     if (isPvcPaused(message.guild.id) && ['adduser', 'au', 'removeuser', 'ru', 'list', 'l'].includes(commandName)) {
         const pauseEmbed = new EmbedBuilder()
             .setColor(0xFF6B6B)
@@ -202,11 +242,11 @@ export async function execute(client: PVCClient, message: Message): Promise<void
     switch (commandName) {
         case 'adduser':
         case 'au':
-            await handleAddUser(message, ownedChannelId, args, isInCommandChannel || isInOwnedVcChat);
+            await handleAddUser(message, ownedChannelId, args, isInCommandChannel || isInOwnedVcChat || isInVcContext, isInOwnedVcChat);
             break;
         case 'removeuser':
         case 'ru':
-            await handleRemoveUser(message, ownedChannelId, args, isInCommandChannel || isInOwnedVcChat);
+            await handleRemoveUser(message, ownedChannelId, args, isInCommandChannel || isInOwnedVcChat || isInVcContext, isInOwnedVcChat);
             break;
         case 'list':
         case 'l':
@@ -214,10 +254,15 @@ export async function execute(client: PVCClient, message: Message): Promise<void
             break;
     }
 }
-async function handleAddUser(message: Message, channelId: string | undefined, args: string[], isInCommandChannel: boolean = true): Promise<void> {
+async function handleAddUser(message: Message, channelId: string | undefined, args: string[], isInCommandChannel: boolean = true, verifiedOwnership: boolean = false): Promise<void> {
     const guild = message.guild!;
     const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: message.author.id } });
     const isBotOwner = message.author.id === BOT_OWNER_ID;
+    
+    // If ownership was already verified by parent (user is in their VC chat), skip redundant checks
+    if (verifiedOwnership) {
+        console.log(`[AddUser] Ownership pre-verified - user is in their VC chat`);
+    }
     if (!isInCommandChannel && channelId && !(await prisma.privateVoiceChannel.findUnique({ where: { channelId: message.channel.id } }) || await prisma.teamVoiceChannel.findUnique({ where: { channelId: message.channel.id } }))) {
         await checkAndSendEmoji(message);
         return;
@@ -287,23 +332,20 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
     console.log(`  - isOwnerById: ${isOwnerById}`);
     console.log(`  - isOwnerByVoicePresence: ${isOwnerByVoicePresence} (user VC: ${message.member?.voice?.channelId})`);
     console.log(`  - isOwnerByMemory: ${isOwnerByMemory}`);
+    console.log(`  - verifiedOwnership: ${verifiedOwnership}`);
     console.log(`  - pvcData exists: ${Boolean(pvcData)}, teamData exists: ${Boolean(teamData)}`);
     
-    // User is owner if: DB says so, OR they're in the channel and it's registered to them in memory
-    const isValidOwner = isOwnerById || (isOwnerByVoicePresence && isOwnerByMemory);
+    // User is owner if: already verified, OR DB says so, OR they're in the channel and it's registered to them in memory
+    const isValidOwner = verifiedOwnership || isOwnerById || (isOwnerByVoicePresence && isOwnerByMemory);
     
     if (!isValidOwner && message.author.id !== BOT_OWNER_ID) {
         // If DB owner doesn't match but user is in the channel, check if DB is stale
         if (isOwnerByVoicePresence && !channelOwnerId) {
             console.log(`[AddUser] WARNING: User in channel but no DB owner - possible stale data`);
         }
-        if (!isInCommandChannel) {
-            await checkAndSendEmoji(message);
-            return;
-        }
         const actualOwner = channelOwnerId ? `<@${channelOwnerId}>` : 'Unknown';
         const embed = new EmbedBuilder()
-            .setDescription(`❌ **Access Denied**: You do not own this channel.\n\n**Channel Owner:** ${actualOwner}`)
+            .setDescription(`❌ **Access Denied**: You do not own this voice channel.\\n\\n**This VC owner is:** ${actualOwner}`)
             .setColor(0xFF0000);
         await message.reply({ embeds: [embed] }).catch(() => { });
         return;
@@ -426,10 +468,15 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
         }
     } catch { }
 }
-async function handleRemoveUser(message: Message, channelId: string | undefined, args: string[], isInCommandChannel: boolean = true): Promise<void> {
+async function handleRemoveUser(message: Message, channelId: string | undefined, args: string[], isInCommandChannel: boolean = true, verifiedOwnership: boolean = false): Promise<void> {
     const guild = message.guild!;
     const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: message.author.id } });
     const isBotOwner = message.author.id === BOT_OWNER_ID;
+    
+    // If ownership was already verified by parent (user is in their VC chat), skip redundant checks
+    if (verifiedOwnership) {
+        console.log(`[RemoveUser] Ownership pre-verified - user is in their VC chat`);
+    }
     if (!isInCommandChannel && channelId && !(await prisma.privateVoiceChannel.findUnique({ where: { channelId: message.channel.id } }) || await prisma.teamVoiceChannel.findUnique({ where: { channelId: message.channel.id } }))) {
         await checkAndSendEmoji(message);
         return;
@@ -499,23 +546,20 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
     console.log(`  - isOwnerById: ${isOwnerById}`);
     console.log(`  - isOwnerByVoicePresence: ${isOwnerByVoicePresence} (user VC: ${message.member?.voice?.channelId})`);
     console.log(`  - isOwnerByMemory: ${isOwnerByMemory}`);
+    console.log(`  - verifiedOwnership: ${verifiedOwnership}`);
     console.log(`  - pvcData exists: ${Boolean(pvcData)}, teamData exists: ${Boolean(teamData)}`);
     
-    // User is owner if: DB says so, OR they're in the channel and it's registered to them in memory
-    const isValidOwner = isOwnerById || (isOwnerByVoicePresence && isOwnerByMemory);
+    // User is owner if: already verified, OR DB says so, OR they're in the channel and it's registered to them in memory
+    const isValidOwner = verifiedOwnership || isOwnerById || (isOwnerByVoicePresence && isOwnerByMemory);
     
     if (!isValidOwner && message.author.id !== BOT_OWNER_ID) {
         // If DB owner doesn't match but user is in the channel, check if DB is stale
         if (isOwnerByVoicePresence && !channelOwnerId) {
             console.log(`[RemoveUser] WARNING: User in channel but no DB owner - possible stale data`);
         }
-        if (!isInCommandChannel) {
-            await checkAndSendEmoji(message);
-            return;
-        }
         const actualOwner = channelOwnerId ? `<@${channelOwnerId}>` : 'Unknown';
         const embed = new EmbedBuilder()
-            .setDescription(`❌ **Access Denied**: You do not own this channel.\n\n**Channel Owner:** ${actualOwner}`)
+            .setDescription(`❌ **Access Denied**: You do not own this voice channel.\n\n**This VC owner is:** ${actualOwner}`)
             .setColor(0xFF0000);
         await message.reply({ embeds: [embed] }).catch(() => { });
         return;
