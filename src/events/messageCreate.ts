@@ -326,8 +326,24 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
                 await message.reply({ embeds: [embed] }).catch(() => { });
                 return;
             }
+            // Check if user has permanent access permissions they could manage
+            const permanentAccessCount = await prisma.ownerPermission.count({
+                where: { guildId: guild.id, ownerId: message.author.id }
+            });
+            if (permanentAccessCount > 0) {
+                const embed = new EmbedBuilder()
+                    .setDescription('💡 You don\'t have an active voice channel right now.\n\n' +
+                        `You have **${permanentAccessCount} user(s)** in your permanent access list.\n\n` +
+                        'To add users to a VC:\n' +
+                        '• Join the interface channel to create a new VC\n' +
+                        '• Use `/permanent_access` to manage your trusted users list')
+                    .setColor(0x5865F2);
+                await message.reply({ embeds: [embed] }).catch(() => { });
+                return;
+            }
             const embed = new EmbedBuilder()
-                .setDescription('You do not own a voice channel. Create one first by joining the interface channel.')
+                .setDescription('You don\'t have an active voice channel.\n\n' +
+                    'Create one by joining the interface channel, or use `/permanent_access` to manage your permanent access list.')
                 .setColor(0xFF0000);
             await message.reply({ embeds: [embed] }).catch(() => { });
             return;
@@ -548,8 +564,24 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
                 await message.reply({ embeds: [embed] }).catch(() => { });
                 return;
             }
+            // Check if user has permanent access permissions they could manage
+            const permanentAccessCount = await prisma.ownerPermission.count({
+                where: { guildId: guild.id, ownerId: message.author.id }
+            });
+            if (permanentAccessCount > 0) {
+                const embed = new EmbedBuilder()
+                    .setDescription('💡 You don\'t have an active voice channel right now.\n\n' +
+                        `You have **${permanentAccessCount} user(s)** in your permanent access list.\n\n` +
+                        'To remove users:\n' +
+                        '• Join the interface channel to create a new VC\n' +
+                        '• Use `/permanent_access` to manage your trusted users list')
+                    .setColor(0x5865F2);
+                await message.reply({ embeds: [embed] }).catch(() => { });
+                return;
+            }
             const embed = new EmbedBuilder()
-                .setDescription('You do not own a voice channel. Create one first by joining the interface channel.')
+                .setDescription('You don\'t have an active voice channel.\n\n' +
+                    'Create one by joining the interface channel, or use `/permanent_access` to manage your permanent access list.')
                 .setColor(0xFF0000);
             await message.reply({ embeds: [embed] }).catch(() => { });
             return;

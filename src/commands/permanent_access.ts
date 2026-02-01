@@ -17,9 +17,12 @@ export const command: Command = {
         .addSubcommand(sub =>
             sub
                 .setName('add')
-                .setDescription('Give a user permanent access to your future VCs')
+                .setDescription('Give a user permanent access to a VC owner\'s future VCs')
                 .addUserOption(opt =>
                     opt.setName('user').setDescription('User to give permanent access').setRequired(true)
+                )
+                .addUserOption(opt =>
+                    opt.setName('vc_owner').setDescription('VC owner (leave empty to manage your own)').setRequired(false)
                 )
         )
         .addSubcommand(sub =>
@@ -29,27 +32,36 @@ export const command: Command = {
                 .addUserOption(opt =>
                     opt.setName('user').setDescription('User to remove permanent access').setRequired(true)
                 )
+                .addUserOption(opt =>
+                    opt.setName('vc_owner').setDescription('VC owner (leave empty to manage your own)').setRequired(false)
+                )
         )
         .addSubcommand(sub =>
-            sub.setName('show').setDescription('Show your permanent access list')
+            sub.setName('show').setDescription('Show permanent access list')
+                .addUserOption(opt =>
+                    opt.setName('vc_owner').setDescription('VC owner (leave empty to see your own)').setRequired(false)
+                )
         ) as SlashCommandBuilder,
     async execute(interaction: ChatInputCommandInteraction) {
         if (!interaction.guild) {
             await interaction.reply({ content: 'This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
             return;
         }
+
         const subcommand = interaction.options.getSubcommand();
         const guildId = interaction.guild.id;
-        const ownerId = interaction.user.id;
-        const pvcData = await prisma.privateVoiceChannel.findFirst({ where: { guildId, ownerId } });
-        const teamData = !pvcData ? await prisma.teamVoiceChannel.findFirst({ where: { guildId, ownerId } }) : null;
-        if (!pvcData && !teamData) {
+        const vcOwnerUser = interaction.options.getUser('vc_owner');
+        const ownerId = vcOwnerUser ? vcOwnerUser.id : interaction.user.id;
+
+        // Check permission: only the actual owner can manage their permanent access list
+        if (vcOwnerUser && vcOwnerUser.id !== interaction.user.id) {
             await interaction.reply({
-                content: 'You need to own a voice channel to manage permanent access.',
+                content: '❌ You can only manage your own permanent access list.',
                 flags: [MessageFlags.Ephemeral],
             });
             return;
         }
+
         if (subcommand === 'add') {
             const targetUser = interaction.options.getUser('user', true);
             if (targetUser.id === ownerId) {
@@ -91,10 +103,10 @@ export const command: Command = {
             const embed = new EmbedBuilder()
                 .setColor(0x57F287)
                 .setTitle('Permanent Access Added')
-                .setDescription(`${targetUser} now has permanent access to your VCs.`)
+                .setDescription(`${targetUser} now has permanent access to ${vcOwnerUser ? `${vcOwnerUser}'s` : 'your'} VCs.`)
                 .addFields({
                     name: 'What does this mean?',
-                    value: 'This user will automatically get access whenever you create a new voice channel.',
+                    value: `This user will automatically get access whenever ${vcOwnerUser ? `${vcOwnerUser.tag}` : 'you'} ${vcOwnerUser ? 'creates' : 'create'} a new voice channel.`,
                 })
                 .setFooter({ text: 'Use /permanent_access remove to revoke' })
                 .setTimestamp();
@@ -116,8 +128,8 @@ export const command: Command = {
             const embed = new EmbedBuilder()
                 .setColor(0xED4245)
                 .setTitle('Permanent Access Removed')
-                .setDescription(`${targetUser} no longer has permanent access.`)
-                .setFooter({ text: 'They will not get auto-access to your new VCs' })
+                .setDescription(`${targetUser} no longer has permanent access${vcOwnerUser ? ` to ${vcOwnerUser}'s VCs` : ''}.`)
+                .setFooter({ text: `They will not get auto-access to ${vcOwnerUser ? `${vcOwnerUser.tag}'s` : 'your'} new VCs` })
                 .setTimestamp();
             await interaction.reply({ embeds: [embed], flags: [MessageFlags.Ephemeral] });
         } else if (subcommand === 'show') {
@@ -128,8 +140,8 @@ export const command: Command = {
             if (permissions.length === 0) {
                 const embed = new EmbedBuilder()
                     .setColor(0x5865F2)
-                    .setTitle('Permanent Access List')
-                    .setDescription('You have no users with permanent access.')
+                    .setTitle(`Permanent Access List${vcOwnerUser ? ` - ${vcOwnerUser.tag}` : ''}`)
+                    .setDescription(`${vcOwnerUser ? `${vcOwnerUser}` : 'You'} ${vcOwnerUser ? 'has' : 'have'} no users with permanent access.`)
                     .setFooter({ text: 'Use /permanent_access add @user to add someone' })
                     .setTimestamp();
                 await interaction.reply({ embeds: [embed], flags: [MessageFlags.Ephemeral] });
@@ -138,7 +150,7 @@ export const command: Command = {
             const userList = permissions.map((p, i) => `${i + 1}. <@${p.targetId}>`).join('\n');
             const embed = new EmbedBuilder()
                 .setColor(0x5865F2)
-                .setTitle('Permanent Access List')
+                .setTitle(`Permanent Access List${vcOwnerUser ? ` - ${vcOwnerUser.tag}` : ''}`)
                 .setDescription(userList)
                 .setFooter({ text: `${permissions.length} user(s) • /permanent_access add/remove` })
                 .setTimestamp();
