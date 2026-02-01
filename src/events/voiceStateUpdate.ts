@@ -1290,9 +1290,9 @@ async function deletePrivateChannel(channelId: string, guildId: string): Promise
         unregisterChannel(channelId);
         invalidateChannelPermissions(channelId);
         
-        // Then clean up database (silently ignore if already deleted)
+        // Then clean up database (use deleteMany to avoid errors if already deleted)
         await prisma.voicePermission.deleteMany({ where: { channelId } }).catch(() => { });
-        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+        await prisma.privateVoiceChannel.deleteMany({ where: { channelId } }).catch(() => { });
         
         console.log(`[DeletePVC] ✅ Channel ${channelId} fully cleaned up`);
     } catch (err) {
@@ -1539,7 +1539,7 @@ async function createTeamChannel(client: PVCClient, state: VoiceState, teamType:
         } else {
             await newChannel.delete();
             unregisterTeamChannel(newChannel.id);
-            await prisma.teamVoiceChannel.delete({ where: { channelId: newChannel.id } }).catch(() => { });
+            await prisma.teamVoiceChannel.deleteMany({ where: { channelId: newChannel.id } }).catch(() => { });
             return;
         }
     } catch (error) {
@@ -1552,7 +1552,7 @@ async function deleteTeamChannel(channelId: string, guildId: string): Promise<vo
         const guild = client.guilds.cache.get(guildId);
         if (!guild) {
             unregisterTeamChannel(channelId);
-            await prisma.teamVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+            await prisma.teamVoiceChannel.deleteMany({ where: { channelId } }).catch(() => { });
             await prisma.teamVoicePermission.deleteMany({ where: { channelId } }).catch(() => { });
             return;
         }
@@ -1575,12 +1575,12 @@ async function deleteTeamChannel(channelId: string, guildId: string): Promise<vo
             }
         }
         unregisterTeamChannel(channelId);
-        await prisma.teamVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+        await prisma.teamVoiceChannel.deleteMany({ where: { channelId } }).catch(() => { });
         await prisma.teamVoicePermission.deleteMany({ where: { channelId } }).catch(() => { });
     } catch (err) {
         console.error(`[DeleteTeam] Error:`, err);
         unregisterTeamChannel(channelId);
-        await prisma.teamVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+        await prisma.teamVoiceChannel.deleteMany({ where: { channelId } }).catch(() => { });
         await prisma.teamVoicePermission.deleteMany({ where: { channelId } }).catch(() => { });
     }
 }
