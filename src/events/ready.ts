@@ -85,7 +85,7 @@ export async function execute(client: PVCClient): Promise<void> {
                         isHidden: tc.isHidden || false,
                         userLimit: 0,
                         isTeamChannel: true,
-                        teamType: tc.teamType.toLowerCase() as TeamType,
+                        teamType: tc.teamType.toUpperCase() as 'DUO' | 'TRIO' | 'SQUAD',
                         operationPending: false,
                         lastModified: Date.now(),
                     });
@@ -189,7 +189,7 @@ function startPeriodicSync(client: PVCClient, stateStore: any): void {
                         isHidden: tc.isHidden || false,
                         userLimit: 0,
                         isTeamChannel: true,
-                        teamType: tc.teamType.toLowerCase() as TeamType,
+                        teamType: tc.teamType.toUpperCase() as 'DUO' | 'TRIO' | 'SQUAD',
                         operationPending: false,
                         lastModified: Date.now(),
                     });
