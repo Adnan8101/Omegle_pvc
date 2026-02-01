@@ -1230,13 +1230,7 @@ async function transferChannelOwnership(
         console.error(`[TransferOwnership] ❌ Error during ownership transfer:`, err);
     }
 }
-        } catch { }
-        
-        console.log(`[TransferOwnership] ✅ Ownership transfer complete to ${newOwner.displayName}`);
-    } catch (err) {
-        console.error(`[TransferOwnership] ❌ Error during ownership transfer:`, err);
-    }
-}
+
 async function deletePrivateChannel(channelId: string, guildId: string): Promise<void> {
     try {
         const { client } = await import('../client');
