@@ -4,6 +4,8 @@ interface VoiceChannelState {
     guildId: string;
     ownerId: string;
     interfaceChannel: boolean;
+    isLocked?: boolean;
+    isHidden?: boolean;
 }
 const channelStates = new Map<string, VoiceChannelState>();
 const ownerToChannel = new Map<string, string>();
@@ -185,36 +187,7 @@ export function hasTempPermission(channelId: string, userId: string): boolean {
 export function clearTempPermissions(channelId: string): void {
     tempPermittedUsers.delete(channelId);
 }
-export function clearGuildState(guildId: string): void {
-    for (const [channelId, state] of channelStates) {
-        if (state.guildId === guildId) {
-            channelStates.delete(channelId);
-            joinOrder.delete(channelId);
-            tempPermittedUsers.delete(channelId);
-        }
-    }
-    for (const key of ownerToChannel.keys()) {
-        if (key.startsWith(guildId + ':')) {
-            ownerToChannel.delete(key);
-        }
-    }
-    guildInterfaces.delete(guildId);
-    for (const key of teamInterfaces.keys()) {
-        if (key.startsWith(guildId + ':')) {
-            teamInterfaces.delete(key);
-        }
-    }
-    for (const [channelId, state] of teamChannelStates) {
-        if (state.guildId === guildId) {
-            teamChannelStates.delete(channelId);
-        }
-    }
-    for (const key of teamOwnerToChannel.keys()) {
-        if (key.startsWith(guildId + ':')) {
-            teamOwnerToChannel.delete(key);
-        }
-    }
-}
+
 export type TeamType = 'duo' | 'trio' | 'squad';
 export const TEAM_USER_LIMITS: Record<TeamType, number> = {
     duo: 2,
