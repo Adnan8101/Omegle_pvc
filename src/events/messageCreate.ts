@@ -276,13 +276,36 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
         }) : null;
         channelId = pvcCheck?.channelId || teamCheck?.channelId || undefined;
         if (!channelId) {
+            // Check if user is in a voice channel
+            const userVoiceChannelId = message.member?.voice?.channelId;
+            if (userVoiceChannelId) {
+                // User is in a VC, check if it's a PVC/Team and who owns it
+                const vcPvcData = await prisma.privateVoiceChannel.findUnique({ where: { channelId: userVoiceChannelId } });
+                const vcTeamData = !vcPvcData ? await prisma.teamVoiceChannel.findUnique({ where: { channelId: userVoiceChannelId } }) : null;
+                const vcOwnerId = vcPvcData?.ownerId || vcTeamData?.ownerId;
+                
+                if (vcOwnerId && vcOwnerId !== message.author.id) {
+                    // User is in someone else's PVC
+                    const embed = new EmbedBuilder()
+                        .setDescription(`❌ **Access Denied**: You do not own this voice channel.\n\n**The current PVC owner is:** <@${vcOwnerId}>\n\n💡 Ask <@${vcOwnerId}> to manage access using \`!au\` or \`!ru\` commands.`)
+                        .setColor(0xFF0000);
+                    if (!isInCommandChannel) {
+                        await checkAndSendEmoji(message);
+                    } else {
+                        await message.reply({ embeds: [embed] }).catch(() => { });
+                    }
+                    return;
+                }
+            }
+            
+            // User is not in any VC or not in a PVC/Team VC
             if (!isInCommandChannel) {
                 await checkAndSendEmoji(message);
                 return;
             }
             if (currentChannelOwnerId) {
                 const embed = new EmbedBuilder()
-                    .setDescription(`❌ **Access Denied**: You do not own this voice channel.\n\n**This VC owner is:** <@${currentChannelOwnerId}>`)
+                    .setDescription(`❌ **Access Denied**: You do not own this voice channel.\n\n**The current PVC owner is:** <@${currentChannelOwnerId}>\n\n💡 Ask <@${currentChannelOwnerId}> to manage access using \`!au\` or \`!ru\` commands.`)
                     .setColor(0xFF0000);
                 await message.reply({ embeds: [embed] }).catch(() => { });
                 return;
@@ -333,7 +356,7 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
         }
         const actualOwner = channelOwnerId ? `<@${channelOwnerId}>` : 'Unknown';
         const embed = new EmbedBuilder()
-            .setDescription(`❌ **Access Denied**: You do not own this voice channel.\n\n**This VC owner is:** ${actualOwner}`)
+            .setDescription(`❌ **Access Denied**: You do not own this voice channel.\n\n**The current PVC owner is:** ${actualOwner}\n\n💡 Ask ${actualOwner} to manage access using \`!au\` or \`!ru\` commands.`)
             .setColor(0xFF0000);
         await message.reply({ embeds: [embed] }).catch(() => { });
         return;
@@ -503,13 +526,36 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
         }) : null;
         channelId = pvcCheck?.channelId || teamCheck?.channelId || undefined;
         if (!channelId) {
+            // Check if user is in a voice channel
+            const userVoiceChannelId = message.member?.voice?.channelId;
+            if (userVoiceChannelId) {
+                // User is in a VC, check if it's a PVC/Team and who owns it
+                const vcPvcData = await prisma.privateVoiceChannel.findUnique({ where: { channelId: userVoiceChannelId } });
+                const vcTeamData = !vcPvcData ? await prisma.teamVoiceChannel.findUnique({ where: { channelId: userVoiceChannelId } }) : null;
+                const vcOwnerId = vcPvcData?.ownerId || vcTeamData?.ownerId;
+                
+                if (vcOwnerId && vcOwnerId !== message.author.id) {
+                    // User is in someone else's PVC
+                    const embed = new EmbedBuilder()
+                        .setDescription(`❌ **Access Denied**: You do not own this voice channel.\n\n**The current PVC owner is:** <@${vcOwnerId}>\n\n💡 Ask <@${vcOwnerId}> to manage access using \`!au\` or \`!ru\` commands.`)
+                        .setColor(0xFF0000);
+                    if (!isInCommandChannel) {
+                        await checkAndSendEmoji(message);
+                    } else {
+                        await message.reply({ embeds: [embed] }).catch(() => { });
+                    }
+                    return;
+                }
+            }
+            
+            // User is not in any VC or not in a PVC/Team VC
             if (!isInCommandChannel) {
                 await checkAndSendEmoji(message);
                 return;
             }
             if (currentChannelOwnerId) {
                 const embed = new EmbedBuilder()
-                    .setDescription(`❌ **Access Denied**: You do not own this voice channel.\n\n**This VC owner is:** <@${currentChannelOwnerId}>`)
+                    .setDescription(`❌ **Access Denied**: You do not own this voice channel.\n\n**The current PVC owner is:** <@${currentChannelOwnerId}>\n\n💡 Ask <@${currentChannelOwnerId}> to manage access using \`!au\` or \`!ru\` commands.`)
                     .setColor(0xFF0000);
                 await message.reply({ embeds: [embed] }).catch(() => { });
                 return;
@@ -560,7 +606,7 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
         }
         const actualOwner = channelOwnerId ? `<@${channelOwnerId}>` : 'Unknown';
         const embed = new EmbedBuilder()
-            .setDescription(`❌ **Access Denied**: You do not own this voice channel.\n\n**This VC owner is:** ${actualOwner}`)
+            .setDescription(`❌ **Access Denied**: You do not own this voice channel.\n\n**The current PVC owner is:** ${actualOwner}\n\n💡 Ask ${actualOwner} to manage access using \`!au\` or \`!ru\` commands.`)
             .setColor(0xFF0000);
         await message.reply({ embeds: [embed] }).catch(() => { });
         return;

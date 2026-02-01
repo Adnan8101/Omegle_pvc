@@ -374,7 +374,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                         } else {
                             console.log(`[Refresh PVC] ✅ Verified PVC ${channelId} persisted in DB`);
                         }
-                        registerChannel(channelId, guild.id, ownerId);
+                        // Don't register here - will be registered in validation loop below
                         orphanPvcsAdded++;
                         console.log(`[Refresh PVC] ✅ Added orphan PVC ${channelId} to database`);
                     } catch (err: any) {
@@ -406,7 +406,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         for (const pvc of freshSettings.privateChannels) {
             const channel = guild.channels.cache.get(pvc.channelId);
             if (channel) {
-                registerChannel(pvc.channelId, pvc.guildId, pvc.ownerId);
+                registerChannel(pvc.channelId, pvc.guildId, pvc.ownerId, true);
                 validPvcs.push(pvc);
             } else {
                 invalidPvcIds.push(pvc.channelId);
@@ -432,7 +432,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         for (const tc of freshTeamSettings.teamChannels) {
             const channel = guild.channels.cache.get(tc.channelId);
             if (channel) {
-                registerTeamChannel(tc.channelId, tc.guildId, tc.ownerId, tc.teamType.toLowerCase() as 'duo' | 'trio' | 'squad');
+                registerTeamChannel(tc.channelId, tc.guildId, tc.ownerId, tc.teamType.toLowerCase() as 'duo' | 'trio' | 'squad', true);
                 validTeamCount++;
             } else {
                 invalidTeamIds.push(tc.channelId);

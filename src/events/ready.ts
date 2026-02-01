@@ -33,7 +33,7 @@ export async function execute(client: PVCClient): Promise<void> {
                     } catch {}
                 }
                 if (channel && channel.type === ChannelType.GuildVoice) {
-                    registerChannel(pvc.channelId, pvc.guildId, pvc.ownerId);
+                    registerChannel(pvc.channelId, pvc.guildId, pvc.ownerId, true);
                     registeredCount++;
                 } else {
                     await prisma.privateVoiceChannel.delete({
@@ -54,7 +54,7 @@ export async function execute(client: PVCClient): Promise<void> {
                 } catch {}
             }
             if (channel && channel.type === ChannelType.GuildVoice) {
-                registerTeamChannel(tc.channelId, tc.guildId, tc.ownerId, tc.teamType.toLowerCase() as TeamType);
+                registerTeamChannel(tc.channelId, tc.guildId, tc.ownerId, tc.teamType.toLowerCase() as TeamType, true);
                 registeredCount++;
             } else {
                 await prisma.teamVoiceChannel.delete({

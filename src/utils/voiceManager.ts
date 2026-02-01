@@ -64,7 +64,24 @@ export function cleanupCooldowns(): void {
     }
 }
 setInterval(cleanupCooldowns, 60000);
-export function registerChannel(channelId: string, guildId: string, ownerId: string): void {
+export function registerChannel(channelId: string, guildId: string, ownerId: string, skipIfExists: boolean = false): void {
+    // Check if already registered
+    const existingState = channelStates.get(channelId);
+    if (existingState) {
+        if (skipIfExists) {
+            console.log(`[VoiceManager] Channel ${channelId} already registered, skipping`);
+            return;
+        }
+        // Update existing registration
+        if (existingState.ownerId !== ownerId) {
+            console.log(`[VoiceManager] Updating owner for ${channelId}: ${existingState.ownerId} -> ${ownerId}`);
+            ownerToChannel.delete(`${existingState.guildId}:${existingState.ownerId}`);
+            existingState.ownerId = ownerId;
+            ownerToChannel.set(`${guildId}:${ownerId}`, channelId);
+        }
+        return;
+    }
+    
     const state: VoiceChannelState = {
         channelId,
         guildId,
@@ -73,6 +90,8 @@ export function registerChannel(channelId: string, guildId: string, ownerId: str
     };
     channelStates.set(channelId, state);
     ownerToChannel.set(`${guildId}:${ownerId}`, channelId);
+    console.log(`[VoiceManager] ✅ Registered channel ${channelId} with owner ${ownerId}`);
+    
     import('../vcns/index').then(({ stateStore }) => {
         if (!stateStore.getChannelState(channelId)) {
             stateStore.registerChannel({
@@ -86,6 +105,7 @@ export function registerChannel(channelId: string, guildId: string, ownerId: str
                 operationPending: false,
                 lastModified: Date.now(),
             });
+            console.log(`[VoiceManager] ✅ Registered channel ${channelId} in stateStore`);
         }
     }).catch(() => {}); 
 }
@@ -223,7 +243,24 @@ export function getTeamInterfaceType(channelId: string): TeamType | undefined {
     }
     return undefined;
 }
-export function registerTeamChannel(channelId: string, guildId: string, ownerId: string, teamType: TeamType): void {
+export function registerTeamChannel(channelId: string, guildId: string, ownerId: string, teamType: TeamType, skipIfExists: boolean = false): void {
+    // Check if already registered
+    const existingState = teamChannelStates.get(channelId);
+    if (existingState) {
+        if (skipIfExists) {
+            console.log(`[VoiceManager] Team channel ${channelId} already registered, skipping`);
+            return;
+        }
+        // Update existing registration
+        if (existingState.ownerId !== ownerId) {
+            console.log(`[VoiceManager] Updating team owner for ${channelId}: ${existingState.ownerId} -> ${ownerId}`);
+            teamOwnerToChannel.delete(`${existingState.guildId}:${existingState.ownerId}`);
+            existingState.ownerId = ownerId;
+            teamOwnerToChannel.set(`${guildId}:${ownerId}`, channelId);
+        }
+        return;
+    }
+    
     const state: TeamChannelState = {
         channelId,
         guildId,
@@ -232,6 +269,7 @@ export function registerTeamChannel(channelId: string, guildId: string, ownerId:
     };
     teamChannelStates.set(channelId, state);
     teamOwnerToChannel.set(`${guildId}:${ownerId}`, channelId);
+    console.log(`[VoiceManager] ✅ Registered team channel ${channelId} with owner ${ownerId}`);
     import('../vcns/index').then(({ stateStore }) => {
         if (!stateStore.getChannelState(channelId)) {
             stateStore.registerChannel({
@@ -343,13 +381,39 @@ export function clearAllChannels(): void {
 }
 
 export function clearGuildState(guildId: string): void {
-    // Remove all channels for this guild
+    console.log(`[VoiceManager] Clearing state for guild ${guildId}...`);
+    let clearedCount = 0;
+    
+    // Remove all PVC channels for this guild
     for (const [channelId, state] of channelStates.entries()) {
         if (state.guildId === guildId) {
             unregisterChannel(channelId);
+            clearedCount++;
         }
     }
+    
+    // Remove all Team channels for this guild
+    for (const [channelId, state] of teamChannelStates.entries()) {
+        if (state.guildId === guildId) {
+            teamChannelStates.delete(channelId);
+            teamOwnerToChannel.delete(`${state.guildId}:${state.ownerId}`);
+            // Also clear from stateStore
+            import('../vcns/index').then(({ stateStore }) => {
+                stateStore.unregisterChannel(channelId);
+            }).catch(() => {});
+            clearedCount++;
+        }
+    }
+    
     // Remove guild interface
     guildInterfaces.delete(guildId);
-    console.log(`[VoiceManager] ✅ Cleared state for guild ${guildId}`);
+    
+    // Remove team interfaces
+    for (const key of teamInterfaces.keys()) {
+        if (key.startsWith(guildId + ':')) {
+            teamInterfaces.delete(key);
+        }
+    }
+    
+    console.log(`[VoiceManager] ✅ Cleared ${clearedCount} channels for guild ${guildId}`);
 }
