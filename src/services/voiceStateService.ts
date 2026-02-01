@@ -219,7 +219,9 @@ export class VoiceStateService {
             }
         }
         
-        await enforcer.enforceQuietly(channelId);
+        // NOTE: DO NOT call enforcer.enforceQuietly here!
+        // The enforcer will kick users who don't have permits yet.
+        // We've already set the Discord permissions above, which is sufficient.
     }
     static async setHidden(channelId: string, isHidden: boolean): Promise<void> {
         const channel = client.channels.cache.get(channelId) as VoiceChannel | undefined;
@@ -374,7 +376,10 @@ export class VoiceStateService {
                 console.error(`[VoiceStateService] Failed to update Discord permission for hidden:`, error);
             }
         }
-        await enforcer.enforceQuietly(channelId);
+        
+        // NOTE: DO NOT call enforcer.enforceQuietly here!
+        // The enforcer will kick users who don't have permits yet.
+        // We've already set the Discord permissions above, which is sufficient.
     }
     static async setUserLimit(channelId: string, limit: number): Promise<void> {
         const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
