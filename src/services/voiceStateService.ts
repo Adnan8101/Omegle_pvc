@@ -49,6 +49,7 @@ export class VoiceStateService {
     }
     static async setLock(channelId: string, isLocked: boolean): Promise<void> {
         const channel = client.channels.cache.get(channelId) as VoiceChannel | undefined;
+        const { recordBotEdit } = await import('../events/channelUpdate');
         
         if (isLocked) {
             // When locking: give temporary permits to all current members (except owner)
@@ -61,6 +62,28 @@ export class VoiceStateService {
                     
                     console.log(`[VoiceStateService] 🔒 Locking channel ${channelId} - giving TEMPORARY permits to ${currentMembers.length} members`);
                     
+                    // FIRST: Set Discord permissions to allow Connect for each current member
+                    // This must happen BEFORE we deny Connect for @everyone
+                    recordBotEdit(channelId);
+                    const { vcnsBridge } = await import('../vcns/bridge');
+                    for (const member of currentMembers) {
+                        try {
+                            await vcnsBridge.editPermission({
+                                guild: channel.guild,
+                                channelId,
+                                targetId: member.id,
+                                permissions: {
+                                    Connect: true,
+                                    ViewChannel: null, // Keep existing
+                                },
+                            });
+                            console.log(`[VoiceStateService] ✅ Set Discord Connect permission for ${member.user.tag} (${member.id})`);
+                        } catch (err) {
+                            console.error(`[VoiceStateService] ❌ Failed to set Discord permission for ${member.id}:`, err);
+                        }
+                    }
+                    
+                    // SECOND: Add to database and memory
                     for (const member of currentMembers) {
                         // Track in memory as temporary permit
                         const { addTempLockPermit } = await import('../utils/voiceManager');
@@ -173,9 +196,9 @@ export class VoiceStateService {
         
         this.syncToStateStore(channelId, { isLocked });
         
+        // LAST: Update @everyone permission (deny Connect when locked)
         if (channel && channel.type === ChannelType.GuildVoice) {
             try {
-                const { recordBotEdit } = await import('../events/channelUpdate');
                 recordBotEdit(channelId);
                 
                 const currentOverwrite = channel.permissionOverwrites.cache.get(channel.guild.id);
@@ -200,6 +223,7 @@ export class VoiceStateService {
     }
     static async setHidden(channelId: string, isHidden: boolean): Promise<void> {
         const channel = client.channels.cache.get(channelId) as VoiceChannel | undefined;
+        const { recordBotEdit } = await import('../events/channelUpdate');
         
         if (isHidden) {
             // When hiding: give temporary permits to all current members (except owner)
@@ -212,6 +236,28 @@ export class VoiceStateService {
                     
                     console.log(`[VoiceStateService] 🙈 Hiding channel ${channelId} - giving TEMPORARY permits to ${currentMembers.length} members`);
                     
+                    // FIRST: Set Discord permissions to allow ViewChannel for each current member
+                    // This must happen BEFORE we deny ViewChannel for @everyone
+                    recordBotEdit(channelId);
+                    const { vcnsBridge } = await import('../vcns/bridge');
+                    for (const member of currentMembers) {
+                        try {
+                            await vcnsBridge.editPermission({
+                                guild: channel.guild,
+                                channelId,
+                                targetId: member.id,
+                                permissions: {
+                                    ViewChannel: true,
+                                    Connect: null, // Keep existing
+                                },
+                            });
+                            console.log(`[VoiceStateService] ✅ Set Discord ViewChannel permission for ${member.user.tag} (${member.id})`);
+                        } catch (err) {
+                            console.error(`[VoiceStateService] ❌ Failed to set Discord permission for ${member.id}:`, err);
+                        }
+                    }
+                    
+                    // SECOND: Add to database and memory
                     for (const member of currentMembers) {
                         // Track in memory as temporary permit
                         const { addTempLockPermit } = await import('../utils/voiceManager');
@@ -307,9 +353,9 @@ export class VoiceStateService {
         
         this.syncToStateStore(channelId, { isHidden });
         
+        // LAST: Update @everyone permission (deny ViewChannel when hidden)
         if (channel && channel.type === ChannelType.GuildVoice) {
             try {
-                const { recordBotEdit } = await import('../events/channelUpdate');
                 recordBotEdit(channelId);
                 
                 const currentOverwrite = channel.permissionOverwrites.cache.get(channel.guild.id);
