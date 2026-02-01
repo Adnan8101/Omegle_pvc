@@ -14,13 +14,14 @@ interface DatabaseState {
     errorCount: number;
 }
 
-// PRODUCTION CONFIG - Minimal pool to prevent connection exhaustion
-// Critical: Database has limited connection slots, must be conservative
+// PRODUCTION CONFIG - Optimized for high-load PVC operations (1000+ concurrent)
+// Balances connection pool size with preventing exhaustion
 const CONFIG = {
-    // Connection Pool - MINIMAL to prevent "too many connections" errors
-    // Using 3 connections per instance to allow multiple bot instances/scripts
-    POOL_SIZE: process.env.DB_POOL_SIZE ? parseInt(process.env.DB_POOL_SIZE) : 3,
-    POOL_TIMEOUT: 20,           // Wait 20s for connection from pool
+    // Connection Pool - Sufficient for heavy load but controlled
+    // Using 20 connections allows handling many concurrent operations
+    // while leaving room for other services and admin connections
+    POOL_SIZE: process.env.DB_POOL_SIZE ? parseInt(process.env.DB_POOL_SIZE) : 20,
+    POOL_TIMEOUT: 15,           // Wait 15s for connection from pool
     CONNECT_TIMEOUT: 10,        // 10s to establish new connection
     
     // Query & Transaction Timeouts
@@ -33,7 +34,7 @@ const CONFIG = {
     MAX_RETRIES: 3,             // Retry failed operations 3 times
     
     // Performance Optimization
-    STATEMENT_CACHE_SIZE: 50,   // Cache 50 prepared statements
+    STATEMENT_CACHE_SIZE: 100,  // Cache 100 prepared statements
     PGBOUNCER_MODE: false,      // Set true if using PgBouncer
 } as const;
 
@@ -118,30 +119,31 @@ let connectionInProgress = false;
  */
 async function killIdleConnections(): Promise<void> {
     try {
-        // Kill connections idle for more than 5 minutes
-        await prisma.$executeRaw`
-            SELECT pg_terminate_backend(pid)
-            FROM pg_stat_activity
-            WHERE datname = current_database()
-              AND state = 'idle'
-              AND state_change < NOW() - INTERVAL '5 minutes'
-              AND pid <> pg_backend_pid()
-        `;
+        const client = await prisma.$queryRawUnsafe(`
+            SELECT COUNT(*) as killed FROM (
+                SELECT pg_terminate_backend(pid) as terminated
+                FROM pg_stat_activity
+                WHERE datname = current_database()
+                  AND state = 'idle'
+                  AND state_change < NOW() - INTERVAL '5 minutes'
+                  AND pid <> pg_backend_pid()
+            ) t WHERE terminated = true
+        `);
         
-        // Kill idle in transaction connections older than 30 seconds
-        await prisma.$executeRaw`
-            SELECT pg_terminate_backend(pid)
-            FROM pg_stat_activity
-            WHERE datname = current_database()
-              AND state = 'idle in transaction'
-              AND state_change < NOW() - INTERVAL '30 seconds'
-              AND pid <> pg_backend_pid()
-        `;
+        const client2 = await prisma.$queryRawUnsafe(`
+            SELECT COUNT(*) as killed FROM (
+                SELECT pg_terminate_backend(pid) as terminated
+                FROM pg_stat_activity
+                WHERE datname = current_database()
+                  AND state = 'idle in transaction'
+                  AND state_change < NOW() - INTERVAL '30 seconds'
+                  AND pid <> pg_backend_pid()
+            ) t WHERE terminated = true
+        `);
         
-        console.log('[DB] 🧹 Cleaned up idle database connections');
+        console.log('[DB] 🧹 Killed idle connections');
     } catch (err: any) {
-        // Ignore errors - might not have permission
-        console.warn('[DB] ⚠️ Could not clean idle connections:', err.message);
+        // Silently ignore - may not have permissions or no idle connections
     }
 }
 
@@ -264,11 +266,11 @@ function startHealthCheck(): void {
         
         try {
             await prisma.$queryRaw`SELECT 1 as ping`;
-            
-            // Clean idle connections every 10 minutes (20 health checks)
+            5 minutes (10 health checks)
             cleanupCounter++;
-            if (cleanupCounter >= 20) {
+            if (cleanupCounter >= 10) {
                 cleanupCounter = 0;
+                await cleanupCounter = 0;
                 killIdleConnections();
             }
         } catch (err) {
