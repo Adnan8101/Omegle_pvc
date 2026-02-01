@@ -401,6 +401,18 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     }
     if (orphanPvcsAdded > 0) {
         console.log(`[Refresh PVC] ✅ Added ${orphanPvcsAdded} orphan PVCs to database`);
+        
+        // Re-fetch settings to include newly added orphan PVCs
+        console.log('[Refresh PVC] Re-fetching settings to include orphan PVCs...');
+        try {
+            freshSettings = await prisma.guildSettings.findUnique({
+                where: { guildId: guild.id },
+                include: { privateChannels: true },
+            });
+            console.log(`[Refresh PVC] Settings reloaded - PVC channels: ${freshSettings?.privateChannels?.length || 0}`);
+        } catch (refetchError) {
+            console.error('[Refresh PVC] Error re-fetching settings after orphan addition:', refetchError);
+        }
     }
 
     console.log('[Refresh PVC] Validating and registering PVC channels...');
