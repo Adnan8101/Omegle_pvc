@@ -261,6 +261,30 @@ async function handleAccessProtection(
     console.log(`[VCNS-ACCESS] 🔑 Permanent access check for ${member.user.tag}: ${hasPermanentAccess}`);
     if (hasPermanentAccess) {
         console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} has PERMANENT ACCESS from owner - bypass all restrictions`);
+        
+        // Add Discord permission overwrites if channel is locked/hidden
+        if (dbState.isLocked || dbState.isHidden) {
+            const channel = guild.channels.cache.get(newChannelId);
+            if (channel && channel.type === ChannelType.GuildVoice) {
+                try {
+                    const { recordBotEdit } = await import('../events/channelUpdate');
+                    recordBotEdit(newChannelId);
+                    await vcnsBridge.editPermission({
+                        guild,
+                        channelId: newChannelId,
+                        targetId: member.id,
+                        permissions: {
+                            ViewChannel: true,
+                            Connect: true,
+                        },
+                    });
+                    console.log(`[VCNS-ACCESS] ✅ Added Discord permissions for permanent access user ${member.user.tag}`);
+                } catch (err) {
+                    console.error(`[VCNS-ACCESS] ❌ Failed to set Discord permissions:`, err);
+                }
+            }
+        }
+        
         return false; 
     }
     console.log(`[VCNS-ACCESS] 🎟️ Checking channel permits for ${member.user.tag}, permissions count: ${dbPermissions.length}`);
@@ -299,6 +323,30 @@ async function handleAccessProtection(
     // Admin whitelist bypass ALL restrictions (strictness will NEVER work on them)
     if (isWhitelisted) {
         console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} is WHITELISTED - bypass ALL restrictions (strictness/locked/hidden/full)`);
+        
+        // Add Discord permission overwrites if channel is locked/hidden
+        if (dbState.isLocked || dbState.isHidden) {
+            const channel = guild.channels.cache.get(newChannelId);
+            if (channel && channel.type === ChannelType.GuildVoice) {
+                try {
+                    const { recordBotEdit } = await import('../events/channelUpdate');
+                    recordBotEdit(newChannelId);
+                    await vcnsBridge.editPermission({
+                        guild,
+                        channelId: newChannelId,
+                        targetId: member.id,
+                        permissions: {
+                            ViewChannel: true,
+                            Connect: true,
+                        },
+                    });
+                    console.log(`[VCNS-ACCESS] ✅ Added Discord permissions for whitelisted user ${member.user.tag}`);
+                } catch (err) {
+                    console.error(`[VCNS-ACCESS] ❌ Failed to set Discord permissions:`, err);
+                }
+            }
+        }
+        
         return false;
     }
     
