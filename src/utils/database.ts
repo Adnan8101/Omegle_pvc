@@ -14,48 +14,50 @@ interface DatabaseState {
     errorCount: number;
 }
 
-// PRODUCTION CONFIG - Optimized for stable database connections
-// Fixed pool size to prevent "too many connections" errors
+// PRODUCTION CONFIG - Minimal pool to prevent connection exhaustion
+// Critical: Database has limited connection slots, must be conservative
 const CONFIG = {
-    // Connection Pool - Conservative settings to prevent exhaustion
-    // Most PostgreSQL servers have 100 total connection limit
-    // Reserve connections for other services/admin tasks
-    POOL_SIZE: process.env.DB_POOL_SIZE ? parseInt(process.env.DB_POOL_SIZE) : 10,
+    // Connection Pool - MINIMAL to prevent "too many connections" errors
+    // Using 3 connections per instance to allow multiple bot instances/scripts
+    POOL_SIZE: process.env.DB_POOL_SIZE ? parseInt(process.env.DB_POOL_SIZE) : 3,
     POOL_TIMEOUT: 20,           // Wait 20s for connection from pool
     CONNECT_TIMEOUT: 10,        // 10s to establish new connection
     
     // Query & Transaction Timeouts
-    QUERY_TIMEOUT: 15000,       // 15s max query execution
-    TRANSACTION_TIMEOUT: 30000, // 30s max transaction duration
+    QUERY_TIMEOUT: 10000,       // 10s max query execution
+    TRANSACTION_TIMEOUT: 20000, // 20s max transaction duration
     
     // Reconnection Strategy
-    MAX_BACKOFF: 60000,         // Max 1min backoff
+    MAX_BACKOFF: 30000,         // Max 30s backoff
     BASE_BACKOFF: 1000,         // Start with 1s backoff
     MAX_RETRIES: 3,             // Retry failed operations 3 times
     
     // Performance Optimization
-    STATEMENT_CACHE_SIZE: 100,  // Cache 100 prepared statements
+    STATEMENT_CACHE_SIZE: 50,   // Cache 50 prepared statements
     PGBOUNCER_MODE: false,      // Set true if using PgBouncer
 } as const;
 
 function buildConnectionUrl(): string {
     const baseUrl = process.env.DATABASE_URL || '';
     
-    // Clean existing params
+    // Clean existing params to prevent duplicates
     const cleanUrl = baseUrl
         .replace(/[&?]connection_limit=\d+/g, '')
         .replace(/[&?]pool_timeout=\d+/g, '')
         .replace(/[&?]connect_timeout=\d+/g, '')
         .replace(/[&?]statement_cache_size=\d+/g, '')
-        .replace(/[&?]pgbouncer=\w+/g, '');
+        .replace(/[&?]pgbouncer=\w+/g, '')
+        .replace(/[&?]idle_in_transaction_session_timeout=\d+/g, '')
+        .replace(/[&?]connect_timeout=\d+/g, '');
     
     const sep = cleanUrl.includes('?') ? '&' : '?';
     
-    // Build optimized connection string
+    // Build minimal connection string to prevent exhaustion
     let params = `connection_limit=${CONFIG.POOL_SIZE}`;
     params += `&pool_timeout=${CONFIG.POOL_TIMEOUT}`;
     params += `&connect_timeout=${CONFIG.CONNECT_TIMEOUT}`;
     params += `&statement_cache_size=${CONFIG.STATEMENT_CACHE_SIZE}`;
+    params += `&idle_in_transaction_session_timeout=30000`; // Kill idle transactions after 30s
     
     if (CONFIG.PGBOUNCER_MODE) {
         params += '&pgbouncer=true';
@@ -109,6 +111,39 @@ globalForPrisma.dbState = globalForPrisma.dbState || {
 };
 
 let connectionInProgress = false;
+
+/**
+ * Kill idle database connections that are wasting resources
+ * Run this on startup to clean up stale connections from previous instances
+ */
+async function killIdleConnections(): Promise<void> {
+    try {
+        // Kill connections idle for more than 5 minutes
+        await prisma.$executeRaw`
+            SELECT pg_terminate_backend(pid)
+            FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND state = 'idle'
+              AND state_change < NOW() - INTERVAL '5 minutes'
+              AND pid <> pg_backend_pid()
+        `;
+        
+        // Kill idle in transaction connections older than 30 seconds
+        await prisma.$executeRaw`
+            SELECT pg_terminate_backend(pid)
+            FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND state = 'idle in transaction'
+              AND state_change < NOW() - INTERVAL '30 seconds'
+              AND pid <> pg_backend_pid()
+        `;
+        
+        console.log('[DB] 🧹 Cleaned up idle database connections');
+    } catch (err: any) {
+        // Ignore errors - might not have permission
+        console.warn('[DB] ⚠️ Could not clean idle connections:', err.message);
+    }
+}
 
 export function connectAsync(): void {
     if (connectionInProgress) return;
@@ -214,12 +249,13 @@ export async function withRetry<T>(
     throw lastError || new Error('Max retries reached');
 }
 
-// Periodic health check (every 30s)
+// Periodic health check and cleanup (every 30s)
 let healthCheckInterval: NodeJS.Timeout | null = null;
 
 function startHealthCheck(): void {
     if (healthCheckInterval) return;
     
+    let cleanupCounter = 0;
     healthCheckInterval = setInterval(async () => {
         if (!globalForPrisma.dbState.connected) {
             connectAsync();
@@ -228,6 +264,13 @@ function startHealthCheck(): void {
         
         try {
             await prisma.$queryRaw`SELECT 1 as ping`;
+            
+            // Clean idle connections every 10 minutes (20 health checks)
+            cleanupCounter++;
+            if (cleanupCounter >= 20) {
+                cleanupCounter = 0;
+                killIdleConnections();
+            }
         } catch (err) {
             console.warn('[DB] ⚠️ Health check failed, marking disconnected');
             globalForPrisma.dbState.connected = false;
@@ -272,14 +315,35 @@ function shutdown(): void {
 if (!globalForPrisma.prisma) {
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);
-    process.on('exit', shutdown);
+    proKill idle connections from previous instances
+    try {
+        await killIdleConnections();
+    } catch (err) {
+        // Ignore errors - might fail on first connect
+    }
+    
+    // cess.on('exit', shutdown);
 }
 
-// Initialize connection and monitoring
-console.log(`[DB] 🚀 Optimized Mode | Pool: ${CONFIG.POOL_SIZE} connections | Timeout: ${CONFIG.POOL_TIMEOUT}s | Retries: ${CONFIG.MAX_RETRIES}`);
-console.log(`[DB] 💡 Pool size reduced to prevent "too many connections" errors`);
-connectAsync();
-startHealthCheck();
-startMetrics();
+// Initialize with aggressive cleanup to handle restarts
+(async () => {
+    console.log(`[DB] 🚀 Minimal Pool Mode | Pool: ${CONFIG.POOL_SIZE} connections | Timeout: ${CONFIG.POOL_TIMEOUT}s | Retries: ${CONFIG.MAX_RETRIES}`);
+    console.log(`[DB] 💡 Using minimal pool to prevent "too many connections" errors`);
+    
+    // Disconnect any stale connections from previous instance
+    try {
+        await prisma.$disconnect();
+        console.log('[DB] 🧹 Cleaned up stale connections from previous instance');
+    } catch (err) {
+        // Ignore errors on initial disconnect
+    }
+    
+    // Wait a moment for connections to fully close
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    connectAsync();
+    startHealthCheck();
+    startMetrics();
+})();
 
 export default prisma;

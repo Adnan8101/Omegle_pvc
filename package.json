@@ -10,6 +10,8 @@
     "register": "ts-node src/deploy-commands.ts",
     "db:push": "prisma db push",
     "db:generate": "prisma generate",
+    "db:check": "node scripts/check-db-connections.js",
+    "db:cleanup": "echo '⚠️  This will kill idle database connections. Proceed?' && psql $DATABASE_URL -f scripts/cleanup-db-connections.sql",
     "test:vcns": "ts-node tools/vcns-test/simulate-vc-storm.ts",
     "test:full": "ts-node tools/vcns-test/full-system-test.ts"
   },

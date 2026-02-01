@@ -24,7 +24,6 @@ import { command as deployCommandsCmd } from './commands/deploy_commands';
 import { command as funBan } from './commands/fun_ban';
 import { command as counting } from './commands/counting';
 import { command as ping } from './commands/ping';
-import prisma from './utils/database';
 
 // Giveaway commands
 import { giveawayCommands } from './commands/giveaways';
@@ -76,11 +75,9 @@ async function deployCommands() {
         await rest.put(route, { body: commands });
         
         console.log(`Successfully reloaded ${commands.length} application (/) commands.`);
-        await prisma.$disconnect();
         process.exit(0);
     } catch (error) {
         console.error('Failed to deploy commands:', error);
-        await prisma.$disconnect();
         process.exit(1);
     }
 }
