@@ -673,8 +673,27 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
                     });
                     await deletePrivateChannel(channelId, guild.id);
                 } else if (member && member.id === channelState.ownerId) {
-                    console.log(`[HandleLeave] Owner ${member.id} left, transferring ownership...`);
-                    await transferChannelOwnership(client, channelId, guild, channel);
+                    console.log(`[HandleLeave] 👑 Owner ${member.user.tag} (${member.id}) left channel ${channelId}`);
+                    console.log(`[HandleLeave] Channel has ${channel.members.size} members remaining`);
+                    
+                    // Find next owner - prioritize non-bot members
+                    const nonBotMembers = channel.members.filter((m: any) => !m.user.bot);
+                    console.log(`[HandleLeave] Found ${nonBotMembers.size} non-bot members for transfer`);
+                    
+                    if (nonBotMembers.size > 0) {
+                        console.log(`[HandleLeave] Initiating ownership transfer...`);
+                        await transferChannelOwnership(client, channelId, guild, channel);
+                    } else {
+                        console.log(`[HandleLeave] No non-bot members available, channel will be deleted`);
+                        await logAction({
+                            action: LogAction.CHANNEL_DELETED,
+                            guild: guild,
+                            channelName: channel.name,
+                            channelId: channelId,
+                            details: `Owner left, no members to transfer to`,
+                        });
+                        await deletePrivateChannel(channelId, guild.id);
+                    }
                 } else {
                     console.log(`[HandleLeave] Non-owner left. Member: ${member?.id}, Owner: ${channelState.ownerId}`);
                 }
@@ -1079,88 +1098,109 @@ async function transferChannelOwnership(
     channel: any
 ): Promise<void> {
     try {
-        console.log(`[TransferOwnership] Starting transfer for channel ${channelId}`);
+        console.log(`[TransferOwnership] 🔄 Starting transfer for channel ${channelId}`);
         console.log(`[TransferOwnership] Channel members count: ${channel.members.size}`);
         
-        let nextUserId = getNextUserInOrder(channelId);
+        // Get current owner
         const currentState = getChannelState(channelId);
         const teamState = getTeamChannelState(channelId);
         const oldOwnerId = currentState?.ownerId || teamState?.ownerId;
         
-        console.log(`[TransferOwnership] Next in join order: ${nextUserId}, oldOwnerId: ${oldOwnerId}`);
+        console.log(`[TransferOwnership] Old owner ID: ${oldOwnerId}`);
         
+        // Try join order first
+        let nextUserId = getNextUserInOrder(channelId);
+        console.log(`[TransferOwnership] Next in join order: ${nextUserId || 'none'}`);
+        
+        // Fallback: find any non-bot member who isn't the old owner
         if (!nextUserId && channel.members.size > 0) {
             const availableMember = channel.members.find((m: any) => m.id !== oldOwnerId && !m.user.bot);
             if (availableMember) {
                 nextUserId = availableMember.id;
-                console.log(`[TransferOwnership] Found available member as fallback: ${nextUserId}`);
+                console.log(`[TransferOwnership] ✅ Found available member as fallback: ${nextUserId} (${availableMember.user.tag})`);
             }
         }
+        
         if (!nextUserId) {
-            console.log(`[TransferOwnership] No next user found, aborting transfer`);
+            console.log(`[TransferOwnership] ❌ No next user found, cannot transfer`);
             return;
         }
+        
         const newOwner = guild.members.cache.get(nextUserId);
         if (!newOwner) {
-            console.log(`[TransferOwnership] Could not find member ${nextUserId} in guild cache`);
+            console.log(`[TransferOwnership] ❌ Could not find member ${nextUserId} in guild cache`);
             return;
         }
         
-        console.log(`[TransferOwnership] Transferring to ${newOwner.displayName} (${nextUserId})`);
+        console.log(`[TransferOwnership] 👤 Transferring to ${newOwner.user.tag} (${newOwner.displayName})`);
         
         const isTeamChannel = Boolean(teamState);
+        
+        // Update memory state
         if (currentState) {
             transferOwnership(channelId, nextUserId);
+            console.log(`[TransferOwnership] ✅ Updated PVC memory state`);
         }
         if (teamState) {
             transferTeamOwnership(channelId, nextUserId);
+            console.log(`[TransferOwnership] ✅ Updated Team memory state`);
         }
+        
+        // Update database
         if (isTeamChannel && teamState) {
             await prisma.teamVoiceChannel.update({
                 where: { channelId },
                 data: { ownerId: nextUserId },
             });
+            console.log(`[TransferOwnership] ✅ Updated DB owner for Team channel`);
         } else {
             await prisma.privateVoiceChannel.update({
                 where: { channelId },
                 data: { ownerId: nextUserId },
             });
-            console.log(`[TransferOwnership] Updated DB owner for PVC channel`);
+            console.log(`[TransferOwnership] ✅ Updated DB owner for PVC channel`);
         }
-        const ownerPerms = getOwnerPermissions();
+        
         recordBotEdit(channelId);
         
-        // Remove old owner's elevated permissions (they left, but clean up the overwrite)
+        // Remove old owner's elevated permissions
         if (oldOwnerId) {
             try {
                 await channel.permissionOverwrites.delete(oldOwnerId);
-                console.log(`[TransferOwnership] Removed old owner ${oldOwnerId} permissions`);
+                console.log(`[TransferOwnership] ✅ Removed old owner ${oldOwnerId} permissions`);
             } catch (err) {
-                console.log(`[TransferOwnership] Failed to remove old owner permissions:`, err);
+                console.log(`[TransferOwnership] ⚠️ Failed to remove old owner permissions:`, err);
             }
         }
         
         // Grant new owner full permissions
-        await channel.permissionOverwrites.edit(nextUserId, {
-            ViewChannel: true,
-            Connect: true,
-            Speak: true,
-            Stream: true,
-            SendMessages: true,
-            EmbedLinks: true,
-            AttachFiles: true,
-            MuteMembers: true,
-            DeafenMembers: true,
-            ManageChannels: true,
-        });
-        console.log(`[TransferOwnership] Granted new owner ${nextUserId} permissions`);
+        try {
+            await channel.permissionOverwrites.edit(newOwner, {
+                ViewChannel: true,
+                Connect: true,
+                Speak: true,
+                Stream: true,
+                SendMessages: true,
+                EmbedLinks: true,
+                AttachFiles: true,
+                MuteMembers: true,
+                DeafenMembers: true,
+                ManageChannels: true,
+            });
+            console.log(`[TransferOwnership] ✅ Granted new owner ${nextUserId} full permissions`);
+        } catch (permErr) {
+            console.error(`[TransferOwnership] ❌ Failed to set new owner permissions:`, permErr);
+        }
         
+        // Rename channel to new owner's name
         try {
             await channel.setName(newOwner.displayName);
-            console.log(`[TransferOwnership] Renamed channel to: ${newOwner.displayName}`);
+            console.log(`[TransferOwnership] ✅ Renamed channel to: ${newOwner.displayName}`);
         } catch (err) {
-            console.log(`[TransferOwnership] Failed to rename channel:`, err);
+            console.log(`[TransferOwnership] ⚠️ Failed to rename channel:`, err);
         }
+        
+        // Log the action
         await logAction({
             action: LogAction.CHANNEL_TRANSFERRED,
             guild: guild,
@@ -1169,6 +1209,8 @@ async function transferChannelOwnership(
             channelId: channelId,
             details: `Ownership transferred to ${newOwner.user.username}`,
         });
+        
+        // Send notification in channel
         try {
             const embed = new EmbedBuilder()
                 .setColor(0x9B59B6)
@@ -1178,6 +1220,16 @@ async function transferChannelOwnership(
                 )
                 .setTimestamp();
             await channel.send({ embeds: [embed] });
+            console.log(`[TransferOwnership] ✅ Sent notification embed`);
+        } catch (sendErr) {
+            console.log(`[TransferOwnership] ⚠️ Failed to send notification:`, sendErr);
+        }
+        
+        console.log(`[TransferOwnership] ✅ Transfer completed successfully`);
+    } catch (err) {
+        console.error(`[TransferOwnership] ❌ Error during ownership transfer:`, err);
+    }
+}
         } catch { }
         
         console.log(`[TransferOwnership] ✅ Ownership transfer complete to ${newOwner.displayName}`);
@@ -1444,55 +1496,89 @@ async function transferTeamChannelOwnership(
     channel: any
 ): Promise<void> {
     try {
+        console.log(`[TransferTeamOwnership] 🔄 Starting transfer for Team channel ${channelId}`);
+        
         const teamState = getTeamChannelState(channelId);
         const oldOwnerId = teamState?.ownerId;
+        
+        console.log(`[TransferTeamOwnership] Old owner ID: ${oldOwnerId}`);
+        
         let nextUserId = getNextUserInOrder(channelId);
+        console.log(`[TransferTeamOwnership] Next in join order: ${nextUserId || 'none'}`);
+        
         if (!nextUserId && channel.members.size > 0) {
             const availableMember = channel.members.find((m: any) => m.id !== oldOwnerId && !m.user.bot);
             if (availableMember) {
                 nextUserId = availableMember.id;
+                console.log(`[TransferTeamOwnership] ✅ Found available member: ${nextUserId}`);
             }
         }
+        
         if (!nextUserId) {
+            console.log(`[TransferTeamOwnership] ❌ No next user found, cannot transfer`);
             return;
         }
+        
         const newOwner = guild.members.cache.get(nextUserId);
         if (!newOwner) {
+            console.log(`[TransferTeamOwnership] ❌ Member ${nextUserId} not in guild cache`);
             return;
         }
+        
+        console.log(`[TransferTeamOwnership] 👤 Transferring to ${newOwner.user.tag}`);
+        
+        // Update memory
         transferTeamOwnership(channelId, nextUserId);
+        console.log(`[TransferTeamOwnership] ✅ Updated memory state`);
+        
+        // Update database
         await prisma.teamVoiceChannel.update({
             where: { channelId },
             data: { ownerId: nextUserId },
         });
-        const ownerPerms = getOwnerPermissions();
+        console.log(`[TransferTeamOwnership] ✅ Updated DB owner`);
+        
         recordBotEdit(channelId);
         
         // Remove old owner's elevated permissions
         if (oldOwnerId) {
             try {
                 await channel.permissionOverwrites.delete(oldOwnerId);
-            } catch { }
+                console.log(`[TransferTeamOwnership] ✅ Removed old owner permissions`);
+            } catch (err) {
+                console.log(`[TransferTeamOwnership] ⚠️ Failed to remove old owner perms:`, err);
+            }
         }
         
         // Grant new owner full permissions
-        await channel.permissionOverwrites.edit(nextUserId, {
-            ViewChannel: true,
-            Connect: true,
-            Speak: true,
-            Stream: true,
-            SendMessages: true,
-            EmbedLinks: true,
-            AttachFiles: true,
-            MuteMembers: true,
-            DeafenMembers: true,
-            ManageChannels: true,
-        });
+        try {
+            await channel.permissionOverwrites.edit(newOwner, {
+                ViewChannel: true,
+                Connect: true,
+                Speak: true,
+                Stream: true,
+                SendMessages: true,
+                EmbedLinks: true,
+                AttachFiles: true,
+                MuteMembers: true,
+                DeafenMembers: true,
+                ManageChannels: true,
+            });
+            console.log(`[TransferTeamOwnership] ✅ Granted new owner permissions`);
+        } catch (permErr) {
+            console.error(`[TransferTeamOwnership] ❌ Failed to set permissions:`, permErr);
+        }
+        
         const teamType = teamState?.teamType || 'Team';
         const teamTypeName = teamType.charAt(0).toUpperCase() + teamType.slice(1).toLowerCase();
+        
         try {
             await channel.setName(`${newOwner.displayName}'s ${teamTypeName}`);
-        } catch { }
+            console.log(`[TransferTeamOwnership] ✅ Renamed channel`);
+        } catch (err) {
+            console.log(`[TransferTeamOwnership] ⚠️ Failed to rename:`, err);
+        }
+        
         await logAction({
             action: LogAction.CHANNEL_TRANSFERRED,
             guild: guild,
@@ -1503,6 +1589,7 @@ async function transferTeamChannelOwnership(
             isTeamChannel: true,
             teamType: teamState?.teamType,
         });
+        
         try {
             const embed = new EmbedBuilder()
                 .setColor(0x9B59B6)
