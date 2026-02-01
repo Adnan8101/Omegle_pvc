@@ -109,14 +109,21 @@ export async function execute(client: PVCClient, message: Message): Promise<void
         const isInOwnedVcChatCheck = (pvcOwnershipCheck === message.channel.id) || (teamOwnershipCheck === message.channel.id);
         const isInPvcCmdChannel = pvcSettings?.commandChannelId && message.channel.id === pvcSettings.commandChannelId;
         const isInTeamCmdChannel = teamVcSettings?.commandChannelId && message.channel.id === teamVcSettings.commandChannelId;
-        const isInCmdChannel = isInPvcCmdChannel || isInTeamCmdChannel || isInOwnedVcChatCheck;
+        
+        // Check if user is in someone else's PVC
+        const currentChannelPvcEarly = await prisma.privateVoiceChannel.findUnique({ where: { channelId: message.channel.id } });
+        const currentChannelTeamEarly = !currentChannelPvcEarly ? await prisma.teamVoiceChannel.findUnique({ where: { channelId: message.channel.id } }) : null;
+        const currentChannelOwnerIdEarly = currentChannelPvcEarly?.ownerId || currentChannelTeamEarly?.ownerId;
+        const isInAnyPvcChatEarly = Boolean(currentChannelPvcEarly) || Boolean(currentChannelTeamEarly);
+        
+        const isInCmdChannel = isInPvcCmdChannel || isInTeamCmdChannel || isInOwnedVcChatCheck || isInAnyPvcChatEarly;
         const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
         const commandName = args.shift()?.toLowerCase();
         if (commandName === 'au' || commandName === 'adduser') {
-            await handleAddUser(message, undefined, args, isInCmdChannel);
+            await handleAddUser(message, undefined, args, isInCmdChannel, false, currentChannelOwnerIdEarly);
             return;
         } else if (commandName === 'ru' || commandName === 'removeuser') {
-            await handleRemoveUser(message, undefined, args, isInCmdChannel);
+            await handleRemoveUser(message, undefined, args, isInCmdChannel, false, currentChannelOwnerIdEarly);
             return;
         }
     }
@@ -165,8 +172,12 @@ export async function execute(client: PVCClient, message: Message): Promise<void
                            (currentChannelPvc?.ownerId === message.author.id) ||
                            (currentChannelTeam?.ownerId === message.author.id);
     
+    // Check if user is in ANY registered PVC/Team chat (even if not owner)
+    const isInAnyPvcChat = Boolean(currentChannelPvc) || Boolean(currentChannelTeam);
+    const currentChannelOwnerId = currentChannelPvc?.ownerId || currentChannelTeam?.ownerId;
+    
     // User is in a VC context if they're in VC chat OR in any registered PVC/Team channel's chat
-    const isInVcContext = isVoiceChannelChat || isInOwnVoiceChannel || Boolean(currentChannelPvc) || Boolean(currentChannelTeam);
+    const isInVcContext = isVoiceChannelChat || isInOwnVoiceChannel || isInAnyPvcChat;
     
     const vcChannelId = isInOwnedVcChat ? (pvcOwnership || teamOwnership || message.channel.id) : undefined;
     const isInPvcCommandChannel = settings?.commandChannelId && message.channel.id === settings.commandChannelId;
@@ -187,7 +198,7 @@ export async function execute(client: PVCClient, message: Message): Promise<void
         console.log(`  - hasOwnership: ${hasOwnership}, isInCommandChannel: ${isInCommandChannel}`);
     }
     
-    if (!allowedForPvc && !allowedForTeam && !isInCommandChannel && !isInOwnedVcChat) {
+    if (!allowedForPvc && !allowedForTeam && !isInCommandChannel && !isInOwnedVcChat && !isInAnyPvcChat) {
         if (message.content.startsWith('!au') || message.content.startsWith('!ru') || message.content.startsWith('!l')) {
             if (!settings?.commandChannelId && !teamSettings?.commandChannelId) {
                 const embed = new EmbedBuilder()
@@ -242,11 +253,11 @@ export async function execute(client: PVCClient, message: Message): Promise<void
     switch (commandName) {
         case 'adduser':
         case 'au':
-            await handleAddUser(message, ownedChannelId, args, isInCommandChannel || isInOwnedVcChat || isInVcContext, isInOwnedVcChat);
+            await handleAddUser(message, ownedChannelId, args, isInCommandChannel || isInOwnedVcChat || isInVcContext, isInOwnedVcChat, currentChannelOwnerId);
             break;
         case 'removeuser':
         case 'ru':
-            await handleRemoveUser(message, ownedChannelId, args, isInCommandChannel || isInOwnedVcChat || isInVcContext, isInOwnedVcChat);
+            await handleRemoveUser(message, ownedChannelId, args, isInCommandChannel || isInOwnedVcChat || isInVcContext, isInOwnedVcChat, currentChannelOwnerId);
             break;
         case 'list':
         case 'l':
@@ -254,7 +265,7 @@ export async function execute(client: PVCClient, message: Message): Promise<void
             break;
     }
 }
-async function handleAddUser(message: Message, channelId: string | undefined, args: string[], isInCommandChannel: boolean = true, verifiedOwnership: boolean = false): Promise<void> {
+async function handleAddUser(message: Message, channelId: string | undefined, args: string[], isInCommandChannel: boolean = true, verifiedOwnership: boolean = false, currentChannelOwnerId?: string): Promise<void> {
     const guild = message.guild!;
     const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: message.author.id } });
     const isBotOwner = message.author.id === BOT_OWNER_ID;
@@ -307,6 +318,14 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
                 await checkAndSendEmoji(message);
                 return;
             }
+            // If user is in someone else's PVC, show the owner
+            if (currentChannelOwnerId) {
+                const embed = new EmbedBuilder()
+                    .setDescription(`❌ **Access Denied**: You do not own this voice channel.\n\n**This VC owner is:** <@${currentChannelOwnerId}>`)
+                    .setColor(0xFF0000);
+                await message.reply({ embeds: [embed] }).catch(() => { });
+                return;
+            }
             const embed = new EmbedBuilder()
                 .setDescription('You do not own a voice channel. Create one first by joining the interface channel.')
                 .setColor(0xFF0000);
@@ -345,7 +364,7 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
         }
         const actualOwner = channelOwnerId ? `<@${channelOwnerId}>` : 'Unknown';
         const embed = new EmbedBuilder()
-            .setDescription(`❌ **Access Denied**: You do not own this voice channel.\\n\\n**This VC owner is:** ${actualOwner}`)
+            .setDescription(`❌ **Access Denied**: You do not own this voice channel.\n\n**This VC owner is:** ${actualOwner}`)
             .setColor(0xFF0000);
         await message.reply({ embeds: [embed] }).catch(() => { });
         return;
@@ -468,7 +487,7 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
         }
     } catch { }
 }
-async function handleRemoveUser(message: Message, channelId: string | undefined, args: string[], isInCommandChannel: boolean = true, verifiedOwnership: boolean = false): Promise<void> {
+async function handleRemoveUser(message: Message, channelId: string | undefined, args: string[], isInCommandChannel: boolean = true, verifiedOwnership: boolean = false, currentChannelOwnerId?: string): Promise<void> {
     const guild = message.guild!;
     const isPvcOwner = await prisma.pvcOwner.findUnique({ where: { userId: message.author.id } });
     const isBotOwner = message.author.id === BOT_OWNER_ID;
@@ -519,6 +538,14 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
         if (!channelId) {
             if (!isInCommandChannel) {
                 await checkAndSendEmoji(message);
+                return;
+            }
+            // If user is in someone else's PVC, show the owner
+            if (currentChannelOwnerId) {
+                const embed = new EmbedBuilder()
+                    .setDescription(`❌ **Access Denied**: You do not own this voice channel.\n\n**This VC owner is:** <@${currentChannelOwnerId}>`)
+                    .setColor(0xFF0000);
+                await message.reply({ embeds: [embed] }).catch(() => { });
                 return;
             }
             const embed = new EmbedBuilder()
