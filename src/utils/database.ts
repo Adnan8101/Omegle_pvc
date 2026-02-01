@@ -269,7 +269,5 @@ if (!globalForPrisma.prisma) {
     startHealthCheck();
     startMetrics();
 })();
-    startHealthCheck();
-    startMetrics();
-})();
+
 export default prisma;
