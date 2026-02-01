@@ -105,11 +105,32 @@ export class VCNSBridge {
             teamType = options.teamType;
         }
         if (vcns.userOwnsChannel(guild.id, targetOwnerId)) {
-            return {
-                success: false,
-                queued: false,
-                error: 'User already owns a channel',
-            };
+            // Memory thinks user owns a channel, verify in database
+            const existingChannelId = vcns.getChannelByOwner(guild.id, targetOwnerId);
+            console.log(`[Bridge] ⚠️ Memory says user ${targetOwnerId} owns channel ${existingChannelId}, verifying in DB...`);
+            
+            // Import prisma to check database
+            const { default: prisma } = await import('../utils/database');
+            const dbChannel = await prisma.privateVoiceChannel.findUnique({
+                where: { channelId: existingChannelId || undefined },
+            }).catch(() => null);
+            
+            if (!dbChannel && existingChannelId) {
+                // Channel exists in memory but not in DB - clean it up
+                console.log(`[Bridge] 🧹 Channel ${existingChannelId} not in DB, cleaning up memory...`);
+                const { unregisterChannel } = await import('../utils/voiceManager');
+                unregisterChannel(existingChannelId);
+                console.log(`[Bridge] ✅ Memory cleaned up, allowing new channel creation`);
+                // Continue with creation
+            } else if (dbChannel) {
+                // Channel exists in both memory and DB - reject
+                console.log(`[Bridge] ❌ User truly owns a channel - rejecting creation`);
+                return {
+                    success: false,
+                    queued: false,
+                    error: 'User already owns a channel',
+                };
+            }
         }
         const payload: VCCreatePayload = {
             guildId: guild.id,

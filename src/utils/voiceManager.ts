@@ -96,9 +96,14 @@ export function unregisterChannel(channelId: string): void {
     joinOrder.delete(channelId);
     tempPermittedUsers.delete(channelId);
     tempLockPermits.delete(channelId); // Clean up temp lock permits
+    
+    // Immediately unregister from stateStore (synchronous operation)
     import('../vcns/index').then(({ stateStore }) => {
         stateStore.unregisterChannel(channelId);
-    }).catch(() => {});
+        console.log(`[VoiceManager] ✅ Unregistered channel ${channelId} from voiceManager and stateStore`);
+    }).catch((err) => {
+        console.error(`[VoiceManager] ⚠️ Failed to unregister from stateStore:`, err);
+    });
 }
 export function getChannelState(channelId: string): VoiceChannelState | undefined {
     return channelStates.get(channelId);
@@ -352,4 +357,26 @@ export function clearTempLockPermits(channelId: string): void {
 export function getTempLockPermits(channelId: string): string[] {
     const users = tempLockPermits.get(channelId);
     return users ? Array.from(users) : [];
+}
+
+// Emergency cleanup functions
+export function clearAllChannels(): void {
+    channelStates.clear();
+    ownerToChannel.clear();
+    joinOrder.clear();
+    tempPermittedUsers.clear();
+    tempLockPermits.clear();
+    console.log(`[VoiceManager] ✅ Cleared all channel states`);
+}
+
+export function clearGuildState(guildId: string): void {
+    // Remove all channels for this guild
+    for (const [channelId, state] of channelStates.entries()) {
+        if (state.guildId === guildId) {
+            unregisterChannel(channelId);
+        }
+    }
+    // Remove guild interface
+    guildInterfaces.delete(guildId);
+    console.log(`[VoiceManager] ✅ Cleared state for guild ${guildId}`);
 }

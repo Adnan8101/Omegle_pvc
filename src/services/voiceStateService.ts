@@ -213,9 +213,25 @@ export class VoiceStateService {
                 }
                 
                 await channel.permissionOverwrites.edit(channel.guild.id, permUpdate);
-                console.log(`[VoiceStateService] Lock ${isLocked ? 'enabled' : 'disabled'} - Connect=${isLocked ? 'DENY' : 'NEUTRAL'} for channel ${channelId}`);
+                
+                // VERIFY: Fetch fresh channel data to confirm Discord applied the permissions
+                await new Promise(resolve => setTimeout(resolve, 500)); // Small delay for Discord API
+                const verifyChannel = await channel.fetch();
+                const verifyOverwrite = verifyChannel.permissionOverwrites.cache.get(channel.guild.id);
+                
+                const expectedConnectState = isLocked ? 'DENIED' : 'NEUTRAL';
+                const actualConnectState = verifyOverwrite?.deny.has(PermissionFlagsBits.Connect) ? 'DENIED' : 
+                                          verifyOverwrite?.allow.has(PermissionFlagsBits.Connect) ? 'ALLOWED' : 'NEUTRAL';
+                
+                if ((isLocked && actualConnectState === 'DENIED') || (!isLocked && actualConnectState === 'NEUTRAL')) {
+                    console.log(`[VoiceStateService] ✅ VERIFIED Lock ${isLocked ? 'enabled' : 'disabled'} - Connect=${actualConnectState} for channel ${channelId}`);
+                } else {
+                    console.error(`[VoiceStateService] ❌ VERIFICATION FAILED! Expected Connect=${expectedConnectState}, got ${actualConnectState}`);
+                    throw new Error(`Lock state verification failed: expected ${expectedConnectState}, got ${actualConnectState}`);
+                }
             } catch (error) {
-                console.error(`[VoiceStateService] Failed to update Discord permission for lock:`, error);
+                console.error(`[VoiceStateService] ❌ Failed to update/verify Discord permission for lock:`, error);
+                throw error; // Re-throw to prevent success log
             }
         }
         
@@ -370,10 +386,27 @@ export class VoiceStateService {
                 } else if (currentOverwrite?.allow.has(PermissionFlagsBits.Connect)) {
                     permUpdate.Connect = true;
                 }
+                
                 await channel.permissionOverwrites.edit(channel.guild.id, permUpdate);
-                console.log(`[VoiceStateService] Hidden ${isHidden ? 'enabled' : 'disabled'} - ViewChannel=${isHidden ? 'DENY' : 'NEUTRAL'} for channel ${channelId}`);
+                
+                // VERIFY: Fetch fresh channel data to confirm Discord applied the permissions
+                await new Promise(resolve => setTimeout(resolve, 500)); // Small delay for Discord API
+                const verifyChannel = await channel.fetch();
+                const verifyOverwrite = verifyChannel.permissionOverwrites.cache.get(channel.guild.id);
+                
+                const expectedViewState = isHidden ? 'DENIED' : 'NEUTRAL';
+                const actualViewState = verifyOverwrite?.deny.has(PermissionFlagsBits.ViewChannel) ? 'DENIED' : 
+                                       verifyOverwrite?.allow.has(PermissionFlagsBits.ViewChannel) ? 'ALLOWED' : 'NEUTRAL';
+                
+                if ((isHidden && actualViewState === 'DENIED') || (!isHidden && actualViewState === 'NEUTRAL')) {
+                    console.log(`[VoiceStateService] ✅ VERIFIED Hidden ${isHidden ? 'enabled' : 'disabled'} - ViewChannel=${actualViewState} for channel ${channelId}`);
+                } else {
+                    console.error(`[VoiceStateService] ❌ VERIFICATION FAILED! Expected ViewChannel=${expectedViewState}, got ${actualViewState}`);
+                    throw new Error(`Hidden state verification failed: expected ${expectedViewState}, got ${actualViewState}`);
+                }
             } catch (error) {
-                console.error(`[VoiceStateService] Failed to update Discord permission for hidden:`, error);
+                console.error(`[VoiceStateService] ❌ Failed to update/verify Discord permission for hidden:`, error);
+                throw error; // Re-throw to prevent success log
             }
         }
         

@@ -1084,19 +1084,27 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
                         }
                         
                         // Also add to database as permanent permits (not temporary)
+                        // Use upsert to avoid duplicate key errors
                         for (const perm of validPermissions) {
-                            await prisma.voicePermission.create({
-                                data: {
+                            await prisma.voicePermission.upsert({
+                                where: {
+                                    channelId_targetId: {
+                                        channelId: newChannel.id,
+                                        targetId: perm.targetId,
+                                    },
+                                },
+                                update: {
+                                    permission: 'permit',
+                                    targetType: perm.targetType,
+                                },
+                                create: {
                                     channelId: newChannel.id,
                                     targetId: perm.targetId,
                                     targetType: perm.targetType,
                                     permission: 'permit',
                                 },
                             }).catch((err) => {
-                                // Ignore if already exists
-                                if (!err.message?.includes('Unique constraint')) {
-                                    console.error(`[VCNS-CREATE] Failed to add DB permit for ${perm.targetId}:`, err);
-                                }
+                                console.error(`[VCNS-CREATE] Failed to upsert DB permit for ${perm.targetId}:`, err);
                             });
                         }
                         
@@ -1160,11 +1168,37 @@ async function transferChannelOwnership(
             });
             console.log(`[TransferOwnership] ✅ Updated DB owner for Team channel`);
         } else {
-            await prisma.privateVoiceChannel.update({
+            // Check if channel exists in DB before updating
+            const channelExists = await prisma.privateVoiceChannel.findUnique({
                 where: { channelId },
-                data: { ownerId: nextUserId },
             });
-            console.log(`[TransferOwnership] ✅ Updated DB owner for PVC channel`);
+            
+            if (channelExists) {
+                await prisma.privateVoiceChannel.update({
+                    where: { channelId },
+                    data: { ownerId: nextUserId },
+                });
+                console.log(`[TransferOwnership] ✅ Updated DB owner for PVC channel`);
+            } else {
+                console.log(`[TransferOwnership] ⚠️ Channel ${channelId} not in DB, registering it now...`);
+                // Re-register the channel
+                const channelState = getChannelState(channelId);
+                if (channelState) {
+                    await prisma.privateVoiceChannel.create({
+                        data: {
+                            channelId,
+                            ownerId: nextUserId,
+                            guildId: guild.id,
+                            isLocked: channelState.isLocked || false,
+                            isHidden: channelState.isHidden || false,
+                        },
+                    });
+                    console.log(`[TransferOwnership] ✅ Re-registered and updated DB owner for PVC channel`);
+                } else {
+                    console.error(`[TransferOwnership] ❌ Cannot transfer - channel not in memory either`);
+                    throw new Error('Channel not in memory or database');
+                }
+            }
         }
         recordBotEdit(channelId);
         if (oldOwnerId) {
@@ -1252,14 +1286,23 @@ async function deletePrivateChannel(channelId: string, guildId: string): Promise
                 console.error(`[DeletePVC] Failed to delete channel from Discord:`, err);
             }
         }
+        // Clean up memory state FIRST before DB
         unregisterChannel(channelId);
-        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+        invalidateChannelPermissions(channelId);
+        
+        // Then clean up database (silently ignore if already deleted)
         await prisma.voicePermission.deleteMany({ where: { channelId } }).catch(() => { });
+        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+        
+        console.log(`[DeletePVC] ✅ Channel ${channelId} fully cleaned up`);
     } catch (err) {
         console.error(`[DeletePVC] Error:`, err);
+        // Still clean up memory even if DB cleanup fails
         unregisterChannel(channelId);
-        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+        invalidateChannelPermissions(channelId);
+        
         await prisma.voicePermission.deleteMany({ where: { channelId } }).catch(() => { });
+        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
     }
 }
 async function createTeamChannel(client: PVCClient, state: VoiceState, teamType: TeamType): Promise<void> {

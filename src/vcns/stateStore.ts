@@ -355,5 +355,17 @@ export class StateStore extends EventEmitter {
     public loadGuildPauseState(guildId: string, isPaused: boolean): void {
         this.updateGuildState(guildId, { pvcPaused: isPaused });
     }
+    
+    public clearGuild(guildId: string): void {
+        // Remove all channels for this guild
+        for (const [channelId, state] of this.channelStates.entries()) {
+            if (state.guildId === guildId) {
+                this.unregisterChannel(channelId);
+            }
+        }
+        // Clear guild state
+        this.guildStates.delete(guildId);
+        console.log(`[StateStore] ✅ Cleared all state for guild ${guildId}`);
+    }
 }
 export const stateStore = new StateStore();
