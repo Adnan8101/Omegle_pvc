@@ -328,7 +328,12 @@ async function handleAccessProtection(
         isFull,
         isRestricted
     });
-    if (strictnessEnabled && isRestricted) {
+    
+    // Admin strictness: Only enforce for LOCKED or HIDDEN channels, not for full channels
+    // Unlocked channels should allow admins even without permits
+    const needsStrictnessCheck = strictnessEnabled && (isLocked || isHidden);
+    
+    if (needsStrictnessCheck) {
         if (isWhitelisted || hasChannelPermit) {
             console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} is ${isWhitelisted ? 'WHITELISTED' : 'has CHANNEL PERMIT'} - access granted (strictness ON, channel restricted)`);
             return false; 
@@ -336,7 +341,7 @@ async function handleAccessProtection(
         
         console.log(`[VCNS-ACCESS] 🚨 STRICTNESS VIOLATION: ${member.user.tag} is NOT whitelisted/permitted, channel is restricted - INSTANT KICK`);
         const channelTypeName = isTeamChannel ? 'team voice channel' : 'voice channel';
-        const restrictionReason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
+        const restrictionReason = isLocked ? 'locked' : 'hidden';
         try {
             await vcnsBridge.kickUser({
                 guild,
@@ -578,40 +583,20 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
     console.log(`[HandleLeave] User ${member?.user?.username} (${member?.id}) left channel ${channelId}`);
     
     // Clean up temporary lock permits when user leaves
+    // ONLY remove if they were in the temp permit tracking (added during lock operation)
+    // Do NOT remove permits added by !au command
     if (member) {
         const { hasTempLockPermit, removeTempLockPermit } = await import('../utils/voiceManager');
         
         if (hasTempLockPermit(channelId, member.id)) {
             console.log(`[HandleLeave] 🔓 Removing temporary lock permit for ${member.user.tag} (${member.id})`);
             
-            // Remove from memory tracking
+            // Remove from memory tracking ONLY
             removeTempLockPermit(channelId, member.id);
             
-            // Remove from database
-            const pvcData = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
-            const teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
-            
-            if (pvcData) {
-                await prisma.voicePermission.deleteMany({
-                    where: {
-                        channelId,
-                        targetId: member.id,
-                        permission: 'permit',
-                    },
-                }).catch(() => {});
-                console.log(`[HandleLeave] ✅ Removed temp permit from DB (PVC) for ${member.user.tag}`);
-            } else if (teamData) {
-                await prisma.teamVoicePermission.deleteMany({
-                    where: {
-                        channelId,
-                        targetId: member.id,
-                        permission: 'permit',
-                    },
-                }).catch(() => {});
-                console.log(`[HandleLeave] ✅ Removed temp permit from DB (Team) for ${member.user.tag}`);
-            }
-            
-            invalidateChannelPermissions(channelId);
+            // Do NOT remove from database - user may have been explicitly added with !au
+            // which should persist even after they leave
+            console.log(`[HandleLeave] ℹ️ Kept permit in DB (may be from !au command)`);
         }
     }
     
