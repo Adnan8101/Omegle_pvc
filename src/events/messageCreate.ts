@@ -273,13 +273,37 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
     const teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
     const isTeamChannel = Boolean(teamData);
     const channelOwnerId = pvcData?.ownerId || teamData?.ownerId;
-    if (channelOwnerId !== message.author.id && message.author.id !== BOT_OWNER_ID) {
+    
+    // Robust ownership validation with multiple checks
+    const isOwnerById = channelOwnerId === message.author.id;
+    const isOwnerByVoicePresence = message.member?.voice?.channelId === channelId;
+    const isOwnerByMemory = getChannelByOwner(guild.id, message.author.id) === channelId || 
+                            getTeamChannelByOwner(guild.id, message.author.id) === channelId;
+    
+    console.log(`[AddUser] Ownership check details:`);
+    console.log(`  - channelId: ${channelId}`);
+    console.log(`  - author: ${message.author.id} (${message.author.tag})`);
+    console.log(`  - dbOwner: ${channelOwnerId}`);
+    console.log(`  - isOwnerById: ${isOwnerById}`);
+    console.log(`  - isOwnerByVoicePresence: ${isOwnerByVoicePresence} (user VC: ${message.member?.voice?.channelId})`);
+    console.log(`  - isOwnerByMemory: ${isOwnerByMemory}`);
+    console.log(`  - pvcData exists: ${Boolean(pvcData)}, teamData exists: ${Boolean(teamData)}`);
+    
+    // User is owner if: DB says so, OR they're in the channel and it's registered to them in memory
+    const isValidOwner = isOwnerById || (isOwnerByVoicePresence && isOwnerByMemory);
+    
+    if (!isValidOwner && message.author.id !== BOT_OWNER_ID) {
+        // If DB owner doesn't match but user is in the channel, check if DB is stale
+        if (isOwnerByVoicePresence && !channelOwnerId) {
+            console.log(`[AddUser] WARNING: User in channel but no DB owner - possible stale data`);
+        }
         if (!isInCommandChannel) {
             await checkAndSendEmoji(message);
             return;
         }
+        const actualOwner = channelOwnerId ? `<@${channelOwnerId}>` : 'Unknown';
         const embed = new EmbedBuilder()
-            .setDescription('❌ **Access Denied**: You do not own this channel.')
+            .setDescription(`❌ **Access Denied**: You do not own this channel.\n\n**Channel Owner:** ${actualOwner}`)
             .setColor(0xFF0000);
         await message.reply({ embeds: [embed] }).catch(() => { });
         return;
@@ -461,13 +485,37 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
     const teamData = !pvcData ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
     const isTeamChannel = Boolean(teamData);
     const channelOwnerId = pvcData?.ownerId || teamData?.ownerId;
-    if (channelOwnerId !== message.author.id && message.author.id !== BOT_OWNER_ID) {
+    
+    // Robust ownership validation with multiple checks
+    const isOwnerById = channelOwnerId === message.author.id;
+    const isOwnerByVoicePresence = message.member?.voice?.channelId === channelId;
+    const isOwnerByMemory = getChannelByOwner(guild.id, message.author.id) === channelId || 
+                            getTeamChannelByOwner(guild.id, message.author.id) === channelId;
+    
+    console.log(`[RemoveUser] Ownership check details:`);
+    console.log(`  - channelId: ${channelId}`);
+    console.log(`  - author: ${message.author.id} (${message.author.tag})`);
+    console.log(`  - dbOwner: ${channelOwnerId}`);
+    console.log(`  - isOwnerById: ${isOwnerById}`);
+    console.log(`  - isOwnerByVoicePresence: ${isOwnerByVoicePresence} (user VC: ${message.member?.voice?.channelId})`);
+    console.log(`  - isOwnerByMemory: ${isOwnerByMemory}`);
+    console.log(`  - pvcData exists: ${Boolean(pvcData)}, teamData exists: ${Boolean(teamData)}`);
+    
+    // User is owner if: DB says so, OR they're in the channel and it's registered to them in memory
+    const isValidOwner = isOwnerById || (isOwnerByVoicePresence && isOwnerByMemory);
+    
+    if (!isValidOwner && message.author.id !== BOT_OWNER_ID) {
+        // If DB owner doesn't match but user is in the channel, check if DB is stale
+        if (isOwnerByVoicePresence && !channelOwnerId) {
+            console.log(`[RemoveUser] WARNING: User in channel but no DB owner - possible stale data`);
+        }
         if (!isInCommandChannel) {
             await checkAndSendEmoji(message);
             return;
         }
+        const actualOwner = channelOwnerId ? `<@${channelOwnerId}>` : 'Unknown';
         const embed = new EmbedBuilder()
-            .setDescription('❌ **Access Denied**: You do not own this channel.')
+            .setDescription(`❌ **Access Denied**: You do not own this channel.\n\n**Channel Owner:** ${actualOwner}`)
             .setColor(0xFF0000);
         await message.reply({ embeds: [embed] }).catch(() => { });
         return;
