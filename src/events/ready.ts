@@ -1,4 +1,4 @@
-import { Events, ChannelType, type VoiceChannel } from 'discord.js';
+import { Events, ChannelType, type VoiceChannel, PermissionFlagsBits, OverwriteType } from 'discord.js';
 import type { PVCClient } from '../client';
 import prisma from '../utils/database';
 import { registerInterfaceChannel, registerChannel, loadAllTeamInterfaces, registerTeamChannel, unregisterChannel, unregisterTeamChannel, type TeamType } from '../utils/voiceManager';
@@ -216,9 +216,62 @@ export async function execute(client: PVCClient): Promise<void> {
                                 console.error(`[Ready] Failed to delete orphan channel ${channelId}:`, err);
                             }
                         } else {
-                            // Optional: Adopt occupied orphans?
-                            // For now, leave them alone to avoid disrupting active sessions that might be valid permanent channels
-                            console.log(`[Ready] ⚠️ Orphan Channel ${channelId} has members - skipping delete`);
+                            // Adopt occupied orphans
+                            console.log(`[Ready] ⚠️ Orphan Channel ${channelId} has members - Attempting adoption...`);
+                            let ownerId: string | null = null;
+                            // Try to find owner from permissions (someone with MoveMembers)
+                            for (const [targetId, overwrite] of channel.permissionOverwrites.cache) {
+                                if (targetId === guild.id || targetId === client.user?.id) continue;
+                                if (overwrite.type === OverwriteType.Member && overwrite.allow.has(PermissionFlagsBits.MoveMembers)) {
+                                    ownerId = targetId;
+                                    break;
+                                }
+                            }
+                            // Fallback: Pick first non-bot member
+                            if (!ownerId) {
+                                const nonBotMember = channel.members.find(m => !m.user.bot);
+                                if (nonBotMember) ownerId = nonBotMember.id;
+                            }
+
+                            if (ownerId) {
+                                try {
+                                    const everyoneOverwrite = channel.permissionOverwrites.cache.get(guild.id);
+                                    const isLocked = everyoneOverwrite?.deny.has(PermissionFlagsBits.Connect) ?? false;
+                                    const isHidden = everyoneOverwrite?.deny.has(PermissionFlagsBits.ViewChannel) ?? false;
+
+                                    await prisma.privateVoiceChannel.create({
+                                        data: {
+                                            channelId: channelId,
+                                            guildId: guild.id,
+                                            ownerId: ownerId,
+                                            isLocked: isLocked,
+                                            isHidden: isHidden,
+                                        },
+                                    });
+
+                                    // Register in memory immediately so it's managed
+                                    registerChannel(channelId, guild.id, ownerId, false);
+                                    if (!stateStore.getChannelState(channelId)) {
+                                        stateStore.registerChannel({
+                                            channelId: channelId,
+                                            guildId: guild.id,
+                                            ownerId: ownerId,
+                                            isLocked: isLocked,
+                                            isHidden: isHidden,
+                                            userLimit: channel.userLimit || 0,
+                                            isTeamChannel: false,
+                                            operationPending: false,
+                                            lastModified: Date.now(),
+                                        });
+                                    }
+                                    console.log(`[Ready] ✅ Adopted orphan channel ${channelId} (Owner: ${ownerId})`);
+                                    registeredCount++;
+                                } catch (adoptErr) {
+                                    console.error(`[Ready] Failed to adopt orphan channel ${channelId}:`, adoptErr);
+                                }
+                            } else {
+                                console.log(`[Ready] ❌ Could not determine owner for orphan ${channelId} - skipping adoption`);
+                            }
                         }
                     }
                 }
