@@ -14,9 +14,7 @@ const joinOrder = new Map<string, string[]>();
 const tempPermittedUsers = new Map<string, Set<string>>();
 const creationLocks = new Map<string, Promise<void>>();
 const userCooldowns = new Map<string, number>();
-
-// Track users with temporary lock permits (only valid while they stay in VC)
-const tempLockPermits = new Map<string, Set<string>>(); // channelId -> Set<userId>
+const tempLockPermits = new Map<string, Set<string>>(); 
 const COOLDOWNS = {
     CREATE_CHANNEL: 5000,
     JOIN_PROTECTED: 2000,
@@ -65,14 +63,12 @@ export function cleanupCooldowns(): void {
 }
 setInterval(cleanupCooldowns, 60000);
 export function registerChannel(channelId: string, guildId: string, ownerId: string, skipIfExists: boolean = false): void {
-    // Check if already registered
     const existingState = channelStates.get(channelId);
     if (existingState) {
         if (skipIfExists) {
             console.log(`[VoiceManager] Channel ${channelId} already registered, skipping`);
             return;
         }
-        // Update existing registration
         if (existingState.ownerId !== ownerId) {
             console.log(`[VoiceManager] Updating owner for ${channelId}: ${existingState.ownerId} -> ${ownerId}`);
             ownerToChannel.delete(`${existingState.guildId}:${existingState.ownerId}`);
@@ -81,7 +77,6 @@ export function registerChannel(channelId: string, guildId: string, ownerId: str
         }
         return;
     }
-    
     const state: VoiceChannelState = {
         channelId,
         guildId,
@@ -91,7 +86,6 @@ export function registerChannel(channelId: string, guildId: string, ownerId: str
     channelStates.set(channelId, state);
     ownerToChannel.set(`${guildId}:${ownerId}`, channelId);
     console.log(`[VoiceManager] ✅ Registered channel ${channelId} with owner ${ownerId}`);
-    
     import('../vcns/index').then(({ stateStore }) => {
         if (!stateStore.getChannelState(channelId)) {
             stateStore.registerChannel({
@@ -117,9 +111,7 @@ export function unregisterChannel(channelId: string): void {
     }
     joinOrder.delete(channelId);
     tempPermittedUsers.delete(channelId);
-    tempLockPermits.delete(channelId); // Clean up temp lock permits
-    
-    // Immediately unregister from stateStore (synchronous operation)
+    tempLockPermits.delete(channelId); 
     import('../vcns/index').then(({ stateStore }) => {
         stateStore.unregisterChannel(channelId);
         console.log(`[VoiceManager] ✅ Unregistered channel ${channelId} from voiceManager and stateStore`);
@@ -207,7 +199,6 @@ export function hasTempPermission(channelId: string, userId: string): boolean {
 export function clearTempPermissions(channelId: string): void {
     tempPermittedUsers.delete(channelId);
 }
-
 export type TeamType = 'duo' | 'trio' | 'squad';
 export const TEAM_USER_LIMITS: Record<TeamType, number> = {
     duo: 2,
@@ -244,14 +235,12 @@ export function getTeamInterfaceType(channelId: string): TeamType | undefined {
     return undefined;
 }
 export function registerTeamChannel(channelId: string, guildId: string, ownerId: string, teamType: TeamType, skipIfExists: boolean = false): void {
-    // Check if already registered
     const existingState = teamChannelStates.get(channelId);
     if (existingState) {
         if (skipIfExists) {
             console.log(`[VoiceManager] Team channel ${channelId} already registered, skipping`);
             return;
         }
-        // Update existing registration
         if (existingState.ownerId !== ownerId) {
             console.log(`[VoiceManager] Updating team owner for ${channelId}: ${existingState.ownerId} -> ${ownerId}`);
             teamOwnerToChannel.delete(`${existingState.guildId}:${existingState.ownerId}`);
@@ -260,7 +249,6 @@ export function registerTeamChannel(channelId: string, guildId: string, ownerId:
         }
         return;
     }
-    
     const state: TeamChannelState = {
         channelId,
         guildId,
@@ -295,7 +283,7 @@ export function unregisterTeamChannel(channelId: string): void {
     }
     joinOrder.delete(channelId);
     tempPermittedUsers.delete(channelId);
-    tempLockPermits.delete(channelId); // Clean up temp lock permits
+    tempLockPermits.delete(channelId); 
     import('../vcns/index').then(({ stateStore }) => {
         stateStore.unregisterChannel(channelId);
     }).catch(() => {});
@@ -335,20 +323,16 @@ export async function loadAllTeamInterfaces(): Promise<void> {
         console.error('[VoiceManager] Failed to load team interfaces:', error);
     }
 }
-
-// Temporary lock permit management
 export function addTempLockPermit(channelId: string, userId: string): void {
     const existing = tempLockPermits.get(channelId) || new Set();
     existing.add(userId);
     tempLockPermits.set(channelId, existing);
     console.log(`[VoiceManager] Added temp lock permit for user ${userId} in channel ${channelId}`);
 }
-
 export function hasTempLockPermit(channelId: string, userId: string): boolean {
     const users = tempLockPermits.get(channelId);
     return users?.has(userId) || false;
 }
-
 export function removeTempLockPermit(channelId: string, userId: string): void {
     const users = tempLockPermits.get(channelId);
     if (users) {
@@ -359,18 +343,14 @@ export function removeTempLockPermit(channelId: string, userId: string): void {
         console.log(`[VoiceManager] Removed temp lock permit for user ${userId} in channel ${channelId}`);
     }
 }
-
 export function clearTempLockPermits(channelId: string): void {
     tempLockPermits.delete(channelId);
     console.log(`[VoiceManager] Cleared all temp lock permits for channel ${channelId}`);
 }
-
 export function getTempLockPermits(channelId: string): string[] {
     const users = tempLockPermits.get(channelId);
     return users ? Array.from(users) : [];
 }
-
-// Emergency cleanup functions
 export function clearAllChannels(): void {
     channelStates.clear();
     ownerToChannel.clear();
@@ -379,41 +359,30 @@ export function clearAllChannels(): void {
     tempLockPermits.clear();
     console.log(`[VoiceManager] ✅ Cleared all channel states`);
 }
-
 export function clearGuildState(guildId: string): void {
     console.log(`[VoiceManager] Clearing state for guild ${guildId}...`);
     let clearedCount = 0;
-    
-    // Remove all PVC channels for this guild
     for (const [channelId, state] of channelStates.entries()) {
         if (state.guildId === guildId) {
             unregisterChannel(channelId);
             clearedCount++;
         }
     }
-    
-    // Remove all Team channels for this guild
     for (const [channelId, state] of teamChannelStates.entries()) {
         if (state.guildId === guildId) {
             teamChannelStates.delete(channelId);
             teamOwnerToChannel.delete(`${state.guildId}:${state.ownerId}`);
-            // Also clear from stateStore
             import('../vcns/index').then(({ stateStore }) => {
                 stateStore.unregisterChannel(channelId);
             }).catch(() => {});
             clearedCount++;
         }
     }
-    
-    // Remove guild interface
     guildInterfaces.delete(guildId);
-    
-    // Remove team interfaces
     for (const key of teamInterfaces.keys()) {
         if (key.startsWith(guildId + ':')) {
             teamInterfaces.delete(key);
         }
     }
-    
     console.log(`[VoiceManager] ✅ Cleared ${clearedCount} channels for guild ${guildId}`);
 }

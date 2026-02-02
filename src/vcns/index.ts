@@ -64,16 +64,14 @@ class VCNSController extends EventEmitter {
     }
     public async start(): Promise<void> {
         if (this.isRunning) {
-            console.log('[VCNS] Already running');
             return;
         }
-        console.log('[VCNS] Starting...');
         this.startedAt = Date.now();
         try {
             await this.loadStateFromDatabase();
+            await intentQueue.loadFromFile('queue_dump.json');
             scheduler.start(this.handleIntentExecution.bind(this));
             this.isRunning = true;
-            console.log('[VCNS] Started successfully');
             this.emit('started');
         } catch (error) {
             console.error('[VCNS] Failed to start:', error);
@@ -84,27 +82,27 @@ class VCNSController extends EventEmitter {
         if (!this.isRunning) {
             return;
         }
-        console.log('[VCNS] Stopping...');
+        console.log('[VCNS] Stopping service...');
         scheduler.stop();
-        const timeout = 10000; 
+        const timeout = 10000;
         const checkInterval = 100;
         let waited = 0;
         while (stateStore.getSystemState().activeWorkers > 0 && waited < timeout) {
             await new Promise(resolve => setTimeout(resolve, checkInterval));
             waited += checkInterval;
         }
+        await intentQueue.saveToFile('queue_dump.json');
         intentQueue.stop();
         rateGovernor.stop();
         stateStore.stop();
         this.isRunning = false;
-        console.log('[VCNS] Stopped');
         this.emit('stopped');
+        console.log('[VCNS] Service stopped.');
     }
     public isActive(): boolean {
         return this.isRunning;
     }
     private async loadStateFromDatabase(): Promise<void> {
-        console.log('[VCNS] Loading state from database...');
         let channelCount = 0;
         try {
             const pvcs = await prisma.privateVoiceChannel.findMany({
@@ -123,7 +121,7 @@ class VCNSController extends EventEmitter {
                     pvc.ownerId,
                     pvc.isLocked,
                     pvc.isHidden,
-                    false, 
+                    false,
                 );
                 registerChannel(pvc.channelId, pvc.guildId, pvc.ownerId);
                 channelCount++;
@@ -145,7 +143,7 @@ class VCNSController extends EventEmitter {
                     team.ownerId,
                     team.isLocked,
                     team.isHidden,
-                    true, 
+                    true,
                     team.teamType as 'DUO' | 'TRIO' | 'SQUAD',
                 );
                 registerTeamChannel(team.channelId, team.guildId, team.ownerId, team.teamType.toLowerCase() as 'duo' | 'trio' | 'squad');
@@ -159,7 +157,6 @@ class VCNSController extends EventEmitter {
                 },
             });
             stateStore.loadGlobalBlocks(globalBlocks);
-            console.log(`[VCNS] Loaded ${globalBlocks.length} global blocks into cache`);
             const permanentAccess = await prisma.ownerPermission.findMany({
                 select: {
                     guildId: true,
@@ -168,12 +165,10 @@ class VCNSController extends EventEmitter {
                 },
             });
             stateStore.loadPermanentAccess(permanentAccess);
-            console.log(`[VCNS] Loaded ${permanentAccess.length} permanent access grants into cache`);
             const pausedGuilds = await prisma.guildSettings.findMany({
-                where: {  },
+                where: {},
                 select: { guildId: true },
             });
-            console.log(`[VCNS] Loaded ${channelCount} channels from database`);
             this.emit('stateLoaded', channelCount);
         } catch (error) {
             console.error('[VCNS] Error loading state from database:', error);
@@ -213,9 +208,9 @@ class VCNSController extends EventEmitter {
             }
         }
     }
-    public submit(intent: Intent<unknown>): { 
-        intentId: string; 
-        queued: boolean; 
+    public submit(intent: Intent<unknown>): {
+        intentId: string;
+        queued: boolean;
         estimatedWaitMs: number;
         eta: string;
     } {

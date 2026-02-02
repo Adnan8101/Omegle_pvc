@@ -26,11 +26,11 @@ import { intentQueue } from './intentQueue';
 import { lockManager } from './lockManager';
 import { recordBotEdit } from '../events/channelUpdate';
 import { buildVC } from './vcBuilder';
-import { ownerTransferLockKey } from './resourceKeys';
-const USER_COOLDOWNS = new Map<string, number>(); 
-const USER_COOLDOWN_MS = 3000; 
-const QUEUE_SIZE_LIMIT = 50; 
-const GUILD_QUEUE_LIMIT = 10; 
+import { ownerTransferLockKey, vcCreateLockKey } from './resourceKeys';
+const USER_COOLDOWNS = new Map<string, number>();
+const USER_COOLDOWN_MS = 3000;
+const QUEUE_SIZE_LIMIT = 50;
+const GUILD_QUEUE_LIMIT = 10;
 function isUserOnCooldown(guildId: string, userId: string): boolean {
     const key = `${guildId}:${userId}`;
     const lastAction = USER_COOLDOWNS.get(key);
@@ -67,7 +67,7 @@ function shouldAdmitIntent(intent: Intent<unknown>): { admit: boolean; reason?: 
 interface PermissionMergeOptions {
     allow?: Record<string, boolean>;
     deny?: Record<string, boolean>;
-    neutral?: string[]; 
+    neutral?: string[];
 }
 function mergePermissionOverwrites(
     existing: PermissionOverwrites | undefined,
@@ -91,7 +91,7 @@ function mergePermissionOverwrites(
             const bit = flagMap[perm];
             if (bit !== undefined && value) {
                 allowBits |= bit;
-                denyBits &= ~bit; 
+                denyBits &= ~bit;
             }
         }
     }
@@ -100,7 +100,7 @@ function mergePermissionOverwrites(
             const bit = flagMap[perm];
             if (bit !== undefined && value) {
                 denyBits |= bit;
-                allowBits &= ~bit; 
+                allowBits &= ~bit;
             }
         }
     }
@@ -162,10 +162,56 @@ function isRetryableError(error: any): boolean {
         return true;
     }
     const retryableCodes = [
-        10003, 
-        50013, 
+        10003,
+        50013,
     ];
     return retryableCodes.includes(error?.code);
+}
+function handleError(intent: Intent<unknown>, startTime: number, error: any, resourceKey: string): WorkerResult {
+    const execTime = Date.now() - startTime;
+    const rateLimit = isRateLimitError(error);
+    if (rateLimit.isRateLimit) {
+        rateGovernor.recordRateLimitHit(resourceKey, rateLimit.retryAfter!, rateLimit.isGlobal!);
+        return failure(intent, execTime, 'Rate limited', true, true, rateLimit.retryAfter);
+    }
+    return failure(intent, execTime, error.message || 'Unknown error', isRetryableError(error));
+}
+async function deleteChannelFromDb(channelId: string): Promise<void> {
+    await prisma.privateVoiceChannel.deleteMany({
+        where: { channelId },
+    });
+    await prisma.teamVoiceChannel.deleteMany({
+        where: { channelId },
+    });
+    await prisma.voicePermission.deleteMany({
+        where: { channelId },
+    });
+    await prisma.teamVoicePermission.deleteMany({
+        where: { channelId },
+    });
+}
+async function updateChannelDbField(channelId: string, isTeamChannel: boolean, data: any): Promise<void> {
+    try {
+        if (isTeamChannel) {
+            await prisma.teamVoiceChannel.update({
+                where: { channelId },
+                data,
+            });
+        } else {
+            await prisma.privateVoiceChannel.update({
+                where: { channelId },
+                data,
+            });
+        }
+    } catch (dbError: any) {
+        console.error(`[Workers] CRITICAL: DB update failed after Discord/StateStore changes:`, {
+            error: dbError.message,
+            channelId,
+            data,
+            channelType: isTeamChannel ? 'team' : 'private'
+        });
+        throw dbError;
+    }
 }
 async function executeVCCreate(intent: Intent<VCCreatePayload>): Promise<WorkerResult> {
     const startTime = Date.now();
@@ -176,148 +222,134 @@ async function executeVCCreate(intent: Intent<VCCreatePayload>): Promise<WorkerR
     if (!payload.guildId || !payload.categoryId || !payload.ownerId) {
         return failure(intent, Date.now() - startTime, 'Invalid VC creation payload - missing required fields', false);
     }
-    const admission = shouldAdmitIntent(intent);
-    if (!admission.admit) {
-        return failure(intent, Date.now() - startTime, admission.reason || 'Request rejected', false);
-    }
-    const existingChannelId = stateStore.getChannelByOwner(payload.guildId, payload.ownerId);
-    if (existingChannelId) {
-        console.warn(`[Workers] VC creation blocked - user already owns VC:`, {
+    const lockKey = vcCreateLockKey(payload.guildId, payload.ownerId);
+    if (!lockManager.acquire(lockKey, intent.id, VCNS_CONFIG.VC_CREATE_LOCK_DURATION_MS, 'VC Create')) {
+        console.warn(`[Workers] VC creation blocked - lock held by another intent`, {
             intentId: intent.id,
-            ownerId: payload.ownerId,
-            existingChannelId: existingChannelId
+            ownerId: payload.ownerId
         });
-        return failure(intent, Date.now() - startTime, 'User already owns a voice channel', false);
+        return failure(intent, Date.now() - startTime, 'User already creating a channel (Race)', false);
     }
-    if (isUserOnCooldown(payload.guildId, payload.ownerId)) {
-        return failure(intent, Date.now() - startTime, 'Please wait before creating another VC', false);
-    }
-    if (rateGovernor.isInEmergencyMode && rateGovernor.isInEmergencyMode()) {
-        console.warn(`[Workers] VC creation rejected - emergency mode active:`, {
+    try {
+        const admission = shouldAdmitIntent(intent);
+        if (!admission.admit) {
+            return failure(intent, Date.now() - startTime, admission.reason || 'Request rejected', false);
+        }
+        const existingChannelId = stateStore.getChannelByOwner(payload.guildId, payload.ownerId);
+        if (existingChannelId) {
+            console.warn(`[Workers] VC creation blocked - user already owns VC:`, {
+                intentId: intent.id,
+                ownerId: payload.ownerId,
+                existingChannelId: existingChannelId
+            });
+            return failure(intent, Date.now() - startTime, 'User already owns a voice channel', false);
+        }
+        if (intent.attempts > 2) {
+            console.warn(`[Workers] VC creation rejected - too many attempts:`, {
+                intentId: intent.id,
+                ownerId: payload.ownerId,
+                attempts: intent.attempts
+            });
+            return failure(intent, Date.now() - startTime, 'VC creation failed after multiple attempts', false);
+        }
+        setUserCooldown(payload.guildId, payload.ownerId);
+        console.info(`[Workers] Starting VC creation:`, {
             intentId: intent.id,
+            guildId: payload.guildId,
             ownerId: payload.ownerId,
-            guildId: payload.guildId
+            isTeamChannel: payload.isTeamChannel,
+            attempt: intent.attempts
         });
-        return failure(intent, Date.now() - startTime, 'System overloaded - please try again later', false);
-    }
-    if (intent.attempts > 2) {
-        console.warn(`[Workers] VC creation rejected - too many attempts:`, {
-            intentId: intent.id,
+        const result = await buildVC({
+            guildId: payload.guildId,
+            categoryId: payload.categoryId,
             ownerId: payload.ownerId,
-            attempts: intent.attempts
+            name: payload.name,
+            isTeamChannel: payload.isTeamChannel,
+            teamType: payload.teamType,
+            userLimit: payload.userLimit,
+            bitrate: payload.bitrate,
+            skipDbWrite: false,
+            skipLock: true,
+            lockHolder: intent.id,
         });
-        return failure(intent, Date.now() - startTime, 'VC creation failed after multiple attempts', false);
-    }
-    setUserCooldown(payload.guildId, payload.ownerId);
-    console.info(`[Workers] Starting VC creation:`, {
-        intentId: intent.id,
-        guildId: payload.guildId,
-        ownerId: payload.ownerId,
-        isTeamChannel: payload.isTeamChannel,
-        attempt: intent.attempts
-    });
-    const result = await buildVC({
-        guildId: payload.guildId,
-        categoryId: payload.categoryId,
-        ownerId: payload.ownerId,
-        name: payload.name,
-        isTeamChannel: payload.isTeamChannel,
-        teamType: payload.teamType,
-        userLimit: payload.userLimit,
-        bitrate: payload.bitrate,
-        skipDbWrite: false, 
-        skipLock: true, 
-        lockHolder: intent.id, 
-    });
-    const execTime = Date.now() - startTime;
-    if (result.success) {
-        console.info(`[Workers] VC creation successful:`, {
+        const execTime = Date.now() - startTime;
+        if (result.success) {
+            console.info(`[Workers] VC creation successful:`, {
+                intentId: intent.id,
+                channelId: result.channelId,
+                executionTimeMs: execTime
+            });
+            return success(intent, execTime, { channelId: result.channelId });
+        }
+        console.error(`[Workers] VC creation failed:`, {
             intentId: intent.id,
-            channelId: result.channelId,
+            guildId: payload.guildId,
+            ownerId: payload.ownerId,
+            error: result.error,
+            retryable: result.retryable,
             executionTimeMs: execTime
         });
-        return success(intent, execTime, { channelId: result.channelId });
+        return failure(
+            intent,
+            execTime,
+            result.error || 'Unknown error',
+            result.retryable ?? false,
+            result.rateLimitHit ?? false,
+            result.rateLimitRetryAfter,
+        );
+    } finally {
+        lockManager.release(lockKey, intent.id);
     }
-    console.error(`[Workers] VC creation failed:`, {
-        intentId: intent.id,
-        guildId: payload.guildId,
-        ownerId: payload.ownerId,
-        error: result.error,
-        retryable: result.retryable,
-        executionTimeMs: execTime
-    });
-    return failure(
-        intent,
-        execTime,
-        result.error || 'Unknown error',
-        result.retryable ?? false,
-        result.rateLimitHit ?? false,
-        result.rateLimitRetryAfter,
-    );
 }
 async function executeVCDelete(intent: Intent<VCDeletePayload>): Promise<WorkerResult> {
     const startTime = Date.now();
     const payload = intent.payload;
     try {
-        const channelState = stateStore.getChannelState(payload.channelId);
-        if (!channelState) {
-            return success(intent, Date.now() - startTime);
-        }
-        const guild = client.guilds.cache.get(channelState.guildId);
+        const guildId = intent.guildId;
+        const guild = client.guilds.cache.get(guildId);
         if (!guild) {
-            stateStore.unregisterChannel(payload.channelId);
-            return success(intent, Date.now() - startTime);
+            return failure(intent, Date.now() - startTime, 'Guild not found in cache - cannot verify channel deletion', true);
         }
-        const channel = guild.channels.cache.get(payload.channelId);
+        let channel = guild.channels.cache.get(payload.channelId);
         if (!channel) {
-            stateStore.unregisterChannel(payload.channelId);
-            await prisma.privateVoiceChannel.deleteMany({
-                where: { channelId: payload.channelId },
-            });
-            await prisma.teamVoiceChannel.deleteMany({
-                where: { channelId: payload.channelId },
-            });
-            await prisma.voicePermission.deleteMany({
-                where: { channelId: payload.channelId },
-            });
-            await prisma.teamVoicePermission.deleteMany({
-                where: { channelId: payload.channelId },
-            });
-            return success(intent, Date.now() - startTime);
+            try {
+                const fetched = await guild.channels.fetch(payload.channelId);
+                if (fetched) {
+                    channel = fetched;
+                }
+            } catch (error: any) {
+                const isDefinitiveMissing =
+                    error.code === 10003 ||
+                    error.status === 404;
+                const isAccessDenied =
+                    error.code === 50013 ||
+                    error.status === 403;
+                if (isDefinitiveMissing || isAccessDenied) {
+                    channel = undefined;
+                } else {
+                    console.error(`[Workers] VCDelete ABORTED - API Error verifying channel:`, error);
+                    return failure(intent, Date.now() - startTime, `API verification failed: ${error.message}`, true);
+                }
+            }
         }
-        recordBotEdit(payload.channelId);
-        await channel.delete(payload.reason || 'PVC cleanup');
+        if (channel) {
+            recordBotEdit(payload.channelId);
+            try {
+                await channel.delete(payload.reason || 'PVC cleanup');
+            } catch (deleteError: any) {
+                if (deleteError.code === 10003 || deleteError.status === 404) {
+                } else {
+                    throw deleteError;
+                }
+            }
+        }
         stateStore.unregisterChannel(payload.channelId);
-        await prisma.privateVoiceChannel.deleteMany({
-            where: { channelId: payload.channelId },
-        });
-        await prisma.teamVoiceChannel.deleteMany({
-            where: { channelId: payload.channelId },
-        });
-        await prisma.voicePermission.deleteMany({
-            where: { channelId: payload.channelId },
-        });
-        await prisma.teamVoicePermission.deleteMany({
-            where: { channelId: payload.channelId },
-        });
+        await deleteChannelFromDb(payload.channelId);
         rateGovernor.recordAction(intent.action, intent.cost);
         return success(intent, Date.now() - startTime);
     } catch (error: any) {
-        const execTime = Date.now() - startTime;
-        const rateLimit = isRateLimitError(error);
-        if (rateLimit.isRateLimit) {
-            rateGovernor.recordRateLimitHit(
-                `channel:${intent.guildId}`,
-                rateLimit.retryAfter!,
-                rateLimit.isGlobal!,
-            );
-            return failure(intent, execTime, 'Rate limited', true, true, rateLimit.retryAfter);
-        }
-        if (error?.code === 10003) {
-            stateStore.unregisterChannel(payload.channelId);
-            return success(intent, execTime);
-        }
-        return failure(intent, execTime, error.message || 'Unknown error', isRetryableError(error));
+        return handleError(intent, startTime, error, `channel:${intent.guildId}`);
     }
 }
 async function executePermission(intent: Intent<PermissionPayload>): Promise<WorkerResult> {
@@ -337,78 +369,57 @@ async function executePermission(intent: Intent<PermissionPayload>): Promise<Wor
         if (!guild) {
             return failure(intent, Date.now() - startTime, 'Guild not found');
         }
-        const channel = guild.channels.cache.get(payload.channelId) as VoiceChannel | undefined;
+        let channel = guild.channels.cache.get(payload.channelId) as VoiceChannel | undefined;
+        if (!channel) {
+            try {
+                const fetched = await guild.channels.fetch(payload.channelId);
+                if (fetched && fetched.type === ChannelType.GuildVoice) {
+                    channel = fetched as VoiceChannel;
+                }
+            } catch (error: any) {
+                const isDefinitive = error.code === 10003 || error.status === 404;
+                if (isDefinitive) {
+                    return failure(intent, Date.now() - startTime, 'Channel not found (404/Unknown Channel)');
+                }
+                return failure(intent, Date.now() - startTime, `Failed to fetch channel: ${error.message}`, true);
+            }
+        }
         if (!channel || channel.type !== ChannelType.GuildVoice) {
             return failure(intent, Date.now() - startTime, 'Channel not found or not voice');
         }
         recordBotEdit(payload.channelId);
         const existingOverwrite = channel.permissionOverwrites.cache.get(payload.targetId);
-        if (payload.permission === 'permit') {
-            const merged = mergePermissionOverwrites(existingOverwrite, {
-                allow: { Connect: true, ViewChannel: true, Speak: true },
-            });
-            await channel.permissionOverwrites.set([
-                ...channel.permissionOverwrites.cache
-                    .filter(o => o.id !== payload.targetId)
-                    .values(),
-                {
-                    id: payload.targetId,
-                    type: payload.targetType === 'role' ? OverwriteType.Role : OverwriteType.Member,
-                    allow: merged.allow,
-                    deny: merged.deny,
-                },
-            ]);
-        } else if (payload.permission === 'ban') {
-            const merged = mergePermissionOverwrites(existingOverwrite, {
-                deny: { Connect: true, ViewChannel: true },
-            });
-            await channel.permissionOverwrites.set([
-                ...channel.permissionOverwrites.cache
-                    .filter(o => o.id !== payload.targetId)
-                    .values(),
-                {
-                    id: payload.targetId,
-                    type: payload.targetType === 'role' ? OverwriteType.Role : OverwriteType.Member,
-                    allow: merged.allow,
-                    deny: merged.deny,
-                },
-            ]);
+        if (payload.permission === 'neutral' && !existingOverwrite) {
         } else {
-            if (existingOverwrite) {
-                const merged = mergePermissionOverwrites(existingOverwrite, {
-                    neutral: ['Connect', 'ViewChannel', 'Speak'],
-                });
-                if (merged.allow === BigInt(0) && merged.deny === BigInt(0)) {
-                    await channel.permissionOverwrites.delete(payload.targetId);
-                } else {
-                    await channel.permissionOverwrites.set([
-                        ...channel.permissionOverwrites.cache
-                            .filter(o => o.id !== payload.targetId)
-                            .values(),
-                        {
-                            id: payload.targetId,
-                            type: existingOverwrite.type,
-                            allow: merged.allow,
-                            deny: merged.deny,
-                        },
-                    ]);
-                }
+            let changes: PermissionMergeOptions;
+            if (payload.permission === 'permit') {
+                changes = { allow: { Connect: true, ViewChannel: true, Speak: true } };
+            } else if (payload.permission === 'ban') {
+                changes = { deny: { Connect: true, ViewChannel: true } };
+            } else {
+                changes = { neutral: ['Connect', 'ViewChannel', 'Speak'] };
+            }
+            const merged = mergePermissionOverwrites(existingOverwrite, changes);
+            if (payload.permission === 'neutral' && merged.allow === BigInt(0) && merged.deny === BigInt(0)) {
+                await channel.permissionOverwrites.delete(payload.targetId);
+            } else {
+                await channel.permissionOverwrites.set([
+                    ...channel.permissionOverwrites.cache
+                        .filter(o => o.id !== payload.targetId)
+                        .values(),
+                    {
+                        id: payload.targetId,
+                        type: payload.targetType === 'role' ? OverwriteType.Role : OverwriteType.Member,
+                        allow: merged.allow,
+                        deny: merged.deny,
+                    },
+                ]);
             }
         }
         rateGovernor.recordAction(intent.action, intent.cost);
         return success(intent, Date.now() - startTime);
     } catch (error: any) {
-        const execTime = Date.now() - startTime;
-        const rateLimit = isRateLimitError(error);
-        if (rateLimit.isRateLimit) {
-            rateGovernor.recordRateLimitHit(
-                `perms:${payload.channelId}`,
-                rateLimit.retryAfter!,
-                rateLimit.isGlobal!,
-            );
-            return failure(intent, execTime, 'Rate limited', true, true, rateLimit.retryAfter);
-        }
-        return failure(intent, execTime, error.message || 'Unknown error', isRetryableError(error));
+        return handleError(intent, startTime, error, `perms:${payload.channelId}`);
     }
 }
 async function executeUserKick(intent: Intent<UserActionPayload>): Promise<WorkerResult> {
@@ -421,26 +432,16 @@ async function executeUserKick(intent: Intent<UserActionPayload>): Promise<Worke
         }
         const member = await guild.members.fetch(payload.userId).catch(() => null);
         if (!member) {
-            return success(intent, Date.now() - startTime); 
+            return success(intent, Date.now() - startTime);
         }
         if (!member.voice.channelId) {
-            return success(intent, Date.now() - startTime); 
+            return success(intent, Date.now() - startTime);
         }
         await member.voice.disconnect(payload.reason || 'Kicked from voice channel');
         rateGovernor.recordAction(intent.action, intent.cost);
         return success(intent, Date.now() - startTime);
     } catch (error: any) {
-        const execTime = Date.now() - startTime;
-        const rateLimit = isRateLimitError(error);
-        if (rateLimit.isRateLimit) {
-            rateGovernor.recordRateLimitHit(
-                `kick:${intent.guildId}`,
-                rateLimit.retryAfter!,
-                rateLimit.isGlobal!,
-            );
-            return failure(intent, execTime, 'Rate limited', true, true, rateLimit.retryAfter);
-        }
-        return failure(intent, execTime, error.message || 'Unknown error', isRetryableError(error));
+        return handleError(intent, startTime, error, `kick:${intent.guildId}`);
     }
 }
 async function executeUserMove(intent: Intent<UserActionPayload>): Promise<WorkerResult> {
@@ -465,17 +466,7 @@ async function executeUserMove(intent: Intent<UserActionPayload>): Promise<Worke
         rateGovernor.recordAction(intent.action, intent.cost);
         return success(intent, Date.now() - startTime);
     } catch (error: any) {
-        const execTime = Date.now() - startTime;
-        const rateLimit = isRateLimitError(error);
-        if (rateLimit.isRateLimit) {
-            rateGovernor.recordRateLimitHit(
-                `move:${intent.guildId}`,
-                rateLimit.retryAfter!,
-                rateLimit.isGlobal!,
-            );
-            return failure(intent, execTime, 'Rate limited', true, true, rateLimit.retryAfter);
-        }
-        return failure(intent, execTime, error.message || 'Unknown error', isRetryableError(error));
+        return handleError(intent, startTime, error, `move:${intent.guildId}`);
     }
 }
 async function executeVCLockToggle(
@@ -503,8 +494,8 @@ async function executeVCLockToggle(
         }
         recordBotEdit(payload.channelId);
         const existingOverwrite = channel.permissionOverwrites.cache.get(guild.id);
-        const merged = mergePermissionOverwrites(existingOverwrite, 
-            payload.isLocked 
+        const merged = mergePermissionOverwrites(existingOverwrite,
+            payload.isLocked
                 ? { deny: { Connect: true } }
                 : { neutral: ['Connect'] }
         );
@@ -520,41 +511,11 @@ async function executeVCLockToggle(
             },
         ]);
         stateStore.updateChannelState(payload.channelId, { isLocked: payload.isLocked });
-        try {
-            if (channelState.isTeamChannel) {
-                await prisma.teamVoiceChannel.update({
-                    where: { channelId: payload.channelId },
-                    data: { isLocked: payload.isLocked },
-                });
-            } else {
-                await prisma.privateVoiceChannel.update({
-                    where: { channelId: payload.channelId },
-                    data: { isLocked: payload.isLocked },
-                });
-            }
-        } catch (dbError: any) {
-            console.error(`[Workers] CRITICAL: Lock toggle DB update failed after Discord/StateStore changes:`, {
-                error: dbError.message,
-                intentId: intent.id,
-                channelId: payload.channelId,
-                isLocked: payload.isLocked,
-                channelType: channelState.isTeamChannel ? 'team' : 'private'
-            });
-        }
+        await updateChannelDbField(payload.channelId, channelState.isTeamChannel, { isLocked: payload.isLocked });
         rateGovernor.recordAction(intent.action, intent.cost);
         return success(intent, Date.now() - startTime);
     } catch (error: any) {
-        const execTime = Date.now() - startTime;
-        const rateLimit = isRateLimitError(error);
-        if (rateLimit.isRateLimit) {
-            rateGovernor.recordRateLimitHit(
-                `lock:${payload.channelId}`,
-                rateLimit.retryAfter!,
-                rateLimit.isGlobal!,
-            );
-            return failure(intent, execTime, 'Rate limited', true, true, rateLimit.retryAfter);
-        }
-        return failure(intent, execTime, error.message || 'Unknown error', isRetryableError(error));
+        return handleError(intent, startTime, error, `lock:${payload.channelId}`);
     }
 }
 async function executeVCHideToggle(
@@ -599,41 +560,11 @@ async function executeVCHideToggle(
             },
         ]);
         stateStore.updateChannelState(payload.channelId, { isHidden: payload.isHidden });
-        try {
-            if (channelState.isTeamChannel) {
-                await prisma.teamVoiceChannel.update({
-                    where: { channelId: payload.channelId },
-                    data: { isHidden: payload.isHidden },
-                });
-            } else {
-                await prisma.privateVoiceChannel.update({
-                    where: { channelId: payload.channelId },
-                    data: { isHidden: payload.isHidden },
-                });
-            }
-        } catch (dbError: any) {
-            console.error(`[Workers] CRITICAL: Hide toggle DB update failed after Discord/StateStore changes:`, {
-                error: dbError.message,
-                intentId: intent.id,
-                channelId: payload.channelId,
-                isHidden: payload.isHidden,
-                channelType: channelState.isTeamChannel ? 'team' : 'private'
-            });
-        }
+        await updateChannelDbField(payload.channelId, channelState.isTeamChannel, { isHidden: payload.isHidden });
         rateGovernor.recordAction(intent.action, intent.cost);
         return success(intent, Date.now() - startTime);
     } catch (error: any) {
-        const execTime = Date.now() - startTime;
-        const rateLimit = isRateLimitError(error);
-        if (rateLimit.isRateLimit) {
-            rateGovernor.recordRateLimitHit(
-                `hide:${payload.channelId}`,
-                rateLimit.retryAfter!,
-                rateLimit.isGlobal!,
-            );
-            return failure(intent, execTime, 'Rate limited', true, true, rateLimit.retryAfter);
-        }
-        return failure(intent, execTime, error.message || 'Unknown error', isRetryableError(error));
+        return handleError(intent, startTime, error, `hide:${payload.channelId}`);
     }
 }
 async function executeOwnerTransfer(intent: Intent<OwnerTransferPayload>): Promise<WorkerResult> {
@@ -643,7 +574,7 @@ async function executeOwnerTransfer(intent: Intent<OwnerTransferPayload>): Promi
         return failure(intent, Date.now() - startTime, 'Intent expired during execution', false);
     }
     const lockKey = ownerTransferLockKey(payload.channelId);
-    const lockHolder = intent.id; 
+    const lockHolder = intent.id;
     if (!lockManager.acquire(lockKey, lockHolder, VCNS_CONFIG.VC_CREATE_LOCK_DURATION_MS, 'Owner transfer')) {
         return failure(intent, Date.now() - startTime, 'Transfer lock failed - operation in progress', true);
     }
@@ -707,37 +638,7 @@ async function executeOwnerTransfer(intent: Intent<OwnerTransferPayload>): Promi
                 : []
             ),
         ]);
-        if (channelState.isTeamChannel) {
-            try {
-                await prisma.teamVoiceChannel.update({
-                    where: { channelId: payload.channelId },
-                    data: { ownerId: payload.newOwnerId },
-                });
-            } catch (err: any) {
-                console.error(`[Workers] CRITICAL: Owner transfer DB update failed for team channel ${payload.channelId}:`, {
-                    error: err.message,
-                    intentId: intent.id,
-                    channelId: payload.channelId,
-                    newOwnerId: payload.newOwnerId,
-                    previousOwnerId: previousOwnerId
-                });
-            }
-        } else {
-            try {
-                await prisma.privateVoiceChannel.update({
-                    where: { channelId: payload.channelId },
-                    data: { ownerId: payload.newOwnerId },
-                });
-            } catch (err: any) {
-                console.error(`[Workers] CRITICAL: Owner transfer DB update failed for private channel ${payload.channelId}:`, {
-                    error: err.message,
-                    intentId: intent.id,
-                    channelId: payload.channelId,
-                    newOwnerId: payload.newOwnerId,
-                    previousOwnerId: previousOwnerId
-                });
-            }
-        }
+        await updateChannelDbField(payload.channelId, channelState.isTeamChannel, { ownerId: payload.newOwnerId });
         rateGovernor.recordAction(intent.action, intent.cost);
         return success(intent, Date.now() - startTime);
     } catch (error: any) {
@@ -751,11 +652,7 @@ async function executeOwnerTransfer(intent: Intent<OwnerTransferPayload>): Promi
         const execTime = Date.now() - startTime;
         const rateLimit = isRateLimitError(error);
         if (rateLimit.isRateLimit) {
-            rateGovernor.recordRateLimitHit(
-                `transfer:${payload.channelId}`,
-                rateLimit.retryAfter!,
-                rateLimit.isGlobal!,
-            );
+            rateGovernor.recordRateLimitHit(`transfer:${payload.channelId}`, rateLimit.retryAfter!, rateLimit.isGlobal!);
             return failure(intent, execTime, 'Rate limited', true, true, rateLimit.retryAfter);
         }
         return failure(intent, execTime, error.message || 'Unknown error', isRetryableError(error));
@@ -855,7 +752,7 @@ export interface RetryInfo {
 }
 export function handleWorkerFailure(intent: Intent<unknown>, result: WorkerResult): RetryInfo {
     const isEmergencyMode = rateGovernor.isInEmergencyMode && rateGovernor.isInEmergencyMode();
-    const maxAttemptsAdjusted = isEmergencyMode ? 
+    const maxAttemptsAdjusted = isEmergencyMode ?
         Math.min(intent.maxAttempts, 2) : intent.maxAttempts;
     const isRetryEligible = result.retryable && intent.attempts < maxAttemptsAdjusted;
     if (isEmergencyMode && intent.action === IntentAction.VC_CREATE) {
@@ -979,14 +876,14 @@ export function isSystemOverloaded(): boolean {
     return (
         isEmergencyMode ||
         currentQueueSize > QUEUE_SIZE_LIMIT ||
-        systemPressure > 0.9  
+        systemPressure > 0.9
     );
 }
 export function emergencyQueueCleanup(): { cleaned: number; preserved: number } {
     console.warn('[Workers] EMERGENCY: Performing queue cleanup due to severe overload');
     const currentSize = intentQueue.size?.() || 0;
     return {
-        cleaned: 0, 
+        cleaned: 0,
         preserved: currentSize
     };
 }

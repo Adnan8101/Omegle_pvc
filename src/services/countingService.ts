@@ -24,7 +24,7 @@ export class CountingService {
             const content = message.content.trim();
             const number = parseInt(content, 10);
             if (isNaN(number) || content !== number.toString() || number < 1) {
-                return; 
+                return;
             }
             const settings = await prisma.countingSettings.findUnique({
                 where: { guildId: message.guild.id },
@@ -61,13 +61,12 @@ export class CountingService {
                         },
                     }),
                 ]);
-                message.react('✅').catch(() => {});
-                console.log(`[Counting] ✅ ${message.author.tag} -> ${number}`);
+                message.react('✅').catch(() => { });
             } else {
-                const errorReason = isSameUser 
-                    ? "Can't count twice in a row!" 
+                const errorReason = isSameUser
+                    ? "Can't count twice in a row!"
                     : `Expected **${expectedNumber}**, got **${number}**`;
-                await message.delete().catch(() => {});
+                await message.delete().catch(() => { });
                 if (message.channel.isSendable()) {
                     const embed = new EmbedBuilder()
                         .setColor(0xFF0000)
@@ -76,14 +75,13 @@ export class CountingService {
                         );
                     const errorMsg = await message.channel.send({ embeds: [embed] }).catch(() => null);
                     if (errorMsg) {
-                        setTimeout(() => errorMsg.delete().catch(() => {}), 3500);
+                        setTimeout(() => errorMsg.delete().catch(() => { }), 3500);
                     }
                 }
                 await prisma.countingSettings.update({
                     where: { guildId: message.guild.id },
                     data: { lastUserId: null },
-                }).catch(() => {});
-                console.log(`[Counting] ❌ ${message.author.tag} -> ${number} (expected ${expectedNumber})`);
+                }).catch(() => { });
             }
         } catch (error) {
             console.error('[Counting] Error:', error);

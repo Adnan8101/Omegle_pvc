@@ -70,15 +70,12 @@ const data = new SlashCommandBuilder()
             .addChannelTypes(ChannelType.GuildText)
     );
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    console.log(`[Refresh PVC] Command invoked by ${interaction.user.tag} (${interaction.user.id}) in guild ${interaction.guild?.name} (${interaction.guildId})`);
     if (!interaction.guild) {
-        console.log('[Refresh PVC] Error: Command used outside of guild');
         await interaction.reply({ content: 'This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
         return;
     }
     try {
         const canRun = await canRunAdminCommand(interaction);
-        console.log(`[Refresh PVC] Permission check: canRunAdminCommand = ${canRun}`);
         if (!canRun) {
             await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', flags: [MessageFlags.Ephemeral] });
             return;
@@ -90,7 +87,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     }
     try {
         await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
-        console.log('[Refresh PVC] Reply deferred successfully');
     } catch (deferError) {
         console.error('[Refresh PVC] Error deferring reply:', deferError);
         return;
@@ -100,15 +96,12 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     const teamLogsChannel = interaction.options.getChannel('team_logs_channel');
     const commandChannel = interaction.options.getChannel('command_channel');
     const teamCommandChannel = interaction.options.getChannel('team_command_channel');
-    console.log(`[Refresh PVC] Options - pvcLogs: ${pvcLogsChannel?.id}, teamLogs: ${teamLogsChannel?.id}, cmdChannel: ${commandChannel?.id}, teamCmdChannel: ${teamCommandChannel?.id}`);
     let settings;
     let teamSettings;
     try {
-        console.log('[Refresh PVC] Fetching guild settings from database...');
         settings = await withRetry(() => prisma.guildSettings.findUnique({
             where: { guildId: guild.id },
         }));
-        console.log(`[Refresh PVC] Guild settings found: ${!!settings}, interfaceTextId: ${settings?.interfaceTextId}, interfaceVcId: ${settings?.interfaceVcId}`);
     } catch (dbError: any) {
         console.error('[Refresh PVC] Error fetching guild settings:', dbError);
         const isConnectionError = dbError?.message?.includes("Can't reach database") || dbError?.code === 'P1001';
@@ -120,11 +113,9 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         return;
     }
     try {
-        console.log('[Refresh PVC] Fetching team settings from database...');
         teamSettings = await withRetry(() => prisma.teamVoiceSettings.findUnique({
             where: { guildId: guild.id },
         }));
-        console.log(`[Refresh PVC] Team settings found: ${!!teamSettings}, categoryId: ${teamSettings?.categoryId}`);
     } catch (dbError: any) {
         console.error('[Refresh PVC] Error fetching team settings:', dbError);
         const isConnectionError = dbError?.message?.includes("Can't reach database") || dbError?.code === 'P1001';
@@ -136,28 +127,20 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         return;
     }
     if (!settings?.interfaceTextId && !teamSettings?.categoryId) {
-        console.log('[Refresh PVC] Neither PVC nor Team system is set up');
         await interaction.editReply('Neither PVC nor Team system is set up. Use `/pvc_setup` or `/team_setup` first.');
         return;
     }
-    console.log('[Refresh PVC] Setting up webhooks...');
     let pvcLogsWebhookUrl = settings?.logsWebhookUrl;
     if (pvcLogsChannel && pvcLogsChannel.type === ChannelType.GuildText) {
         try {
-            console.log(`[Refresh PVC] Fetching webhooks for PVC logs channel: ${pvcLogsChannel.id}`);
             const webhooks = await (pvcLogsChannel as any).fetchWebhooks();
             const botWebhooks = webhooks.filter((w: any) => w.owner?.id === interaction.client.user?.id && w.name === 'PVC Logger');
             let webhook = botWebhooks.first();
             if (!webhook) {
-                console.log('[Refresh PVC] No existing webhook found, creating new PVC webhook...');
                 const allBotWebhooks = webhooks.filter((w: any) => w.owner?.id === interaction.client.user?.id);
                 if (webhooks.size >= 15 && allBotWebhooks.size > 0) {
-                    console.log('[Refresh PVC] Webhook limit reached, cleaning up old bot webhooks...');
                     for (const oldWebhook of allBotWebhooks.values()) {
-                        try {
-                            await oldWebhook.delete('Cleaning up old webhooks');
-                            console.log('[Refresh PVC] Deleted old webhook:', oldWebhook.name);
-                        } catch {}
+                        await oldWebhook.delete('Cleaning up old webhooks').catch(() => {});
                     }
                 }
                 webhook = await (pvcLogsChannel as any).createWebhook({
@@ -165,17 +148,12 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     reason: 'PVC Logs Refresh',
                 });
             } else if (botWebhooks.size > 1) {
-                console.log(`[Refresh PVC] Found ${botWebhooks.size} duplicate webhooks, cleaning up...`);
                 const duplicates = botWebhooks.filter((w: any) => w.id !== webhook.id);
                 for (const dup of duplicates.values()) {
-                    try {
-                        await dup.delete('Removing duplicate webhook');
-                        console.log('[Refresh PVC] Deleted duplicate webhook');
-                    } catch {}
+                    await dup.delete('Removing duplicate webhook').catch(() => {});
                 }
             }
             pvcLogsWebhookUrl = webhook.url;
-            console.log('[Refresh PVC] PVC webhook ready');
         } catch (error: any) {
             console.error('[Refresh PVC] Error setting up PVC webhook:', error?.message || error);
         }
@@ -183,20 +161,14 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     let teamLogsWebhookUrl = teamSettings?.logsWebhookUrl;
     if (teamLogsChannel && teamLogsChannel.type === ChannelType.GuildText) {
         try {
-            console.log(`[Refresh PVC] Fetching webhooks for Team logs channel: ${teamLogsChannel.id}`);
             const webhooks = await (teamLogsChannel as any).fetchWebhooks();
             const botWebhooks = webhooks.filter((w: any) => w.owner?.id === interaction.client.user?.id && w.name === 'Team VC Logger');
             let webhook = botWebhooks.first();
             if (!webhook) {
-                console.log('[Refresh PVC] No existing webhook found, creating new Team webhook...');
                 const allBotWebhooks = webhooks.filter((w: any) => w.owner?.id === interaction.client.user?.id);
                 if (webhooks.size >= 15 && allBotWebhooks.size > 0) {
-                    console.log('[Refresh PVC] Webhook limit reached, cleaning up old bot webhooks...');
                     for (const oldWebhook of allBotWebhooks.values()) {
-                        try {
-                            await oldWebhook.delete('Cleaning up old webhooks');
-                            console.log('[Refresh PVC] Deleted old webhook:', oldWebhook.name);
-                        } catch {}
+                        await oldWebhook.delete('Cleaning up old webhooks').catch(() => {});
                     }
                 }
                 webhook = await (teamLogsChannel as any).createWebhook({
@@ -204,23 +176,17 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     reason: 'Team Logs Refresh',
                 });
             } else if (botWebhooks.size > 1) {
-                console.log(`[Refresh PVC] Found ${botWebhooks.size} duplicate webhooks, cleaning up...`);
                 const duplicates = botWebhooks.filter((w: any) => w.id !== webhook.id);
                 for (const dup of duplicates.values()) {
-                    try {
-                        await dup.delete('Removing duplicate webhook');
-                        console.log('[Refresh PVC] Deleted duplicate webhook');
-                    } catch {}
+                    await dup.delete('Removing duplicate webhook').catch(() => {});
                 }
             }
             teamLogsWebhookUrl = webhook.url;
-            console.log('[Refresh PVC] Team webhook ready');
         } catch (error: any) {
             console.error('[Refresh PVC] Error setting up Team webhook:', error?.message || error);
         }
     }
     try {
-        console.log('[Refresh PVC] Updating database settings...');
         if (settings) {
             await prisma.guildSettings.update({
                 where: { guildId: guild.id },
@@ -232,7 +198,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     ...(commandChannel && { commandChannelId: commandChannel.id }),
                 },
             });
-            console.log('[Refresh PVC] Guild settings updated');
         }
         if (teamSettings) {
             await prisma.teamVoiceSettings.update({
@@ -245,7 +210,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     ...(teamCommandChannel && { commandChannelId: teamCommandChannel.id }),
                 },
             });
-            console.log('[Refresh PVC] Team settings updated');
         }
     } catch (updateError) {
         console.error('[Refresh PVC] Error updating database settings:', updateError);
@@ -374,7 +338,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                         } else {
                             console.log(`[Refresh PVC] ✅ Verified PVC ${channelId} persisted in DB`);
                         }
-                        // Don't register here - will be registered in validation loop below
                         orphanPvcsAdded++;
                         console.log(`[Refresh PVC] ✅ Added orphan PVC ${channelId} to database`);
                     } catch (err: any) {

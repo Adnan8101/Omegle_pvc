@@ -70,7 +70,7 @@ export class GiveawaySchedulerService {
         try {
             const nowUTC = toBigInt(getNowUTC());
             const sixtySecondsLater = nowUTC + BigInt(60000);
-            const upcomingGiveaways = schedulerCache.activeGiveaways.filter(g => 
+            const upcomingGiveaways = schedulerCache.activeGiveaways.filter(g =>
                 g.endTime > nowUTC && g.endTime <= sixtySecondsLater
             );
             for (const giveaway of upcomingGiveaways) {
@@ -109,26 +109,15 @@ export class GiveawaySchedulerService {
                     const endTimestamp = Math.floor(Number(giveaway.endTime) / 1000);
                     const timeLeft = Number(giveaway.endTime) - Date.now();
                     const timeLeftStr = timeLeft > 0 ? `${Math.floor(timeLeft / 60000)}m ${Math.floor((timeLeft % 60000) / 1000)}s` : 'ENDING NOW';
-                    console.log(`[Giveaway] ✅ Resumed GW #${giveaway.id}`);
-                    console.log(`           Prize: ${giveaway.prize}`);
-                    console.log(`           Winners: ${giveaway.winnersCount}`);
-                    console.log(`           Participants: ${participantCount}`);
-                    console.log(`           Ends: <t:${endTimestamp}:R> (${timeLeftStr})`);
-                    console.log(`           Channel: #${channel.name} (${channel.id})`);
-                    console.log(`           Host: ${giveaway.hostId}`);
-                    if (giveaway.forcedWinners) {
-                        console.log(`           Forced Winners: ${giveaway.forcedWinners}`);
-                    }
+                    console.log(`[Giveaway] ✅ Resumed GW #${giveaway.id} | Prize: ${giveaway.prize} | Ends: ${timeLeftStr} | Channel: #${channel.name}`);
                     const embed = createGiveawayEmbed(giveaway, participantCount);
-                    await message.edit({ embeds: [embed] }).catch(() => {});
+                    await message.edit({ embeds: [embed] }).catch(() => { });
                 } catch (error) {
                     console.error(`[Giveaway] Error recovering GW #${giveaway.id}:`, error);
                 }
             }
             if (activeGiveaways.length > 0) {
                 console.log(`[Giveaway] Recovery complete. ${activeGiveaways.length} giveaway(s) resumed.`);
-            } else {
-                console.log(`[Giveaway] No active giveaways to recover.`);
             }
         } catch (error) {
             console.error('[Giveaway] Failed to recover active giveaways:', error);
@@ -155,7 +144,7 @@ export class GiveawaySchedulerService {
         try {
             const nowUTC = toBigInt(getNowUTC());
             const oneMinuteLater = nowUTC + BigInt(60000);
-            const upcomingGiveaways = schedulerCache.activeGiveaways.filter(g => 
+            const upcomingGiveaways = schedulerCache.activeGiveaways.filter(g =>
                 g.endTime > nowUTC && g.endTime <= oneMinuteLater
             );
             for (const giveaway of upcomingGiveaways) {

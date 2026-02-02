@@ -5,16 +5,44 @@ import { invalidateChannelPermissions } from '../utils/cache';
 import { client } from '../client';
 import { stateStore } from '../vcns/index';
 export class VoiceStateService {
-    /**
-     * Auto-recovery: Attempt to restore a channel from memory to database
-     * Returns true if recovery was successful or not needed
-     */
+    private static async addTempPermitToDb(channelId: string, userId: string, userTag: string): Promise<void> {
+        const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+        const permTable = pvc ? prisma.voicePermission : prisma.teamVoicePermission;
+        const tableAny = permTable as any;
+        const existingPerm = await tableAny.findUnique({
+            where: { channelId_targetId: { channelId, targetId: userId } },
+        }).catch(() => null);
+        if (!existingPerm || existingPerm.permission !== 'permit') {
+            await tableAny.deleteMany({
+                where: { channelId, targetId: userId },
+            }).catch(() => { });
+            await tableAny.create({
+                data: {
+                    channelId,
+                    targetId: userId,
+                    targetType: 'user',
+                    permission: 'permit',
+                },
+            }).catch(() => { });
+            console.log(`[VoiceStateService] ✅ Added temp permit (DB) for ${userTag} (${userId})`);
+        }
+    }
+    private static async updateChannelDb(channelId: string, data: any): Promise<void> {
+        const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+        if (pvc) {
+            await prisma.privateVoiceChannel.update({ where: { channelId }, data });
+        } else {
+            const team = await prisma.teamVoiceChannel.findUnique({ where: { channelId } });
+            if (team) {
+                await prisma.teamVoiceChannel.update({ where: { channelId }, data });
+            }
+        }
+    }
     private static async autoRecover(channelId: string): Promise<boolean> {
         const memoryState = stateStore.getChannelState(channelId);
         if (!memoryState) {
-            return false; // Channel not in memory either
+            return false; 
         }
-        
         console.log(`[VoiceStateService] ⚠️ Auto-recovery: Channel ${channelId} in MEMORY but not DB`);
         try {
             if (memoryState.isTeamChannel) {
@@ -46,28 +74,22 @@ export class VoiceStateService {
             return false;
         }
     }
-    
     static async getVCState(channelId: string): Promise<any | null> {
         try {
-            console.log(`[VoiceStateService] 🔍 getVCState called for channelId: ${channelId}`);
             let state = await prisma.privateVoiceChannel.findUnique({
                 where: { channelId },
                 include: { permissions: true },
             });
             if (state) {
-                console.log(`[VoiceStateService] ✅ Found PVC in DB: channelId=${channelId}, ownerId=${state.ownerId}, isLocked=${state.isLocked}`);
                 return state;
             }
-            console.log(`[VoiceStateService] ⚠️ Not found in privateVoiceChannel, checking teamVoiceChannel...`);
             state = await prisma.teamVoiceChannel.findUnique({
                 where: { channelId },
                 include: { permissions: true },
             }) as any;
             if (state) {
-                console.log(`[VoiceStateService] ✅ Found Team VC in DB: channelId=${channelId}, ownerId=${state.ownerId}`);
                 return state;
             }
-            console.log(`[VoiceStateService] ❌ Channel ${channelId} NOT FOUND in any database table`);
             return null;
         } catch (error: any) {
             console.error(`[VoiceStateService] ❌ Database error querying channel ${channelId}:`, error.message);
@@ -90,22 +112,23 @@ export class VoiceStateService {
         }
     }
     static async setLock(channelId: string, isLocked: boolean): Promise<void> {
-        const channel = client.channels.cache.get(channelId) as VoiceChannel | undefined;
+        let channel = client.channels.cache.get(channelId) as VoiceChannel | undefined;
+        try {
+            const fetched = await client.channels.fetch(channelId);
+            if (fetched && fetched.type === ChannelType.GuildVoice) {
+                channel = fetched as VoiceChannel;
+            }
+        } catch (e) {
+            console.warn(`[VoiceStateService] Failed to fetch channel ${channelId} for lock operation. Using cache.`);
+        }
         const { recordBotEdit } = await import('../events/channelUpdate');
-        
         if (isLocked) {
-            // When locking: give temporary permits to all current members (except owner)
             if (channel && channel.type === ChannelType.GuildVoice) {
                 const state = await this.getVCState(channelId);
                 if (state) {
                     const ownerId = state.ownerId;
                     const currentMembers = Array.from(channel.members.values())
                         .filter(m => !m.user.bot && m.id !== ownerId);
-                    
-                    console.log(`[VoiceStateService] 🔒 Locking channel ${channelId} - giving TEMPORARY permits to ${currentMembers.length} members`);
-                    
-                    // FIRST: Set Discord permissions to allow Connect for each current member
-                    // This must happen BEFORE we deny Connect for @everyone
                     recordBotEdit(channelId);
                     const { vcnsBridge } = await import('../vcns/bridge');
                     for (const member of currentMembers) {
@@ -116,188 +139,62 @@ export class VoiceStateService {
                                 targetId: member.id,
                                 permissions: {
                                     Connect: true,
-                                    ViewChannel: null, // Keep existing
+                                    ViewChannel: null, 
                                 },
                             });
-                            console.log(`[VoiceStateService] ✅ Set Discord Connect permission for ${member.user.tag} (${member.id})`);
                         } catch (err) {
                             console.error(`[VoiceStateService] ❌ Failed to set Discord permission for ${member.id}:`, err);
                         }
                     }
-                    
-                    // SECOND: Add to database and memory
                     for (const member of currentMembers) {
-                        // Track in memory as temporary permit
                         const { addTempLockPermit } = await import('../utils/voiceManager');
                         addTempLockPermit(channelId, member.id);
-                        
-                        // Also add to database for access protection to see
-                        const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
-                        if (pvc) {
-                            const existingPerm = await prisma.voicePermission.findUnique({
-                                where: {
-                                    channelId_targetId: {
-                                        channelId,
-                                        targetId: member.id,
-                                    },
-                                },
-                            }).catch(() => null);
-                            
-                            if (!existingPerm || existingPerm.permission !== 'permit') {
-                                // Delete any existing permission first
-                                await prisma.voicePermission.deleteMany({
-                                    where: {
-                                        channelId,
-                                        targetId: member.id,
-                                    },
-                                }).catch(() => {});
-                                
-                                // Create temporary permit
-                                await prisma.voicePermission.create({
-                                    data: {
-                                        channelId,
-                                        targetId: member.id,
-                                        targetType: 'user',
-                                        permission: 'permit',
-                                    },
-                                }).catch(() => {}); 
-                                
-                                console.log(`[VoiceStateService] ✅ Added temp permit (DB) for ${member.user.tag} (${member.id})`);
-                            }
-                        } else {
-                            const existingPerm = await prisma.teamVoicePermission.findUnique({
-                                where: {
-                                    channelId_targetId: {
-                                        channelId,
-                                        targetId: member.id,
-                                    },
-                                },
-                            }).catch(() => null);
-                            
-                            if (!existingPerm || existingPerm.permission !== 'permit') {
-                                // Delete any existing permission first
-                                await prisma.teamVoicePermission.deleteMany({
-                                    where: {
-                                        channelId,
-                                        targetId: member.id,
-                                    },
-                                }).catch(() => {});
-                                
-                                // Create temporary permit
-                                await prisma.teamVoicePermission.create({
-                                    data: {
-                                        channelId,
-                                        targetId: member.id,
-                                        targetType: 'user',
-                                        permission: 'permit',
-                                    },
-                                }).catch(() => {}); 
-                                
-                                console.log(`[VoiceStateService] ✅ Added temp permit (DB) for ${member.user.tag} (${member.id})`);
-                            }
-                        }
+                        await this.addTempPermitToDb(channelId, member.id, member.user.tag);
                     }
-                    
                     invalidateChannelPermissions(channelId);
                 }
             }
         }
-        
-        const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
-        if (pvc) {
-            await prisma.privateVoiceChannel.update({
-                where: { channelId },
-                data: { isLocked },
-            });
-            
-            const verification = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
-            if (verification?.isLocked !== isLocked) {
-                console.error(`[VoiceStateService] ❌ Lock update verification FAILED! Expected isLocked=${isLocked}, got isLocked=${verification?.isLocked}`);
-            } else {
-                console.log(`[VoiceStateService] ✅ Updated and VERIFIED PVC ${channelId} in DB: isLocked=${isLocked}`);
-            }
-        } else {
-            const team = await prisma.teamVoiceChannel.findUnique({ where: { channelId } });
-            if (team) {
-                await prisma.teamVoiceChannel.update({
-                    where: { channelId },
-                    data: { isLocked },
-                });
-                
-                const verification = await prisma.teamVoiceChannel.findUnique({ where: { channelId } });
-                if (verification?.isLocked !== isLocked) {
-                    console.error(`[VoiceStateService] ❌ Team lock update verification FAILED! Expected isLocked=${isLocked}, got isLocked=${verification?.isLocked}`);
-                } else {
-                    console.log(`[VoiceStateService] ✅ Updated and VERIFIED Team ${channelId} in DB: isLocked=${isLocked}`);
-                }
-            } else {
-                console.error(`[VoiceStateService] ❌ CRITICAL: Channel ${channelId} NOT FOUND in database! Cannot set lock state. This channel needs /refresh_pvc to be re-registered.`);
-                return; 
-            }
-        }
-        
+        await this.updateChannelDb(channelId, { isLocked });
         this.syncToStateStore(channelId, { isLocked });
-        
-        // LAST: Update @everyone permission (deny Connect when locked)
         if (channel && channel.type === ChannelType.GuildVoice) {
             try {
                 recordBotEdit(channelId);
-                
                 const currentOverwrite = channel.permissionOverwrites.cache.get(channel.guild.id);
                 const permUpdate: any = {
-                    Connect: isLocked ? false : null, 
+                    Connect: isLocked ? false : null,
                 };
-                
                 if (currentOverwrite?.deny.has(PermissionFlagsBits.ViewChannel)) {
                     permUpdate.ViewChannel = false;
                 } else if (currentOverwrite?.allow.has(PermissionFlagsBits.ViewChannel)) {
                     permUpdate.ViewChannel = true;
                 }
-                
                 await channel.permissionOverwrites.edit(channel.guild.id, permUpdate);
-                
-                // VERIFY: Fetch fresh channel data to confirm Discord applied the permissions
-                await new Promise(resolve => setTimeout(resolve, 500)); // Small delay for Discord API
-                const verifyChannel = await channel.fetch();
-                const verifyOverwrite = verifyChannel.permissionOverwrites.cache.get(channel.guild.id);
-                
-                const expectedConnectState = isLocked ? 'DENIED' : 'NEUTRAL';
-                const actualConnectState = verifyOverwrite?.deny.has(PermissionFlagsBits.Connect) ? 'DENIED' : 
-                                          verifyOverwrite?.allow.has(PermissionFlagsBits.Connect) ? 'ALLOWED' : 'NEUTRAL';
-                
-                if ((isLocked && actualConnectState === 'DENIED') || (!isLocked && actualConnectState === 'NEUTRAL')) {
-                    console.log(`[VoiceStateService] ✅ VERIFIED Lock ${isLocked ? 'enabled' : 'disabled'} - Connect=${actualConnectState} for channel ${channelId}`);
-                } else {
-                    console.error(`[VoiceStateService] ❌ VERIFICATION FAILED! Expected Connect=${expectedConnectState}, got ${actualConnectState}`);
-                    throw new Error(`Lock state verification failed: expected ${expectedConnectState}, got ${actualConnectState}`);
-                }
+                console.log(`[VoiceStateService] ✅ Lock ${isLocked ? 'enabled' : 'disabled'} for channel ${channelId}`);
             } catch (error) {
                 console.error(`[VoiceStateService] ❌ Failed to update/verify Discord permission for lock:`, error);
-                throw error; // Re-throw to prevent success log
+                throw error; 
             }
         }
-        
-        // NOTE: DO NOT call enforcer.enforceQuietly here!
-        // The enforcer will kick users who don't have permits yet.
-        // We've already set the Discord permissions above, which is sufficient.
     }
     static async setHidden(channelId: string, isHidden: boolean): Promise<void> {
-        const channel = client.channels.cache.get(channelId) as VoiceChannel | undefined;
+        let channel = client.channels.cache.get(channelId) as VoiceChannel | undefined;
+        try {
+            const fetched = await client.channels.fetch(channelId);
+            if (fetched && fetched.type === ChannelType.GuildVoice) {
+                channel = fetched as VoiceChannel;
+            }
+        } catch (e) {
+            console.warn(`[VoiceStateService] Failed to fetch channel ${channelId} for hide operation. Using cache.`);
+        }
         const { recordBotEdit } = await import('../events/channelUpdate');
-        
         if (isHidden) {
-            // When hiding: give temporary permits to all current members (except owner)
             if (channel && channel.type === ChannelType.GuildVoice) {
                 const state = await this.getVCState(channelId);
                 if (state) {
                     const ownerId = state.ownerId;
                     const currentMembers = Array.from(channel.members.values())
                         .filter(m => !m.user.bot && m.id !== ownerId);
-                    
-                    console.log(`[VoiceStateService] 🙈 Hiding channel ${channelId} - giving TEMPORARY permits to ${currentMembers.length} members`);
-                    
-                    // FIRST: Set Discord permissions to allow ViewChannel for each current member
-                    // This must happen BEFORE we deny ViewChannel for @everyone
                     recordBotEdit(channelId);
                     const { vcnsBridge } = await import('../vcns/bridge');
                     for (const member of currentMembers) {
@@ -308,214 +205,60 @@ export class VoiceStateService {
                                 targetId: member.id,
                                 permissions: {
                                     ViewChannel: true,
-                                    Connect: null, // Keep existing
+                                    Connect: null, 
                                 },
                             });
-                            console.log(`[VoiceStateService] ✅ Set Discord ViewChannel permission for ${member.user.tag} (${member.id})`);
                         } catch (err) {
                             console.error(`[VoiceStateService] ❌ Failed to set Discord permission for ${member.id}:`, err);
                         }
                     }
-                    
-                    // SECOND: Add to database and memory
                     for (const member of currentMembers) {
-                        // Track in memory as temporary permit
                         const { addTempLockPermit } = await import('../utils/voiceManager');
                         addTempLockPermit(channelId, member.id);
-                        
-                        // Also add to database for access protection to see
-                        const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
-                        if (pvc) {
-                            const existingPerm = await prisma.voicePermission.findUnique({
-                                where: {
-                                    channelId_targetId: {
-                                        channelId,
-                                        targetId: member.id,
-                                    },
-                                },
-                            }).catch(() => null);
-                            
-                            if (!existingPerm || existingPerm.permission !== 'permit') {
-                                // Delete any existing permission first
-                                await prisma.voicePermission.deleteMany({
-                                    where: {
-                                        channelId,
-                                        targetId: member.id,
-                                    },
-                                }).catch(() => {});
-                                
-                                // Create temporary permit
-                                await prisma.voicePermission.create({
-                                    data: {
-                                        channelId,
-                                        targetId: member.id,
-                                        targetType: 'user',
-                                        permission: 'permit',
-                                    },
-                                }).catch(() => {}); 
-                                
-                                console.log(`[VoiceStateService] ✅ Added temp permit (DB) for ${member.user.tag} (${member.id})`);
-                            }
-                        } else {
-                            const existingPerm = await prisma.teamVoicePermission.findUnique({
-                                where: {
-                                    channelId_targetId: {
-                                        channelId,
-                                        targetId: member.id,
-                                    },
-                                },
-                            }).catch(() => null);
-                            
-                            if (!existingPerm || existingPerm.permission !== 'permit') {
-                                // Delete any existing permission first
-                                await prisma.teamVoicePermission.deleteMany({
-                                    where: {
-                                        channelId,
-                                        targetId: member.id,
-                                    },
-                                }).catch(() => {});
-                                
-                                // Create temporary permit
-                                await prisma.teamVoicePermission.create({
-                                    data: {
-                                        channelId,
-                                        targetId: member.id,
-                                        targetType: 'user',
-                                        permission: 'permit',
-                                    },
-                                }).catch(() => {}); 
-                                
-                                console.log(`[VoiceStateService] ✅ Added temp permit (DB) for ${member.user.tag} (${member.id})`);
-                            }
-                        }
+                        await this.addTempPermitToDb(channelId, member.id, member.user.tag);
                     }
-                    
                     invalidateChannelPermissions(channelId);
                 }
             }
         }
-        
-        const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
-        if (pvc) {
-            await prisma.privateVoiceChannel.update({
-                where: { channelId },
-                data: { isHidden },
-            });
-        } else {
-            const team = await prisma.teamVoiceChannel.findUnique({ where: { channelId } });
-            if (team) {
-                await prisma.teamVoiceChannel.update({
-                    where: { channelId },
-                    data: { isHidden },
-                });
-            }
-        }
-        
+        await this.updateChannelDb(channelId, { isHidden });
         this.syncToStateStore(channelId, { isHidden });
-        
-        // LAST: Update @everyone permission (deny ViewChannel when hidden)
         if (channel && channel.type === ChannelType.GuildVoice) {
             try {
                 recordBotEdit(channelId);
-                
                 const currentOverwrite = channel.permissionOverwrites.cache.get(channel.guild.id);
                 const permUpdate: any = {
-                    ViewChannel: isHidden ? false : null, 
+                    ViewChannel: isHidden ? false : null,
                 };
-                
                 if (currentOverwrite?.deny.has(PermissionFlagsBits.Connect)) {
                     permUpdate.Connect = false;
                 } else if (currentOverwrite?.allow.has(PermissionFlagsBits.Connect)) {
                     permUpdate.Connect = true;
                 }
-                
                 await channel.permissionOverwrites.edit(channel.guild.id, permUpdate);
-                
-                // VERIFY: Fetch fresh channel data to confirm Discord applied the permissions
-                await new Promise(resolve => setTimeout(resolve, 500)); // Small delay for Discord API
-                const verifyChannel = await channel.fetch();
-                const verifyOverwrite = verifyChannel.permissionOverwrites.cache.get(channel.guild.id);
-                
-                const expectedViewState = isHidden ? 'DENIED' : 'NEUTRAL';
-                const actualViewState = verifyOverwrite?.deny.has(PermissionFlagsBits.ViewChannel) ? 'DENIED' : 
-                                       verifyOverwrite?.allow.has(PermissionFlagsBits.ViewChannel) ? 'ALLOWED' : 'NEUTRAL';
-                
-                if ((isHidden && actualViewState === 'DENIED') || (!isHidden && actualViewState === 'NEUTRAL')) {
-                    console.log(`[VoiceStateService] ✅ VERIFIED Hidden ${isHidden ? 'enabled' : 'disabled'} - ViewChannel=${actualViewState} for channel ${channelId}`);
-                } else {
-                    console.error(`[VoiceStateService] ❌ VERIFICATION FAILED! Expected ViewChannel=${expectedViewState}, got ${actualViewState}`);
-                    throw new Error(`Hidden state verification failed: expected ${expectedViewState}, got ${actualViewState}`);
-                }
+                console.log(`[VoiceStateService] ✅ Hidden ${isHidden ? 'enabled' : 'disabled'} for channel ${channelId}`);
             } catch (error) {
                 console.error(`[VoiceStateService] ❌ Failed to update/verify Discord permission for hidden:`, error);
-                throw error; // Re-throw to prevent success log
+                throw error; 
             }
         }
-        
-        // NOTE: DO NOT call enforcer.enforceQuietly here!
-        // The enforcer will kick users who don't have permits yet.
-        // We've already set the Discord permissions above, which is sufficient.
     }
     static async setUserLimit(channelId: string, limit: number): Promise<void> {
-        const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
-        if (pvc) {
-            await prisma.privateVoiceChannel.update({
-                where: { channelId },
-                data: { userLimit: limit },
-            });
-        } else {
-            const team = await prisma.teamVoiceChannel.findUnique({ where: { channelId } });
-            if (team) {
-                await prisma.teamVoiceChannel.update({
-                    where: { channelId },
-                    data: { userLimit: limit },
-                });
-            }
-        }
+        await this.updateChannelDb(channelId, { userLimit: limit });
         this.syncToStateStore(channelId, { userLimit: limit });
         await enforcer.enforceQuietly(channelId);
     }
     static async setBitrate(channelId: string, bitrate: number): Promise<void> {
-        const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
-        if (pvc) {
-            await prisma.privateVoiceChannel.update({
-                where: { channelId },
-                data: { bitrate },
-            });
-        } else {
-            const team = await prisma.teamVoiceChannel.findUnique({ where: { channelId } });
-            if (team) {
-                await prisma.teamVoiceChannel.update({
-                    where: { channelId },
-                    data: { bitrate },
-                });
-            }
-        }
+        await this.updateChannelDb(channelId, { bitrate });
         await enforcer.enforceQuietly(channelId);
     }
     static async setRegion(channelId: string, region: string | null): Promise<void> {
-        const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
-        if (pvc) {
-            await prisma.privateVoiceChannel.update({
-                where: { channelId },
-                data: { rtcRegion: region },
-            });
-        } else {
-            const team = await prisma.teamVoiceChannel.findUnique({ where: { channelId } });
-            if (team) {
-                await prisma.teamVoiceChannel.update({
-                    where: { channelId },
-                    data: { rtcRegion: region },
-                });
-            }
-        }
+        await this.updateChannelDb(channelId, { rtcRegion: region });
         await enforcer.enforceQuietly(channelId);
     }
     static async addPermit(channelId: string, targetId: string, targetType: 'user' | 'role'): Promise<void> {
         let pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
         let team = !pvc ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
-        
-        // Auto-recovery if channel not found in DB
         if (!pvc && !team) {
             const recovered = await this.autoRecover(channelId);
             if (recovered) {
@@ -523,7 +266,6 @@ export class VoiceStateService {
                 team = !pvc ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
             }
         }
-        
         if (pvc) {
             await prisma.voicePermission.upsert({
                 where: { channelId_targetId: { channelId, targetId } },
@@ -539,7 +281,6 @@ export class VoiceStateService {
         } else {
             throw new Error(`Channel ${channelId} not found in database and auto-recovery failed`);
         }
-        
         invalidateChannelPermissions(channelId);
         await enforcer.enforceQuietly(channelId);
     }
@@ -554,19 +295,14 @@ export class VoiceStateService {
                 where: { channelId, targetId, permission: 'permit' },
             });
         }
-        
-        // Also remove from temp lock permits if it exists
         const { removeTempLockPermit } = await import('../utils/voiceManager');
         removeTempLockPermit(channelId, targetId);
-        
         invalidateChannelPermissions(channelId);
         await enforcer.enforceQuietly(channelId);
     }
     static async addBan(channelId: string, targetId: string, targetType: 'user' | 'role'): Promise<void> {
         let pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
         let team = !pvc ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
-        
-        // Auto-recovery if channel not found in DB
         if (!pvc && !team) {
             const recovered = await this.autoRecover(channelId);
             if (recovered) {
@@ -574,7 +310,6 @@ export class VoiceStateService {
                 team = !pvc ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
             }
         }
-        
         if (pvc) {
             await prisma.voicePermission.upsert({
                 where: { channelId_targetId: { channelId, targetId } },
@@ -590,7 +325,6 @@ export class VoiceStateService {
         } else {
             throw new Error(`Channel ${channelId} not found in database and auto-recovery failed`);
         }
-        
         invalidateChannelPermissions(channelId);
         await enforcer.enforceQuietly(channelId);
     }

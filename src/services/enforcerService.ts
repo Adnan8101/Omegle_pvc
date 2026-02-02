@@ -9,7 +9,7 @@ class EnforcerService {
     private pendingEnforcements = new Set<string>();
     private enforcingChannels = new Set<string>();
     private recentlyEnforced = new Map<string, number>();
-    private ENFORCEMENT_COOLDOWN = 60000; 
+    private ENFORCEMENT_COOLDOWN = 60000;
     private retryQueue = new Map<string, { notify: boolean; retryAt: number }>();
     private retryTimerActive = false;
     public async enforce(channelId: string, notify: boolean = true): Promise<void> {
@@ -40,7 +40,7 @@ class EnforcerService {
         const retryAt = Date.now() + delayMs;
         const existing = this.retryQueue.get(channelId);
         if (!existing || retryAt < existing.retryAt) {
-            this.retryQueue.set(channelId, { notify: false, retryAt }); 
+            this.retryQueue.set(channelId, { notify: false, retryAt });
         }
         if (!this.retryTimerActive) {
             this.startRetryTimer();
@@ -65,7 +65,7 @@ class EnforcerService {
                 });
             }
             if (this.retryQueue.size > 0) {
-                setTimeout(processQueue, 1000); 
+                setTimeout(processQueue, 1000);
             } else {
                 this.retryTimerActive = false;
             }
@@ -140,24 +140,53 @@ class EnforcerService {
                 return;
             }
             let channel = client.channels.cache.get(channelId) as VoiceChannel | undefined;
-            if (!channel || channel.type !== ChannelType.GuildVoice) {
+            if (!channel) {
+                const guild = client.guilds.cache.get(dbState.guildId);
+                if (!guild) {
+                    console.warn(`[Enforcer] Guild ${dbState.guildId} missing from cache. Aborting enforcement for ${channelId}.`);
+                    this.enforcingChannels.delete(channelId);
+                    return;
+                }
                 try {
-                    const guild = client.guilds.cache.get(dbState.guildId);
-                    if (guild) {
-                        const fetchedChannel = await guild.channels.fetch(channelId).catch(() => null);
-                        if (fetchedChannel && fetchedChannel.type === ChannelType.GuildVoice) {
-                            channel = fetchedChannel as VoiceChannel;
-                            console.log(`[Enforcer] ✅ Channel ${channelId} not in cache but fetched from API - proceeding`);
-                        }
+                    const fetchedChannel = await guild.channels.fetch(channelId);
+                    if (fetchedChannel && fetchedChannel.type === ChannelType.GuildVoice) {
+                        channel = fetchedChannel as VoiceChannel;
+                    } else if (fetchedChannel) {
+                        console.log(`[Enforcer] Channel ${channelId} exists but type is ${fetchedChannel.type} (not Voice). Cleaning up DB...`);
+                        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+                        await prisma.teamVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+                        this.enforcingChannels.delete(channelId);
+                        return;
                     }
-                } catch (fetchErr) {
-                    console.log(`[Enforcer] Could not fetch channel ${channelId} from API:`, fetchErr);
+                } catch (fetchErr: any) {
+                    const isDefinitiveMissing =
+                        fetchErr.code === 10003 ||
+                        fetchErr.status === 404;
+                    const isAccessDenied =
+                        fetchErr.code === 50013 ||
+                        fetchErr.status === 403;
+                    if (isDefinitiveMissing || isAccessDenied) {
+                        console.log(`[Enforcer] Channel ${channelId} confirmed missing/inaccessible. Cleaning up DB...`);
+                        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+                        await prisma.teamVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+                        this.enforcingChannels.delete(channelId);
+                        return;
+                    } else {
+                        console.error(`[Enforcer] ❌ API Error fetching channel ${channelId} (Code: ${fetchErr.code}). Aborting cleanup to prevent data loss.`);
+                        this.enforcingChannels.delete(channelId);
+                        return;
+                    }
                 }
             }
-            if (!channel || channel.type !== ChannelType.GuildVoice) {
-                console.log(`[Enforcer] ⚠️ Channel ${channelId} not found in cache OR API. Cleaning up DB...`);
-                await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => {});
-                await prisma.teamVoiceChannel.delete({ where: { channelId } }).catch(() => {});
+            if (channel && channel.type !== ChannelType.GuildVoice) {
+                await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+                await prisma.teamVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+                this.enforcingChannels.delete(channelId);
+                return;
+            }
+
+            if (!channel) {
+                console.warn(`[Enforcer] Channel ${channelId} could not be resolved. Aborting.`);
                 this.enforcingChannels.delete(channelId);
                 return;
             }
@@ -167,74 +196,9 @@ class EnforcerService {
                 rtcRegion: dbState.rtcRegion,
                 videoQualityMode: dbState.videoQualityMode,
             };
-            const overwrites: any[] = [];
-            overwrites.push({
-                id: dbState.ownerId,
-                type: OverwriteType.Member,
-                allow: [
-                    PermissionFlagsBits.Connect,
-                    PermissionFlagsBits.ViewChannel,
-                    PermissionFlagsBits.Speak,
-                    PermissionFlagsBits.Stream,
-                    PermissionFlagsBits.UseVAD,
-                    PermissionFlagsBits.PrioritySpeaker,
-                    PermissionFlagsBits.MuteMembers,
-                    PermissionFlagsBits.DeafenMembers,
-                    PermissionFlagsBits.MoveMembers,
-                    PermissionFlagsBits.ManageChannels,
-                    PermissionFlagsBits.SendMessages,
-                    PermissionFlagsBits.EmbedLinks,
-                    PermissionFlagsBits.AttachFiles,
-                ],
-            });
-            const everyoneDeny: bigint[] = [];
-            const everyoneAllow: bigint[] = [];
-            if (dbState.isLocked) {
-                everyoneDeny.push(PermissionFlagsBits.Connect);
-            }
-            if (dbState.isHidden) {
-                everyoneDeny.push(PermissionFlagsBits.ViewChannel);
-            }
-            if (everyoneDeny.length > 0 || everyoneAllow.length > 0) {
-                overwrites.push({
-                    id: channel.guild.id,
-                    type: OverwriteType.Role,
-                    allow: everyoneAllow,
-                    deny: everyoneDeny,
-                });
-            }
-            for (const perm of dbState.permissions || []) {
-                if (perm.permission === 'permit') {
-                    overwrites.push({
-                        id: perm.targetId,
-                        type: perm.targetType === 'role' ? OverwriteType.Role : OverwriteType.Member,
-                        allow: [PermissionFlagsBits.Connect, PermissionFlagsBits.ViewChannel],
-                    });
-                } else if (perm.permission === 'ban') {
-                    overwrites.push({
-                        id: perm.targetId,
-                        type: perm.targetType === 'role' ? OverwriteType.Role : OverwriteType.Member,
-                        deny: [PermissionFlagsBits.Connect, PermissionFlagsBits.ViewChannel],
-                    });
-                }
-            }
-            const permanentAccessTargets = stateStore.getPermanentAccessTargets(channel.guild.id, dbState.ownerId);
-            for (const targetId of permanentAccessTargets) {
-                const alreadyHasPermission = (dbState.permissions || []).some(
-                    (p: any) => p.targetId === targetId
-                );
-                if (!alreadyHasPermission) {
-                    overwrites.push({
-                        id: targetId,
-                        type: OverwriteType.Member,
-                        allow: [PermissionFlagsBits.Connect, PermissionFlagsBits.ViewChannel],
-                    });
-                }
-            }
-            options.permissionOverwrites = overwrites;
+            options.permissionOverwrites = this.buildOverwrites(dbState, channel.guild.id);
             recordBotEdit(channelId);
             await channel.edit(options);
-            console.log(`[Enforcer] ✅ Enforced DB state on channel ${channelId}`);
             await this.kickUnauthorizedMembers(channel, dbState);
             if (notify) {
                 await this.notifyEnforcement(channel, isTeamChannel, dbState);
@@ -292,7 +256,7 @@ class EnforcerService {
                 continue;
             }
             const memberRoleIds = member.roles.cache.map(r => r.id);
-            const isBanned = bannedUserIds.has(memberId) || 
+            const isBanned = bannedUserIds.has(memberId) ||
                 memberRoleIds.some(roleId => bannedRoleIds.has(roleId));
             if (isBanned) {
                 await this.kickMemberInstantly(member, channel.name, dbState.ownerId, 'blocked');
@@ -303,40 +267,26 @@ class EnforcerService {
                 const isWhitelisted = whitelist.some(
                     w => w.targetId === memberId || memberRoleIds.includes(w.targetId)
                 );
-                console.log(`[Enforcer-Strictness] 🔍 Checking ${member.user.tag}:`, {
-                    memberId,
-                    isWhitelisted,
-                    isRestricted,
-                    isLocked,
-                    isHidden,
-                    isFull
-                });
                 if (isWhitelisted) {
-                    console.log(`[Enforcer-Strictness] ✅ ${member.user.tag} is WHITELISTED - access ALLOWED`);
                     continue;
                 }
                 const restrictionReason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
-                console.log(`[Enforcer-Strictness] 🚨 ${member.user.tag} is NOT whitelisted, channel is ${restrictionReason} - INSTANT KICK`);
                 await this.kickMemberInstantly(member, channel.name, dbState.ownerId, `not whitelisted - channel ${restrictionReason} (admin strictness)`);
                 continue;
             }
             if (!isRestricted) {
-                console.log(`[Enforcer] ✅ Channel open - ${member.user.tag} allowed (strictness ${strictnessEnabled ? 'ON but channel open' : 'OFF'})`);
                 continue;
             }
             const isPermitted = permittedUserIds.has(memberId) ||
                 memberRoleIds.some(roleId => permittedRoleIds.has(roleId));
             if (isPermitted) {
-                console.log(`[Enforcer] ✅ ${member.user.tag} has AU/permit - allowed`);
                 continue;
             }
             const hasPermanentAccess = stateStore.hasPermanentAccess(guild.id, dbState.ownerId, memberId);
             if (hasPermanentAccess) {
-                console.log(`[Enforcer] ✅ ${member.user.tag} has permanent access - allowed`);
                 continue;
             }
             const reason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
-            console.log(`[Enforcer] 🚫 KICKING ${member.user.tag} - channel is ${reason}, no AU or permanent access`);
             await this.kickMemberInstantly(member, channel.name, dbState.ownerId, reason);
         }
     }
@@ -346,8 +296,8 @@ class EnforcerService {
                 guild: member.guild,
                 channelId: member.voice.channelId,
                 userId: member.id,
-                reason: reason === 'globally blocked' ? 'Globally blocked' : 
-                        reason === 'blocked' ? 'Blocked from channel' : 
+                reason: reason === 'globally blocked' ? 'Globally blocked' :
+                    reason === 'blocked' ? 'Blocked from channel' :
                         reason.includes('not whitelisted') ? 'Admin strictness: not whitelisted' : 'Unauthorized access',
                 isImmediate: true,
             });
@@ -396,7 +346,7 @@ class EnforcerService {
                     )
                     .setTimestamp();
             }
-            await member.send({ embeds: [embed] }).catch(() => {});
+            await member.send({ embeds: [embed] }).catch(() => { });
             console.log(`[Enforcer] Kicked ${member.user.tag} from channel INSTANTLY (${reason})`);
             const { logAction, LogAction } = await import('../utils/logger');
             await logAction({
@@ -405,11 +355,11 @@ class EnforcerService {
                 user: member.user,
                 channelName: channelName,
                 channelId: member.voice?.channelId || 'unknown',
-                details: reason.includes('not whitelisted') 
+                details: reason.includes('not whitelisted')
                     ? `Admin strictness: User not whitelisted - instant kick`
                     : `Unauthorized access: ${reason}`,
                 isTeamChannel: false,
-            }).catch(() => {});
+            }).catch(() => { });
         } catch (err) {
             console.error(`[Enforcer] Failed to send kick notification:`, err);
         }
@@ -430,43 +380,71 @@ class EnforcerService {
             console.error('[Enforcer] Notification failed:', err);
         }
     }
-    public async shouldKickUser(channelId: string, memberId: string, memberRoleIds: string[]): Promise<{ shouldKick: boolean; reason: string }> {
-        let dbState: any = await prisma.privateVoiceChannel.findUnique({
-            where: { channelId },
-            include: { permissions: true }
+    private buildOverwrites(dbState: any, guildId: string): any[] {
+        const overwrites: any[] = [];
+        overwrites.push({
+            id: dbState.ownerId,
+            type: OverwriteType.Member,
+            allow: [
+                PermissionFlagsBits.Connect,
+                PermissionFlagsBits.ViewChannel,
+                PermissionFlagsBits.Speak,
+                PermissionFlagsBits.Stream,
+                PermissionFlagsBits.UseVAD,
+                PermissionFlagsBits.PrioritySpeaker,
+                PermissionFlagsBits.MuteMembers,
+                PermissionFlagsBits.DeafenMembers,
+                PermissionFlagsBits.MoveMembers,
+                PermissionFlagsBits.ManageChannels,
+                PermissionFlagsBits.SendMessages,
+                PermissionFlagsBits.EmbedLinks,
+                PermissionFlagsBits.AttachFiles,
+            ],
         });
-        if (!dbState) {
-            dbState = await prisma.teamVoiceChannel.findUnique({
-                where: { channelId },
-                include: { permissions: true }
+        const everyoneDeny: bigint[] = [];
+        if (dbState.isLocked) {
+            everyoneDeny.push(PermissionFlagsBits.Connect);
+        }
+        if (dbState.isHidden) {
+            everyoneDeny.push(PermissionFlagsBits.ViewChannel);
+        }
+        if (everyoneDeny.length > 0) {
+            overwrites.push({
+                id: guildId,
+                type: OverwriteType.Role,
+                allow: [],
+                deny: everyoneDeny,
             });
         }
-        if (!dbState) {
-            return { shouldKick: false, reason: '' };
+        for (const perm of dbState.permissions || []) {
+            if (perm.permission === 'permit') {
+                overwrites.push({
+                    id: perm.targetId,
+                    type: perm.targetType === 'role' ? OverwriteType.Role : OverwriteType.Member,
+                    allow: [PermissionFlagsBits.Connect, PermissionFlagsBits.ViewChannel],
+                });
+            } else if (perm.permission === 'ban') {
+                overwrites.push({
+                    id: perm.targetId,
+                    type: perm.targetType === 'role' ? OverwriteType.Role : OverwriteType.Member,
+                    deny: [PermissionFlagsBits.Connect, PermissionFlagsBits.ViewChannel],
+                });
+            }
         }
-        if (memberId === dbState.ownerId) {
-            return { shouldKick: false, reason: '' };
+        const permanentAccessTargets = stateStore.getPermanentAccessTargets(guildId, dbState.ownerId);
+        for (const targetId of permanentAccessTargets) {
+            const alreadyHasPermission = (dbState.permissions || []).some(
+                (p: any) => p.targetId === targetId
+            );
+            if (!alreadyHasPermission) {
+                overwrites.push({
+                    id: targetId,
+                    type: OverwriteType.Member,
+                    allow: [PermissionFlagsBits.Connect, PermissionFlagsBits.ViewChannel],
+                });
+            }
         }
-        const permissions = dbState.permissions || [];
-        const isBanned = permissions.some(
-            (p: any) => (p.targetId === memberId && p.permission === 'ban') ||
-                (memberRoleIds.includes(p.targetId) && p.targetType === 'role' && p.permission === 'ban')
-        );
-        if (isBanned) {
-            return { shouldKick: true, reason: 'blocked' };
-        }
-        if (!dbState.isLocked && !dbState.isHidden) {
-            return { shouldKick: false, reason: '' };
-        }
-        const isPermitted = permissions.some(
-            (p: any) => (p.targetId === memberId && p.permission === 'permit') ||
-                (memberRoleIds.includes(p.targetId) && p.targetType === 'role' && p.permission === 'permit')
-        );
-        if (isPermitted) {
-            return { shouldKick: false, reason: '' };
-        }
-        const reason = dbState.isLocked ? 'locked' : 'hidden';
-        return { shouldKick: true, reason };
+        return overwrites;
     }
 }
 export const enforcer = new EnforcerService();

@@ -10,10 +10,7 @@ export async function execute(client: PVCClient): Promise<void> {
     setRecordBotEditFn(recordBotEdit);
     await loadAllTeamInterfaces();
     console.log('[Ready] Loading PVC state from database...');
-    
-    // Import stateStore early
     const { stateStore } = await import('../vcns/index');
-    
     try {
         const guildSettings = await prisma.guildSettings.findMany({
             include: { privateChannels: true },
@@ -33,13 +30,18 @@ export async function execute(client: PVCClient): Promise<void> {
                 let channel = guild.channels.cache.get(pvc.channelId);
                 if (!channel) {
                     try {
-                        channel = await guild.channels.fetch(pvc.channelId).catch(() => null) as any;
-                    } catch {}
+                        const fetched = await guild.channels.fetch(pvc.channelId);
+                        if (fetched) channel = fetched as any;
+                    } catch (error: any) {
+                        const isDefinitive = error.status === 404 || error.code === 10003 || error.status === 403 || error.code === 50013;
+                        if (!isDefinitive) {
+                            console.error(`[Ready] ⚠️ Failed to fetch channel ${pvc.channelId} (Network/API Error). Skipping cleanup.`);
+                            continue;
+                        }
+                    }
                 }
                 if (channel && channel.type === ChannelType.GuildVoice) {
-                    registerChannel(pvc.channelId, pvc.guildId, pvc.ownerId, false); // Don't skip, ensure stateStore sync
-                    
-                    // Ensure stateStore has the channel
+                    registerChannel(pvc.channelId, pvc.guildId, pvc.ownerId, false); 
                     if (!stateStore.getChannelState(pvc.channelId)) {
                         stateStore.registerChannel({
                             channelId: pvc.channelId,
@@ -69,13 +71,18 @@ export async function execute(client: PVCClient): Promise<void> {
             let channel = guild.channels.cache.get(tc.channelId);
             if (!channel) {
                 try {
-                    channel = await guild.channels.fetch(tc.channelId).catch(() => null) as any;
-                } catch {}
+                    const fetched = await guild.channels.fetch(tc.channelId);
+                    if (fetched) channel = fetched as any;
+                } catch (error: any) {
+                    const isDefinitive = error.status === 404 || error.code === 10003 || error.status === 403 || error.code === 50013;
+                    if (!isDefinitive) {
+                        console.error(`[Ready] ⚠️ Failed to fetch team channel ${tc.channelId} (Network/API Error). Skipping cleanup.`);
+                        continue;
+                    }
+                }
             }
             if (channel && channel.type === ChannelType.GuildVoice) {
-                registerTeamChannel(tc.channelId, tc.guildId, tc.ownerId, tc.teamType.toLowerCase() as TeamType, false); // Don't skip
-                
-                // Ensure stateStore has the channel
+                registerTeamChannel(tc.channelId, tc.guildId, tc.ownerId, tc.teamType.toLowerCase() as TeamType, false); 
                 if (!stateStore.getChannelState(tc.channelId)) {
                     stateStore.registerChannel({
                         channelId: tc.channelId,
@@ -99,10 +106,7 @@ export async function execute(client: PVCClient): Promise<void> {
             }
         }
         console.log(`[Ready] ✅ Registered ${registeredCount} channels, cleaned ${cleanedCount} stale entries`);
-        
-        // Load permanent access grants into stateStore
         const ownerPermissions = await prisma.ownerPermission.findMany();
-        
         if (ownerPermissions.length > 0) {
             console.log(`[Ready] 🔑 Loading ${ownerPermissions.length} permanent access grants...`);
             stateStore.loadPermanentAccess(ownerPermissions.map(p => ({
@@ -112,42 +116,39 @@ export async function execute(client: PVCClient): Promise<void> {
             })));
             console.log(`[Ready] ✅ Loaded permanent access grants into stateStore`);
         }
-        
-        // Start periodic sync check (every 5 minutes)
         startPeriodicSync(client, stateStore);
-        
     } catch (error) {
         console.error('[Ready] Error loading PVC state:', error);
     }
 }
-
-/**
- * Periodic sync to ensure DB and memory are always in sync
- * Runs every 5 minutes to catch any desync issues
- */
 function startPeriodicSync(client: PVCClient, stateStore: any): void {
     console.log('[Ready] Starting periodic sync check (every 5 minutes)...');
-    
     setInterval(async () => {
         try {
             console.log('[PeriodicSync] Running sync check...');
             let synced = 0;
             let recovered = 0;
-            
-            // Check all PVCs in DB
             const allPvcs = await prisma.privateVoiceChannel.findMany();
             for (const pvc of allPvcs) {
                 const guild = client.guilds.cache.get(pvc.guildId);
                 if (!guild) continue;
-                
-                const channel = guild.channels.cache.get(pvc.channelId);
+                let channel = guild.channels.cache.get(pvc.channelId);
+                if (!channel) {
+                    try {
+                        const fetched = await guild.channels.fetch(pvc.channelId);
+                        if (fetched) channel = fetched as any;
+                    } catch (error: any) {
+                        const isDefinitive = error.status === 404 || error.code === 10003 || error.status === 403 || error.code === 50013;
+                        if (!isDefinitive) {
+                            console.error(`[PeriodicSync] ⚠️ API error verifying channel ${pvc.channelId}, skipping checks`, error.message);
+                            continue;
+                        }
+                    }
+                }
                 if (!channel || channel.type !== ChannelType.GuildVoice) {
-                    // Channel deleted in Discord, clean up DB
-                    await prisma.privateVoiceChannel.delete({ where: { channelId: pvc.channelId } }).catch(() => {});
+                    await prisma.privateVoiceChannel.delete({ where: { channelId: pvc.channelId } }).catch(() => { });
                     continue;
                 }
-                
-                // Check if stateStore has it
                 if (!stateStore.getChannelState(pvc.channelId)) {
                     stateStore.registerChannel({
                         channelId: pvc.channelId,
@@ -165,21 +166,27 @@ function startPeriodicSync(client: PVCClient, stateStore: any): void {
                 }
                 synced++;
             }
-            
-            // Check all Team VCs in DB
             const allTeams = await prisma.teamVoiceChannel.findMany();
             for (const tc of allTeams) {
                 const guild = client.guilds.cache.get(tc.guildId);
                 if (!guild) continue;
-                
-                const channel = guild.channels.cache.get(tc.channelId);
+                let channel = guild.channels.cache.get(tc.channelId);
+                if (!channel) {
+                    try {
+                        const fetched = await guild.channels.fetch(tc.channelId);
+                        if (fetched) channel = fetched as any;
+                    } catch (error: any) {
+                        const isDefinitive = error.status === 404 || error.code === 10003 || error.status === 403 || error.code === 50013;
+                        if (!isDefinitive) {
+                            console.error(`[PeriodicSync] ⚠️ API error verifying team channel ${tc.channelId}, skipping checks`, error.message);
+                            continue;
+                        }
+                    }
+                }
                 if (!channel || channel.type !== ChannelType.GuildVoice) {
-                    // Channel deleted in Discord, clean up DB
-                    await prisma.teamVoiceChannel.delete({ where: { channelId: tc.channelId } }).catch(() => {});
+                    await prisma.teamVoiceChannel.delete({ where: { channelId: tc.channelId } }).catch(() => { });
                     continue;
                 }
-                
-                // Check if stateStore has it
                 if (!stateStore.getChannelState(tc.channelId)) {
                     stateStore.registerChannel({
                         channelId: tc.channelId,
@@ -198,7 +205,6 @@ function startPeriodicSync(client: PVCClient, stateStore: any): void {
                 }
                 synced++;
             }
-            
             if (recovered > 0) {
                 console.log(`[PeriodicSync] ✅ Synced ${synced} channels, recovered ${recovered} missing channels`);
             } else {
@@ -207,5 +213,5 @@ function startPeriodicSync(client: PVCClient, stateStore: any): void {
         } catch (error) {
             console.error('[PeriodicSync] Error during sync:', error);
         }
-    }, 5 * 60 * 1000); // Every 5 minutes
+    }, 5 * 60 * 1000); 
 }

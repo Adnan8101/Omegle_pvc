@@ -11,6 +11,7 @@ import { registerTeamInterfaceChannel } from '../utils/voiceManager';
 import type { Command } from '../client';
 import { canRunAdminCommand } from '../utils/permissions';
 import { logAction, LogAction } from '../utils/logger';
+import { validateServerCommand, validateAdminCommand, validateChannelType } from '../utils/commandValidation';
 const data = new SlashCommandBuilder()
     .setName('team_setup')
     .setDescription('Set up the Duo/Trio/Squad voice channel system')
@@ -31,25 +32,14 @@ const data = new SlashCommandBuilder()
             .addChannelTypes(ChannelType.GuildText)
     );
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    if (!interaction.guild) {
-        await interaction.reply({ content: 'This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
-        return;
-    }
-    if (!await canRunAdminCommand(interaction)) {
-        await interaction.reply({ content: 'You need a role higher than the bot to use this command, or be the bot developer.', flags: [MessageFlags.Ephemeral] });
-        return;
-    }
+    if (!await validateServerCommand(interaction)) return;
+    if (!await validateAdminCommand(interaction)) return;
     const category = interaction.options.getChannel('category', true);
     const logsChannel = interaction.options.getChannel('logs_channel', true);
-    if (category.type !== ChannelType.GuildCategory) {
-        await interaction.reply({ content: 'Please select a valid category channel.', flags: [MessageFlags.Ephemeral] });
-        return;
-    }
-    if (logsChannel.type !== ChannelType.GuildText) {
-        await interaction.reply({ content: 'Logs channel must be a text channel.', flags: [MessageFlags.Ephemeral] });
-        return;
-    }
+    if (!await validateChannelType(interaction, category as any, ChannelType.GuildCategory, 'Please select a valid category channel.')) return;
+    if (!await validateChannelType(interaction, logsChannel as any, ChannelType.GuildText, 'Logs channel must be a text channel.')) return;
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+    if (!interaction.guild) return;
     try {
         const guild = interaction.guild;
         const duoVc = await guild.channels.create({
@@ -78,7 +68,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     for (const oldWebhook of botWebhooks.values()) {
                         try {
                             await oldWebhook.delete('Cleaning up old webhooks');
-                        } catch {}
+                        } catch { }
                     }
                 }
                 logsWebhook = await (logsChannel as any).createWebhook({

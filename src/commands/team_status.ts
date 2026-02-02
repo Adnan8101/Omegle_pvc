@@ -8,21 +8,17 @@ import {
 import prisma from '../utils/database';
 import type { Command } from '../client';
 import { canRunAdminCommand } from '../utils/permissions';
+import { validateServerCommand, validateAdminCommand } from '../utils/commandValidation';
 const data = new SlashCommandBuilder()
     .setName('team_status')
     .setDescription('Show Team Voice Channel system status')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .setDMPermission(false);
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    if (!interaction.guild) {
-        await interaction.reply({ content: 'This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
-        return;
-    }
-    if (!await canRunAdminCommand(interaction)) {
-        await interaction.reply({ content: 'You need a role higher than the bot to use this command, or be the bot developer.', flags: [MessageFlags.Ephemeral] });
-        return;
-    }
+    if (!await validateServerCommand(interaction)) return;
+    if (!await validateAdminCommand(interaction)) return;
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+    if (!interaction.guild) return;
     try {
         const guild = interaction.guild;
         const guildSettings = await prisma.guildSettings.findUnique({

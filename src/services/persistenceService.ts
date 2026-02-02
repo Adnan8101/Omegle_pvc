@@ -1,5 +1,5 @@
 import prisma, { isConnected, connectAsync } from '../utils/database';
-type EventType = 
+type EventType =
     | 'vc_created'
     | 'vc_deleted'
     | 'vc_owner_changed'
@@ -25,11 +25,11 @@ interface BufferStats {
     droppedEvents: number;
 }
 const CONFIG = {
-    FLUSH_INTERVAL: 5000,       
-    FLUSH_THRESHOLD: 50,        
-    MAX_BUFFER_SIZE: 500,       
-    MAX_RETRY_QUEUE: 100,       
-    RETRY_DELAY: 10000,         
+    FLUSH_INTERVAL: 5000,
+    FLUSH_THRESHOLD: 50,
+    MAX_BUFFER_SIZE: 500,
+    MAX_RETRY_QUEUE: 100,
+    RETRY_DELAY: 10000,
 } as const;
 let buffer: PersistenceEvent[] = [];
 let retryQueue: PersistenceEvent[] = [];
@@ -140,7 +140,6 @@ async function writeBatch(events: PersistenceEvent[]): Promise<void> {
     const writes: Promise<unknown>[] = [];
     for (const [guildId, guildEvents] of byGuild) {
         if (guildEvents.length > 0) {
-            console.log(`[PERSIST] Would write ${guildEvents.length} events for guild ${guildId}`);
         }
     }
     if (writes.length > 0) {

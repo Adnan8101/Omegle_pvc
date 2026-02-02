@@ -101,29 +101,18 @@ client.on(channelUpdateEvent.name, (...args) =>
 client.on(channelDeleteEvent.name, (...args) =>
     channelDeleteEvent.execute(client, ...args)
 );
-client.on('error', (error) => {
-});
 client.on('warn', (warning) => {
     console.warn('[Discord Warning]:', warning);
-});
-process.on('unhandledRejection', (reason, promise) => {
-});
-process.on('uncaughtException', (error) => {
 });
 client.login(Config.token).catch(() => {
     process.exit(1);
 });
-process.on('SIGINT', async () => {
+const shutdown = async () => {
     console.log('[VCNS] Shutting down...');
     vcns.stop();
     stopCleanupInterval();
     client.destroy();
     process.exit(0);
-});
-process.on('SIGTERM', async () => {
-    console.log('[VCNS] Shutting down...');
-    vcns.stop();
-    stopCleanupInterval();
-    client.destroy();
-    process.exit(0);
-});
+};
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);

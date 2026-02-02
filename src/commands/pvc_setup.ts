@@ -16,6 +16,7 @@ import { generateInterfaceEmbed, generateInterfaceImage, BUTTON_EMOJI_MAP } from
 import { invalidateGuildSettings } from '../utils/cache';
 import { canRunAdminCommand } from '../utils/permissions';
 import { logAction, LogAction } from '../utils/logger';
+import { validateServerCommand, validateAdminCommand, validateChannelType } from '../utils/commandValidation';
 const MAIN_BUTTONS = [
     { id: 'pvc_lock' },
     { id: 'pvc_unlock' },
@@ -60,30 +61,16 @@ const data = new SlashCommandBuilder()
             .addChannelTypes(ChannelType.GuildText)
     );
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    if (!interaction.guild) {
-        await interaction.reply({ content: 'This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
-        return;
-    }
-    if (!await canRunAdminCommand(interaction)) {
-        await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', flags: [MessageFlags.Ephemeral] });
-        return;
-    }
+    if (!await validateServerCommand(interaction)) return;
+    if (!await validateAdminCommand(interaction)) return;
     const category = interaction.options.getChannel('category', true);
     const logsChannel = interaction.options.getChannel('logs_channel', true);
     const commandChannel = interaction.options.getChannel('command_channel', true);
-    if (category.type !== ChannelType.GuildCategory) {
-        await interaction.reply({ content: 'Please select a valid category channel.', flags: [MessageFlags.Ephemeral] });
-        return;
-    }
-    if (logsChannel.type !== ChannelType.GuildText) {
-        await interaction.reply({ content: 'Logs channel must be a text channel.', flags: [MessageFlags.Ephemeral] });
-        return;
-    }
-    if (commandChannel.type !== ChannelType.GuildText) {
-        await interaction.reply({ content: 'Command channel must be a text channel.', flags: [MessageFlags.Ephemeral] });
-        return;
-    }
+    if (!await validateChannelType(interaction, category as any, ChannelType.GuildCategory, 'Please select a valid category channel.')) return;
+    if (!await validateChannelType(interaction, logsChannel as any, ChannelType.GuildText, 'Logs channel must be a text channel.')) return;
+    if (!await validateChannelType(interaction, commandChannel as any, ChannelType.GuildText, 'Command channel must be a text channel.')) return;
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+    if (!interaction.guild) return;
     console.log('[PVC Setup] Starting PVC setup process...');
     console.log('[PVC Setup] Guild:', interaction.guild.name, '(' + interaction.guild.id + ')');
     console.log('[PVC Setup] Category:', category.name, '(' + category.id + ')');

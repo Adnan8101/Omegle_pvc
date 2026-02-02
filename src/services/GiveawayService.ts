@@ -125,27 +125,7 @@ export class GiveawayService {
         const guild = this.client.guilds.cache.get(giveaway.guildId);
         if (channel && guild) {
             try {
-                let participantCount = await prisma.giveawayParticipant.count({
-                    where: { giveawayId: giveaway.id }
-                });
-                if (giveaway.forcedWinners) {
-                    const forcedWinnersCount = giveaway.forcedWinners.split(',').filter((id: string) => id.trim()).length;
-                    participantCount += forcedWinnersCount;
-                }
-                const embed = giveawayEndedEmbed(giveaway, winners, participantCount);
-                let giveawayMessage;
-                try {
-                    channel.messages.cache.delete(giveaway.messageId);
-                    giveawayMessage = await channel.messages.fetch(giveaway.messageId);
-                    const gwEmoji = giveaway.emoji || '<a:Exe_Gw:1455059165150974095>';
-                    await giveawayMessage.edit({
-                        content: `${gwEmoji} **Giveaway Ended** ${gwEmoji}`,
-                        embeds: [embed]
-                    });
-                    console.log(`✅ Successfully updated giveaway message ${messageId}`);
-                } catch (e: any) {
-                    console.error(`❌ Failed to update giveaway message ${messageId}:`, e.message || e);
-                }
+                await this.refreshGiveawayEmbed(giveaway, winners, channel);
                 if (winners.length > 0) {
                     const mentions = winners.map(id => `<@${id}>`).join(", ");
                     if (giveaway.winnerRole) {
@@ -227,7 +207,7 @@ export class GiveawayService {
         const forcedWinners: string[] = [];
         if (giveaway?.forcedWinners) {
             const forcedIds = giveaway.forcedWinners.split(',').filter((id: string) => id.trim());
-            forcedWinners.push(...forcedIds.slice(0, count)); 
+            forcedWinners.push(...forcedIds.slice(0, count));
         }
         if (forcedWinners.length >= count) {
             return forcedWinners.slice(0, count);
@@ -238,7 +218,7 @@ export class GiveawayService {
         const remainingCount = count - forcedWinners.length;
         const regularParticipants = participants.filter(p => !forcedWinners.includes(p));
         if (regularParticipants.length === 0) {
-            return forcedWinners; 
+            return forcedWinners;
         }
         let regularWinners: string[] = [];
         if (!giveaway || !giveaway.increaseChance) {
@@ -347,26 +327,35 @@ export class GiveawayService {
         }
         const channel = this.client.channels.cache.get(giveaway.channelId) as TextChannel;
         if (channel) {
-            try {
-                let participantCount = await prisma.giveawayParticipant.count({
-                    where: { giveawayId: giveaway.id }
-                });
-                if (giveaway.forcedWinners) {
-                    const forcedWinnersCount = giveaway.forcedWinners.split(',').filter((id: string) => id.trim()).length;
-                    participantCount += forcedWinnersCount;
-                }
-                const embed = giveawayEndedEmbed(giveaway, winners, participantCount);
-                channel.messages.cache.delete(giveaway.messageId);
-                const giveawayMessage = await channel.messages.fetch(giveaway.messageId);
+            await this.refreshGiveawayEmbed(giveaway, winners, channel);
+        }
+    }
+    private async refreshGiveawayEmbed(giveaway: any, winners: string[], channel: TextChannel): Promise<void> {
+        try {
+            let participantCount = await prisma.giveawayParticipant.count({
+                where: { giveawayId: giveaway.id }
+            });
+            if (giveaway.forcedWinners) {
+                const forcedWinnersCount = giveaway.forcedWinners.split(',').filter((id: string) => id.trim()).length;
+                participantCount += forcedWinnersCount;
+            }
+            const embed = giveawayEndedEmbed(giveaway, winners, participantCount);
+            if (!channel.messages.cache.has(giveaway.messageId)) {
+                try {
+                    await channel.messages.fetch(giveaway.messageId);
+                } catch { }
+            }
+            const giveawayMessage = channel.messages.cache.get(giveaway.messageId);
+            if (giveawayMessage) {
                 const gwEmoji = giveaway.emoji || '<a:Exe_Gw:1455059165150974095>';
                 await giveawayMessage.edit({
                     content: `${gwEmoji} **Giveaway Ended** ${gwEmoji}`,
                     embeds: [embed]
                 });
-                console.log(`✅ Successfully updated ended giveaway ${messageId}`);
-            } catch (e: any) {
-                console.error("Failed to update ended giveaway message:", e.message || e);
+                console.log(`✅ Successfully updated giveaway message ${giveaway.messageId} (Embed Refreshed)`);
             }
+        } catch (e: any) {
+            console.error(`❌ Failed to update giveaway message ${giveaway.messageId}:`, e.message || e);
         }
     }
 }

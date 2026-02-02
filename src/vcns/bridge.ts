@@ -15,8 +15,8 @@ import {
 } from './types';
 import { buildVC } from './vcBuilder';
 const guildKickTracking = new Map<string, { count: number, resetTime: number }>();
-const MASS_KICK_THRESHOLD = 10; 
-const TRACKING_WINDOW = 5000; 
+const MASS_KICK_THRESHOLD = 10;
+const TRACKING_WINDOW = 5000;
 function shouldForceQueue(guildId: string): boolean {
     const now = Date.now();
     const tracking = guildKickTracking.get(guildId) || { count: 0, resetTime: now + TRACKING_WINDOW };
@@ -35,7 +35,7 @@ interface BridgeResult<T = void> {
     eta?: string;
     error?: string;
     data?: T;
-    channelId?: string;  
+    channelId?: string;
 }
 export function mapPriority(oldPriority: number): IntentPriority {
     switch (oldPriority) {
@@ -71,60 +71,28 @@ export class VCNSBridge {
         } = {},
     ): Promise<BridgeResult<string>> {
         if (!vcns.isActive()) {
-            return {
-                success: false,
-                queued: false,
-                error: 'VCNS not active',
-            };
+            return { success: false, queued: false, error: 'VCNS not active' };
         }
-        let guild: Guild;
-        let targetOwnerId: string;
-        let targetCategoryId: string;
-        let channelName: string;
-        let isTeam = false;
-        let userLimit: number | undefined;
-        let bitrate: number | undefined;
-        let teamType: 'duo' | 'trio' | 'squad' | undefined;
-        if (typeof guildOrOptions === 'object' && 'ownerId' in guildOrOptions && 'channelName' in guildOrOptions) {
-            guild = guildOrOptions.guild;
-            targetOwnerId = guildOrOptions.ownerId;
-            targetCategoryId = guildOrOptions.parentId || '';
-            channelName = guildOrOptions.channelName;
-            isTeam = guildOrOptions.isTeam ?? false;
-            userLimit = guildOrOptions.userLimit;
-            bitrate = guildOrOptions.bitrate;
-            teamType = guildOrOptions.teamType;
-        } else {
-            guild = guildOrOptions as Guild;
-            targetOwnerId = ownerId!;
-            targetCategoryId = categoryId!;
-            channelName = name!;
-            isTeam = options.isTeamChannel ?? false;
-            userLimit = options.userLimit;
-            bitrate = options.bitrate;
-            teamType = options.teamType;
-        }
+        const isLegacyCall = !(typeof guildOrOptions === 'object' && 'ownerId' in guildOrOptions);
+        const srcOptions = isLegacyCall ? options : (guildOrOptions as any);
+        const guild = isLegacyCall ? (guildOrOptions as Guild) : (guildOrOptions as any).guild;
+        const targetOwnerId = isLegacyCall ? ownerId! : (guildOrOptions as any).ownerId;
+        const targetCategoryId = isLegacyCall ? categoryId! : ((guildOrOptions as any).parentId || '');
+        const channelName = isLegacyCall ? name! : (guildOrOptions as any).channelName;
+        const isTeam = srcOptions.isTeamChannel ?? srcOptions.isTeam ?? false;
+        const userLimit = srcOptions.userLimit;
+        const bitrate = srcOptions.bitrate;
+        const teamType = srcOptions.teamType;
         if (vcns.userOwnsChannel(guild.id, targetOwnerId)) {
-            // Memory thinks user owns a channel, verify in database
             const existingChannelId = vcns.getChannelByOwner(guild.id, targetOwnerId);
-            console.log(`[Bridge] ⚠️ Memory says user ${targetOwnerId} owns channel ${existingChannelId}, verifying in DB...`);
-            
-            // Import prisma to check database
             const { default: prisma } = await import('../utils/database');
             const dbChannel = await prisma.privateVoiceChannel.findUnique({
                 where: { channelId: existingChannelId || undefined },
             }).catch(() => null);
-            
             if (!dbChannel && existingChannelId) {
-                // Channel exists in memory but not in DB - clean it up
-                console.log(`[Bridge] 🧹 Channel ${existingChannelId} not in DB, cleaning up memory...`);
                 const { unregisterChannel } = await import('../utils/voiceManager');
                 unregisterChannel(existingChannelId);
-                console.log(`[Bridge] ✅ Memory cleaned up, allowing new channel creation`);
-                // Continue with creation
             } else if (dbChannel) {
-                // Channel exists in both memory and DB - reject
-                console.log(`[Bridge] ❌ User truly owns a channel - rejecting creation`);
                 return {
                     success: false,
                     queued: false,
@@ -142,11 +110,8 @@ export class VCNSBridge {
             userLimit,
             bitrate,
         };
-        console.log(`[Bridge] 📤 Submitting VC create intent for user ${targetOwnerId}`);
         const result = vcns.requestVCCreate(payload, targetOwnerId);
-        console.log(`[Bridge] 📥 Intent submitted - queued: ${result.queued}, intentId: ${result.intentId}`);
         if (!result.queued) {
-            console.log(`[Bridge] ❌ Intent was NOT queued - returning failure`);
             return {
                 success: false,
                 queued: false,
@@ -154,10 +119,8 @@ export class VCNSBridge {
                 error: 'Failed to queue creation',
             };
         }
-        console.log(`[Bridge] ⏳ Waiting for intent ${result.intentId} to complete (30s timeout)...`);
         try {
             const workerResult = await waitForIntent(result.intentId, 30000);
-            console.log(`[Bridge] ✅ Intent completed - success: ${workerResult.success}, channelId: ${workerResult.data?.channelId}`);
             if (workerResult.success && workerResult.data?.channelId) {
                 return {
                     success: true,
@@ -246,7 +209,6 @@ export class VCNSBridge {
         const systemState = stateStore.getSystemState();
         const isHealthy = !systemState.circuitBreakerOpen && vcns.isActive();
         if (isHealthy) {
-            console.log(`[Bridge] 📤 Submitting VC delete intent for channel ${targetChannelId}`);
             const result = vcns.requestVCDelete(guildId, targetChannelId, reason);
             if (result.queued && result.intentId) {
                 try {
@@ -272,16 +234,14 @@ export class VCNSBridge {
                 if (!channel) {
                     try {
                         channel = await guild.channels.fetch(targetChannelId) as any;
-                    } catch {
-                        console.log(`[Bridge] Channel ${targetChannelId} not found in Discord (already deleted)`);
-                    }
+                    } catch { }
                 }
                 if (channel) {
                     await this.executeFallback(
                         `vc:delete:${guildId}`,
                         async () => channel!.delete(reason),
                         IntentPriority.HIGH,
-                        false, 
+                        false,
                     );
                     rateGovernor.recordAction(IntentAction.VC_DELETE, 25);
                 }
@@ -358,16 +318,14 @@ export class VCNSBridge {
                     `[VCNS Bridge] 🚨 Mass kick detected (>${MASS_KICK_THRESHOLD}/5s) in guild ${guildId}. ` +
                     `Forcing queue routing for user ${targetUserId} to prevent API rate limits.`
                 );
-                isImmediate = false; 
+                isImmediate = false;
             }
             if (isImmediate) {
-                console.log(`[VCNS Bridge] ⚡ IMMEDIATE kick for user ${targetUserId} in guild ${guildId} (reason: ${kickReason})`);
                 try {
                     const member = await guildIdOrOptions.guild.members.fetch(targetUserId);
                     if (member.voice.channelId) {
                         await member.voice.disconnect(kickReason);
                         rateGovernor.recordAction(IntentAction.USER_KICK, 20);
-                        console.log(`[VCNS Bridge] ✅ IMMEDIATE kick successful for ${member.user.tag} (${targetUserId})`);
                     }
                     return { success: true, queued: false };
                 } catch (error: any) {
@@ -380,9 +338,7 @@ export class VCNSBridge {
             targetChannelId = channelId!;
             kickReason = reason;
         }
-        console.log(`[VCNS Bridge] 🔄 Queueing kick intent for user ${targetUserId} in guild ${guildId} (reason: ${kickReason})`);
         const result = vcns.requestUserKick(guildId, targetUserId, targetChannelId, kickReason);
-        console.log(`[VCNS Bridge] ${result.queued ? '✅' : '❌'} Kick intent ${result.queued ? 'queued successfully' : 'failed to queue'} - ID: ${result.intentId}, ETA: ${result.eta}`);
         return {
             success: result.queued,
             queued: result.queued,
@@ -463,7 +419,7 @@ export class VCNSBridge {
         channelId: string;
         targetId: string;
         permissions: Record<string, boolean | null>;
-        allowWhenHealthy?: boolean; 
+        allowWhenHealthy?: boolean;
     }): Promise<BridgeResult> {
         if (!vcns.isActive()) {
             return { success: false, queued: false, error: 'VCNS not active' };
@@ -479,7 +435,7 @@ export class VCNSBridge {
                     await channel.permissionOverwrites.edit(options.targetId, options.permissions);
                 },
                 IntentPriority.NORMAL,
-                options.allowWhenHealthy || false, 
+                options.allowWhenHealthy || false,
             );
             return { success: true, queued: false };
         } catch (error: any) {
@@ -490,7 +446,7 @@ export class VCNSBridge {
         guild: Guild;
         channelId: string;
         targetId: string;
-        allowWhenHealthy?: boolean; 
+        allowWhenHealthy?: boolean;
     }): Promise<BridgeResult> {
         if (!vcns.isActive()) {
             return { success: false, queued: false, error: 'VCNS not active' };
@@ -506,7 +462,7 @@ export class VCNSBridge {
                     await channel.permissionOverwrites.delete(options.targetId);
                 },
                 IntentPriority.NORMAL,
-                options.allowWhenHealthy || false, 
+                options.allowWhenHealthy || false,
             );
             return { success: true, queued: false };
         } catch (error: any) {
@@ -532,7 +488,7 @@ export class VCNSBridge {
         route: string,
         action: () => Promise<T>,
         priority: IntentPriority = IntentPriority.NORMAL,
-        allowWhenHealthy: boolean = false, 
+        allowWhenHealthy: boolean = false,
     ): Promise<T> {
         const systemState = stateStore.getSystemState();
         const isHealthy = !systemState.circuitBreakerOpen && vcns.isActive();

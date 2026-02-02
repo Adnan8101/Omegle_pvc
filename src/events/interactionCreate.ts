@@ -33,13 +33,13 @@ setInterval(() => {
 }, 60000);
 async function safeReply(interaction: Interaction, content: string): Promise<void> {
     try {
-        if (!interaction.isRepliable()) return;
+        if (!interaction.isRepliable() || interaction.isAutocomplete()) return;
         if (interaction.replied) {
-            await interaction.followUp({ content, flags: [MessageFlags.Ephemeral] }).catch(() => { });
+            await interaction.followUp({ content, ephemeral: true }).catch(() => { });
         } else if (interaction.deferred) {
             await interaction.editReply({ content }).catch(() => { });
         } else {
-            await interaction.reply({ content, flags: [MessageFlags.Ephemeral] }).catch(() => { });
+            await interaction.reply({ content, ephemeral: true }).catch(() => { });
         }
     } catch { }
 }
@@ -49,6 +49,8 @@ function isStaleError(error: unknown): boolean {
         10003,
         10008,
         50027,
+        10062, 
+        40060, 
     ];
     return staleErrorCodes.includes(discordError.code as number);
 }

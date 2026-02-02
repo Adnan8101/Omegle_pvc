@@ -53,7 +53,6 @@ export class Scheduler extends EventEmitter {
         this.executeCallback = executeCallback;
         this.running = true;
         this.startLoop();
-        console.log('[Scheduler] Started');
     }
     public stop(): void {
         this.running = false;
@@ -61,7 +60,6 @@ export class Scheduler extends EventEmitter {
             clearInterval(this.loopInterval);
             this.loopInterval = null;
         }
-        console.log('[Scheduler] Stopped');
     }
     public isRunning(): boolean {
         return this.running;
@@ -105,7 +103,7 @@ export class Scheduler extends EventEmitter {
     private pullFromQueue(): void {
         const systemState = stateStore.getSystemState();
         const scheduledCount = this.scheduled.size;
-        const maxScheduled = VCNS_CONFIG.MAX_CONCURRENT_WORKERS * 3; 
+        const maxScheduled = VCNS_CONFIG.MAX_CONCURRENT_WORKERS * 3;
         if (scheduledCount >= maxScheduled) {
             return;
         }
@@ -115,13 +113,13 @@ export class Scheduler extends EventEmitter {
         }
         const toPull = Math.min(
             maxScheduled - scheduledCount,
-            5, 
+            5,
         );
         let pulledCount = 0;
         for (let i = 0; i < toPull; i++) {
             const intent = intentQueue.dequeue();
             if (!intent) {
-                break; 
+                break;
             }
             pulledCount++;
             console.log(`[Scheduler] 📥 Pulled intent ${intent.id} (${intent.action}) from queue`);
@@ -131,7 +129,7 @@ export class Scheduler extends EventEmitter {
                     const executeAt = intent.nextRetryAt;
                     const scheduled: ScheduledIntent = {
                         intent,
-                        decision: { execute: true, notify: false }, 
+                        decision: { execute: true, notify: false },
                         scheduledAt: now,
                         executeAt,
                     };
@@ -176,6 +174,19 @@ export class Scheduler extends EventEmitter {
         this.emit('intentScheduled', intent, executeAt);
     }
     private dispatchToWorker(intent: Intent<unknown>): void {
+        const systemState = stateStore.getSystemState();
+        if (systemState.activeWorkers >= VCNS_CONFIG.MAX_CONCURRENT_WORKERS) {
+            console.log(`[Scheduler] ⚠️ Worker pool exhausted (${systemState.activeWorkers}/${VCNS_CONFIG.MAX_CONCURRENT_WORKERS}). Deferring dispatch for ${intent.id}.`);
+            const now = Date.now();
+            this.scheduled.set(intent.id, {
+                intent,
+                decision: { execute: true, notify: false },
+                scheduledAt: now,
+                executeAt: now
+            });
+            this.stats.delayed++;
+            return;
+        }
         console.log(`[Scheduler] 🚀 Dispatching intent ${intent.id} (${intent.action}) to worker`);
         if (!this.executeCallback) {
             console.error('[Scheduler] No execute callback registered');
@@ -221,7 +232,7 @@ export class Scheduler extends EventEmitter {
         if (this.scheduleTimesMs.length > this.MAX_SCHEDULE_TIMES) {
             this.scheduleTimesMs.shift();
         }
-        this.stats.avgScheduleTime = 
+        this.stats.avgScheduleTime =
             this.scheduleTimesMs.reduce((a, b) => a + b, 0) / this.scheduleTimesMs.length;
     }
     public getStats(): SchedulerStats {
@@ -246,7 +257,7 @@ export class Scheduler extends EventEmitter {
     public expedite(intentId: string): boolean {
         const scheduled = this.scheduled.get(intentId);
         if (scheduled) {
-            scheduled.executeAt = Date.now(); 
+            scheduled.executeAt = Date.now();
             return true;
         }
         return false;
@@ -257,7 +268,7 @@ export class Scheduler extends EventEmitter {
             return Math.max(0, scheduled.executeAt - Date.now());
         }
         if (intentQueue.has(intentId)) {
-            return intentQueue.estimateWaitTime(1); 
+            return intentQueue.estimateWaitTime(1);
         }
         return null;
     }
