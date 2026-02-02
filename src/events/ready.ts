@@ -4,6 +4,7 @@ import prisma from '../utils/database';
 import { registerInterfaceChannel, registerChannel, loadAllTeamInterfaces, registerTeamChannel, unregisterChannel, unregisterTeamChannel, type TeamType } from '../utils/voiceManager';
 import { setRecordBotEditFn } from '../utils/discordApi';
 import { recordBotEdit } from './channelUpdate';
+import { handleJoin } from './voiceStateUpdate';
 import { vcnsBridge } from '../vcns/bridge';
 import { invalidateChannelPermissions } from '../utils/cache';
 export const name = Events.ClientReady;
@@ -26,6 +27,46 @@ export async function execute(client: PVCClient): Promise<void> {
                 const interfaceChannel = guild.channels.cache.get(settings.interfaceVcId);
                 if (interfaceChannel) {
                     registerInterfaceChannel(settings.guildId, settings.interfaceVcId);
+
+                    // KICKSTART: Check for waiting users in PVC Interface
+                    if (interfaceChannel.type === ChannelType.GuildVoice && interfaceChannel.members.size > 0) {
+                        const waitingMembers = interfaceChannel.members.filter(m => !m.user.bot);
+                        if (waitingMembers.size > 0) {
+                            console.log(`[Ready] 🚀 Kickstarting ${waitingMembers.size} users waiting in PVC Interface...`);
+                            for (const member of waitingMembers.values()) {
+                                handleJoin(client, member.voice).catch(err =>
+                                    console.error(`[Ready] Failed to kickstart PVC for ${member.user.tag}:`, err)
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            // KICKSTART: Check for waiting users in Team Interfaces
+            const teamSettings = await prisma.teamVoiceSettings.findUnique({ where: { guildId: settings.guildId } });
+            if (teamSettings) {
+                const teamInterfaces = [
+                    { type: 'Duo', id: teamSettings.duoVcId },
+                    { type: 'Trio', id: teamSettings.trioVcId },
+                    { type: 'Squad', id: teamSettings.squadVcId }
+                ];
+
+                for (const iface of teamInterfaces) {
+                    if (iface.id) {
+                        const channel = guild.channels.cache.get(iface.id);
+                        if (channel && channel.type === ChannelType.GuildVoice && channel.members.size > 0) {
+                            const waitingMembers = channel.members.filter(m => !m.user.bot);
+                            if (waitingMembers.size > 0) {
+                                console.log(`[Ready] 🚀 Kickstarting ${waitingMembers.size} users waiting in ${iface.type} Interface...`);
+                                for (const member of waitingMembers.values()) {
+                                    handleJoin(client, member.voice).catch(err =>
+                                        console.error(`[Ready] Failed to kickstart ${iface.type} for ${member.user.tag}:`, err)
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
             }
             for (const pvc of settings.privateChannels) {

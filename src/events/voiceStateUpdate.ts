@@ -530,7 +530,7 @@ async function handleAccessProtection(
     }).catch(() => { });
     return true;
 }
-async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
+export async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
     const { channelId, guild, member } = state;
     if (!channelId || !member) return;
     console.log(`[VCNS-HANDLEJOIN] 📌 Processing join for ${member.user.tag} in channel ${channelId}`);
