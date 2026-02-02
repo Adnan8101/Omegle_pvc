@@ -101,12 +101,15 @@ client.on(channelUpdateEvent.name, (...args) =>
 client.on(channelDeleteEvent.name, (...args) =>
     channelDeleteEvent.execute(client, ...args)
 );
+
 client.on('warn', (warning) => {
     console.warn('[Discord Warning]:', warning);
 });
+
 client.login(Config.token).catch(() => {
     process.exit(1);
 });
+
 const shutdown = async () => {
     console.log('[VCNS] Shutting down...');
     vcns.stop();
@@ -114,5 +117,6 @@ const shutdown = async () => {
     client.destroy();
     process.exit(0);
 };
+
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);

@@ -69,7 +69,6 @@ class VCNSController extends EventEmitter {
         this.startedAt = Date.now();
         try {
             await this.loadStateFromDatabase();
-            await intentQueue.loadFromFile('queue_dump.json');
             scheduler.start(this.handleIntentExecution.bind(this));
             this.isRunning = true;
             this.emit('started');
@@ -82,22 +81,19 @@ class VCNSController extends EventEmitter {
         if (!this.isRunning) {
             return;
         }
-        console.log('[VCNS] Stopping service...');
         scheduler.stop();
-        const timeout = 10000;
+        const timeout = 10000; 
         const checkInterval = 100;
         let waited = 0;
         while (stateStore.getSystemState().activeWorkers > 0 && waited < timeout) {
             await new Promise(resolve => setTimeout(resolve, checkInterval));
             waited += checkInterval;
         }
-        await intentQueue.saveToFile('queue_dump.json');
         intentQueue.stop();
         rateGovernor.stop();
         stateStore.stop();
         this.isRunning = false;
         this.emit('stopped');
-        console.log('[VCNS] Service stopped.');
     }
     public isActive(): boolean {
         return this.isRunning;
@@ -121,7 +117,7 @@ class VCNSController extends EventEmitter {
                     pvc.ownerId,
                     pvc.isLocked,
                     pvc.isHidden,
-                    false,
+                    false, 
                 );
                 registerChannel(pvc.channelId, pvc.guildId, pvc.ownerId);
                 channelCount++;
@@ -143,7 +139,7 @@ class VCNSController extends EventEmitter {
                     team.ownerId,
                     team.isLocked,
                     team.isHidden,
-                    true,
+                    true, 
                     team.teamType as 'DUO' | 'TRIO' | 'SQUAD',
                 );
                 registerTeamChannel(team.channelId, team.guildId, team.ownerId, team.teamType.toLowerCase() as 'duo' | 'trio' | 'squad');
@@ -166,7 +162,7 @@ class VCNSController extends EventEmitter {
             });
             stateStore.loadPermanentAccess(permanentAccess);
             const pausedGuilds = await prisma.guildSettings.findMany({
-                where: {},
+                where: {  },
                 select: { guildId: true },
             });
             this.emit('stateLoaded', channelCount);
@@ -208,9 +204,9 @@ class VCNSController extends EventEmitter {
             }
         }
     }
-    public submit(intent: Intent<unknown>): {
-        intentId: string;
-        queued: boolean;
+    public submit(intent: Intent<unknown>): { 
+        intentId: string; 
+        queued: boolean; 
         estimatedWaitMs: number;
         eta: string;
     } {

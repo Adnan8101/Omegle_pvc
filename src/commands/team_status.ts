@@ -18,7 +18,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     if (!await validateServerCommand(interaction)) return;
     if (!await validateAdminCommand(interaction)) return;
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
-    if (!interaction.guild) return;
     try {
         const guild = interaction.guild;
         const guildSettings = await prisma.guildSettings.findUnique({

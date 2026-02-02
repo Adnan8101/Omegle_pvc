@@ -96,6 +96,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     const teamLogsChannel = interaction.options.getChannel('team_logs_channel');
     const commandChannel = interaction.options.getChannel('command_channel');
     const teamCommandChannel = interaction.options.getChannel('team_command_channel');
+
     let settings;
     let teamSettings;
     try {
@@ -130,6 +131,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         await interaction.editReply('Neither PVC nor Team system is set up. Use `/pvc_setup` or `/team_setup` first.');
         return;
     }
+
     let pvcLogsWebhookUrl = settings?.logsWebhookUrl;
     if (pvcLogsChannel && pvcLogsChannel.type === ChannelType.GuildText) {
         try {
@@ -338,6 +340,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                         } else {
                             console.log(`[Refresh PVC] ✅ Verified PVC ${channelId} persisted in DB`);
                         }
+                        // Don't register here - will be registered in validation loop below
                         orphanPvcsAdded++;
                         console.log(`[Refresh PVC] ✅ Added orphan PVC ${channelId} to database`);
                     } catch (err: any) {
@@ -445,6 +448,8 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                                     where: { channelId: pvc.channelId },
                                     data: { ownerId: nextOwner.id },
                                 });
+                                const { stateStore: vcnsStateStore } = await import('../vcns/index');
+                                vcnsStateStore.transferOwnership(pvc.channelId, nextOwner.id);
                                 const { recordBotEdit } = await import('../events/channelUpdate');
                                 recordBotEdit(pvc.channelId);
                                 await channel.permissionOverwrites.edit(nextOwner.id, {
@@ -523,6 +528,8 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                                     where: { channelId: tc.channelId },
                                     data: { ownerId: nextOwner.id },
                                 });
+                                const { stateStore: vcnsStateStore } = await import('../vcns/index');
+                                vcnsStateStore.transferOwnership(tc.channelId, nextOwner.id);
                                 const { recordBotEdit } = await import('../events/channelUpdate');
                                 recordBotEdit(tc.channelId);
                                 await channel.permissionOverwrites.edit(nextOwner.id, {

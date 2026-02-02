@@ -199,8 +199,10 @@ function startHealthCheck(): void {
             connectAsync();
             return;
         }
+        
         try {
             await prisma.$queryRaw`SELECT 1 as ping`;
+            
             cleanupCounter++;
             if (cleanupCounter >= 10) {
                 cleanupCounter = 0;
@@ -237,27 +239,35 @@ function shutdown(): void {
             process.exit(1);
         });
 }
+
 if (!globalForPrisma.prisma) {
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);
     process.on('exit', shutdown);
 }
+
 (async () => {
     console.log(`[DB] 🚀 High-Load Mode | Pool: ${CONFIG.POOL_SIZE} connections | Timeout: ${CONFIG.POOL_TIMEOUT}s | Retries: ${CONFIG.MAX_RETRIES}`);
     console.log(`[DB] ⚡ Optimized for 1000+ concurrent PVC operations`);
+    
     try {
         await prisma.$disconnect();
         console.log('[DB] 🧹 Disconnected stale connections');
     } catch (err) {
     }
+    
     await new Promise(resolve => setTimeout(resolve, 1500));
+    
     await connectAsync();
     await new Promise(resolve => setTimeout(resolve, 500));
+    
     try {
         await killIdleConnections();
     } catch (err) {
     }
+    
     startHealthCheck();
     startMetrics();
 })();
+
 export default prisma;

@@ -15,8 +15,8 @@ import {
 } from './types';
 import { buildVC } from './vcBuilder';
 const guildKickTracking = new Map<string, { count: number, resetTime: number }>();
-const MASS_KICK_THRESHOLD = 10;
-const TRACKING_WINDOW = 5000;
+const MASS_KICK_THRESHOLD = 10; 
+const TRACKING_WINDOW = 5000; 
 function shouldForceQueue(guildId: string): boolean {
     const now = Date.now();
     const tracking = guildKickTracking.get(guildId) || { count: 0, resetTime: now + TRACKING_WINDOW };
@@ -35,7 +35,7 @@ interface BridgeResult<T = void> {
     eta?: string;
     error?: string;
     data?: T;
-    channelId?: string;
+    channelId?: string;  
 }
 export function mapPriority(oldPriority: number): IntentPriority {
     switch (oldPriority) {
@@ -71,24 +71,46 @@ export class VCNSBridge {
         } = {},
     ): Promise<BridgeResult<string>> {
         if (!vcns.isActive()) {
-            return { success: false, queued: false, error: 'VCNS not active' };
+            return {
+                success: false,
+                queued: false,
+                error: 'VCNS not active',
+            };
         }
-        const isLegacyCall = !(typeof guildOrOptions === 'object' && 'ownerId' in guildOrOptions);
-        const srcOptions = isLegacyCall ? options : (guildOrOptions as any);
-        const guild = isLegacyCall ? (guildOrOptions as Guild) : (guildOrOptions as any).guild;
-        const targetOwnerId = isLegacyCall ? ownerId! : (guildOrOptions as any).ownerId;
-        const targetCategoryId = isLegacyCall ? categoryId! : ((guildOrOptions as any).parentId || '');
-        const channelName = isLegacyCall ? name! : (guildOrOptions as any).channelName;
-        const isTeam = srcOptions.isTeamChannel ?? srcOptions.isTeam ?? false;
-        const userLimit = srcOptions.userLimit;
-        const bitrate = srcOptions.bitrate;
-        const teamType = srcOptions.teamType;
+        let guild: Guild;
+        let targetOwnerId: string;
+        let targetCategoryId: string;
+        let channelName: string;
+        let isTeam = false;
+        let userLimit: number | undefined;
+        let bitrate: number | undefined;
+        let teamType: 'duo' | 'trio' | 'squad' | undefined;
+        if (typeof guildOrOptions === 'object' && 'ownerId' in guildOrOptions && 'channelName' in guildOrOptions) {
+            guild = guildOrOptions.guild;
+            targetOwnerId = guildOrOptions.ownerId;
+            targetCategoryId = guildOrOptions.parentId || '';
+            channelName = guildOrOptions.channelName;
+            isTeam = guildOrOptions.isTeam ?? false;
+            userLimit = guildOrOptions.userLimit;
+            bitrate = guildOrOptions.bitrate;
+            teamType = guildOrOptions.teamType;
+        } else {
+            guild = guildOrOptions as Guild;
+            targetOwnerId = ownerId!;
+            targetCategoryId = categoryId!;
+            channelName = name!;
+            isTeam = options.isTeamChannel ?? false;
+            userLimit = options.userLimit;
+            bitrate = options.bitrate;
+            teamType = options.teamType;
+        }
         if (vcns.userOwnsChannel(guild.id, targetOwnerId)) {
             const existingChannelId = vcns.getChannelByOwner(guild.id, targetOwnerId);
             const { default: prisma } = await import('../utils/database');
             const dbChannel = await prisma.privateVoiceChannel.findUnique({
                 where: { channelId: existingChannelId || undefined },
             }).catch(() => null);
+            
             if (!dbChannel && existingChannelId) {
                 const { unregisterChannel } = await import('../utils/voiceManager');
                 unregisterChannel(existingChannelId);
@@ -234,14 +256,14 @@ export class VCNSBridge {
                 if (!channel) {
                     try {
                         channel = await guild.channels.fetch(targetChannelId) as any;
-                    } catch { }
+                    } catch {}
                 }
                 if (channel) {
                     await this.executeFallback(
                         `vc:delete:${guildId}`,
                         async () => channel!.delete(reason),
                         IntentPriority.HIGH,
-                        false,
+                        false, 
                     );
                     rateGovernor.recordAction(IntentAction.VC_DELETE, 25);
                 }
@@ -318,7 +340,7 @@ export class VCNSBridge {
                     `[VCNS Bridge] 🚨 Mass kick detected (>${MASS_KICK_THRESHOLD}/5s) in guild ${guildId}. ` +
                     `Forcing queue routing for user ${targetUserId} to prevent API rate limits.`
                 );
-                isImmediate = false;
+                isImmediate = false; 
             }
             if (isImmediate) {
                 try {
@@ -419,7 +441,7 @@ export class VCNSBridge {
         channelId: string;
         targetId: string;
         permissions: Record<string, boolean | null>;
-        allowWhenHealthy?: boolean;
+        allowWhenHealthy?: boolean; 
     }): Promise<BridgeResult> {
         if (!vcns.isActive()) {
             return { success: false, queued: false, error: 'VCNS not active' };
@@ -435,7 +457,7 @@ export class VCNSBridge {
                     await channel.permissionOverwrites.edit(options.targetId, options.permissions);
                 },
                 IntentPriority.NORMAL,
-                options.allowWhenHealthy || false,
+                options.allowWhenHealthy || false, 
             );
             return { success: true, queued: false };
         } catch (error: any) {
@@ -446,7 +468,7 @@ export class VCNSBridge {
         guild: Guild;
         channelId: string;
         targetId: string;
-        allowWhenHealthy?: boolean;
+        allowWhenHealthy?: boolean; 
     }): Promise<BridgeResult> {
         if (!vcns.isActive()) {
             return { success: false, queued: false, error: 'VCNS not active' };
@@ -462,7 +484,7 @@ export class VCNSBridge {
                     await channel.permissionOverwrites.delete(options.targetId);
                 },
                 IntentPriority.NORMAL,
-                options.allowWhenHealthy || false,
+                options.allowWhenHealthy || false, 
             );
             return { success: true, queued: false };
         } catch (error: any) {
@@ -488,7 +510,7 @@ export class VCNSBridge {
         route: string,
         action: () => Promise<T>,
         priority: IntentPriority = IntentPriority.NORMAL,
-        allowWhenHealthy: boolean = false,
+        allowWhenHealthy: boolean = false, 
     ): Promise<T> {
         const systemState = stateStore.getSystemState();
         const isHealthy = !systemState.circuitBreakerOpen && vcns.isActive();

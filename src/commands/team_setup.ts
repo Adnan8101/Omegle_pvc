@@ -36,10 +36,9 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     if (!await validateAdminCommand(interaction)) return;
     const category = interaction.options.getChannel('category', true);
     const logsChannel = interaction.options.getChannel('logs_channel', true);
-    if (!await validateChannelType(interaction, category as any, ChannelType.GuildCategory, 'Please select a valid category channel.')) return;
-    if (!await validateChannelType(interaction, logsChannel as any, ChannelType.GuildText, 'Logs channel must be a text channel.')) return;
+    if (!await validateChannelType(interaction, category, ChannelType.GuildCategory, 'Please select a valid category channel.')) return;
+    if (!await validateChannelType(interaction, logsChannel, ChannelType.GuildText, 'Logs channel must be a text channel.')) return;
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
-    if (!interaction.guild) return;
     try {
         const guild = interaction.guild;
         const duoVc = await guild.channels.create({
@@ -68,7 +67,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                     for (const oldWebhook of botWebhooks.values()) {
                         try {
                             await oldWebhook.delete('Cleaning up old webhooks');
-                        } catch { }
+                        } catch {}
                     }
                 }
                 logsWebhook = await (logsChannel as any).createWebhook({

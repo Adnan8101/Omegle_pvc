@@ -1247,6 +1247,11 @@ async function transferChannelOwnership(
             transferTeamOwnership(channelId, nextUserId);
             console.log(`[TransferOwnership] ✅ Updated Team memory state`);
         }
+        // Sync with VCNS state
+        const { stateStore: vcnsStateStore } = await import('../vcns/index');
+        vcnsStateStore.transferOwnership(channelId, nextUserId);
+        console.log(`[TransferOwnership] ✅ Updated VCNS state`);
+
         if (isTeamChannel && teamState) {
             await prisma.teamVoiceChannel.update({
                 where: { channelId },
@@ -1679,6 +1684,10 @@ async function transferTeamChannelOwnership(
         console.log(`[TransferTeamOwnership] 👤 Transferring to ${newOwner.user.tag}`);
         transferTeamOwnership(channelId, nextUserId);
         console.log(`[TransferTeamOwnership] ✅ Updated memory state`);
+        // Sync with VCNS state
+        const { stateStore: vcnsStateStore } = await import('../vcns/index');
+        vcnsStateStore.transferOwnership(channelId, nextUserId);
+        console.log(`[TransferTeamOwnership] ✅ Updated VCNS state`);
         await prisma.teamVoiceChannel.update({
             where: { channelId },
             data: { ownerId: nextUserId },

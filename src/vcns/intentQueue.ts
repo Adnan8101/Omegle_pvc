@@ -1,6 +1,4 @@
 import { EventEmitter } from 'events';
-import * as fs from 'fs/promises';
-import * as path from 'path';
 import {
     Intent,
     IntentPriority,
@@ -101,14 +99,14 @@ export class IntentQueue extends EventEmitter {
                 intent.status = IntentStatus.EXPIRED;
                 this.expiredCount++;
                 this.emit('intentExpired', intent);
-                i--;
+                i--; 
                 continue;
             }
             const currentHolder = lockManager.getHolder(intent.resourceId);
             console.log(`[IntentQueue] 🔐 Lock check for ${intent.resourceId}: holder=${currentHolder}, intentId=${intent.id}`);
             if (currentHolder && currentHolder !== intent.id) {
                 console.log(`[IntentQueue] ⏭️ Skipping intent ${intent.id} - resource locked by ${currentHolder}`);
-                continue;
+                continue; 
             }
             this.queue.splice(i, 1);
             this.decrementGuildCount(intent.guildId);
@@ -143,7 +141,7 @@ export class IntentQueue extends EventEmitter {
             intent.status = IntentStatus.FAILED;
             return false;
         }
-        if (intent.status === IntentStatus.FAILED ||
+        if (intent.status === IntentStatus.FAILED || 
             intent.status === IntentStatus.DROPPED ||
             intent.status === IntentStatus.CANCELLED) {
             return false;
@@ -216,7 +214,7 @@ export class IntentQueue extends EventEmitter {
             const bGuildCount = this.guildCounts.get(b.intent.guildId) || 1;
             const aWeight = aGuildCount / maxGuildCount;
             const bWeight = bGuildCount / maxGuildCount;
-            if (Math.abs(aWeight - bWeight) > 0.1) {
+            if (Math.abs(aWeight - bWeight) > 0.1) { 
                 return aWeight - bWeight;
             }
             return a.enqueuedAt - b.enqueuedAt;
@@ -242,22 +240,29 @@ export class IntentQueue extends EventEmitter {
             if (age > VCNS_CONFIG.DEDUP_WINDOW_MS) {
                 return false;
             }
-            return q.intent.status === IntentStatus.PENDING ||
-                q.intent.status === IntentStatus.SCHEDULED;
+            return q.intent.status === IntentStatus.PENDING || 
+                   q.intent.status === IntentStatus.SCHEDULED;
         });
     }
     private dropLowestPriority(): boolean {
-        const priorities = [IntentPriority.DROPPABLE, IntentPriority.LOW];
-        for (const priority of priorities) {
-            for (let i = this.queue.length - 1; i >= 0; i--) {
-                if (this.queue[i].intent.priority === priority) {
-                    const dropped = this.queue.splice(i, 1)[0];
-                    this.decrementGuildCount(dropped.intent.guildId);
-                    dropped.intent.status = IntentStatus.DROPPED;
-                    this.droppedCount++;
-                    this.emit('intentDropped', dropped.intent, 'pressure');
-                    return true;
-                }
+        for (let i = this.queue.length - 1; i >= 0; i--) {
+            if (this.queue[i].intent.priority === IntentPriority.DROPPABLE) {
+                const dropped = this.queue.splice(i, 1)[0];
+                this.decrementGuildCount(dropped.intent.guildId);
+                dropped.intent.status = IntentStatus.DROPPED;
+                this.droppedCount++;
+                this.emit('intentDropped', dropped.intent, 'pressure');
+                return true;
+            }
+        }
+        for (let i = this.queue.length - 1; i >= 0; i--) {
+            if (this.queue[i].intent.priority === IntentPriority.LOW) {
+                const dropped = this.queue.splice(i, 1)[0];
+                this.decrementGuildCount(dropped.intent.guildId);
+                dropped.intent.status = IntentStatus.DROPPED;
+                this.droppedCount++;
+                this.emit('intentDropped', dropped.intent, 'pressure');
+                return true;
             }
         }
         return false;
@@ -309,54 +314,14 @@ export class IntentQueue extends EventEmitter {
             this.cleanupInterval = null;
         }
     }
-    public async saveToFile(filePath: string): Promise<void> {
-        try {
-            const data = JSON.stringify(this.queue, null, 2);
-            await fs.writeFile(filePath, data, 'utf-8');
-            console.log(`[IntentQueue] Saved ${this.queue.length} intents to ${filePath}`);
-        } catch (error: any) {
-            console.error(`[IntentQueue] Failed to save queue to file: ${error.message}`);
+    public clear(): void {
+        for (const queued of this.queue) {
+            queued.intent.status = IntentStatus.DROPPED;
+            this.emit('intentDropped', queued.intent, 'queue_cleared');
+            lockManager.releaseByHolder(queued.intent.id);
         }
-    }
-    public async loadFromFile(filePath: string): Promise<void> {
-        try {
-            try {
-                await fs.access(filePath);
-            } catch {
-                console.log(`[IntentQueue] No queue dump found at ${filePath}, starting empty.`);
-                return;
-            }
-            const data = await fs.readFile(filePath, 'utf-8');
-            if (!data) return;
-            const loaded: QueuedIntent[] = JSON.parse(data);
-            if (!Array.isArray(loaded)) return;
-            console.log(`[IntentQueue] Loading ${loaded.length} intents from ${filePath}...`);
-            let loadedCount = 0;
-            for (const item of loaded) {
-                if (!item || !item.intent || !item.intent.id || !item.intent.action) {
-                    continue;
-                }
-                if (item.intent.status === IntentStatus.EXECUTING ||
-                    item.intent.status === IntentStatus.SCHEDULED) {
-                    item.intent.status = IntentStatus.PENDING;
-                }
-                if (Date.now() > item.intent.expiresAt) {
-                    continue;
-                }
-                this.queue.push(item);
-                const guildCount = this.guildCounts.get(item.intent.guildId) || 0;
-                this.guildCounts.set(item.intent.guildId, guildCount + 1);
-                loadedCount++;
-            }
-            this.sortQueue();
-            console.log(`[IntentQueue] Successfully restored ${loadedCount} intents.`);
-            await fs.unlink(filePath).catch(() => { });
-        } catch (error: any) {
-            console.error(`[IntentQueue] Failed to load queue from file: ${error.message}`);
-            const backupPath = `${filePath}.corrupt-${Date.now()}`;
-            await fs.rename(filePath, backupPath).catch(() => { });
-            console.warn(`[IntentQueue] Moved corrupt dump to ${backupPath}`);
-        }
+        this.queue = [];
+        this.guildCounts.clear();
     }
 }
 export const intentQueue = new IntentQueue();
