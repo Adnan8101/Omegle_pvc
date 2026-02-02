@@ -718,13 +718,23 @@ async function handleDeleteConfirm(interaction: ButtonInteraction): Promise<void
             embeds: [],
             components: [],
         });
-    } catch (err) {
+    } catch (err: any) {
         console.error(`[DeleteConfirm] Failed to delete channel ${channelId}:`, err);
-        await interaction.update({
-            content: 'Failed to delete the channel.',
-            embeds: [],
-            components: [],
-        });
+        // Fix: Handle specific error cases gracefully
+        if (err.code === 10008) { // Unknown Message
+            console.log('[DeleteConfirm] Interaction message already deleted, ignoring.');
+            return;
+        }
+        // Attempt to update user if possible, but don't crash if it fails
+        try {
+            await interaction.update({
+                content: 'Failed to delete the channel or it was already deleted.',
+                embeds: [],
+                components: [],
+            });
+        } catch (updateErr) {
+            console.log('[DeleteConfirm] Could not update interaction after failure (likely Unknown Message/Interaction).');
+        }
     }
 }
 async function handleAdminDelete(interaction: ButtonInteraction): Promise<void> {
