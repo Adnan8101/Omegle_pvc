@@ -715,26 +715,34 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
         if (member) {
             const channel = guild.channels.cache.get(channelId);
             if (channel) {
-                await logAction({
-                    action: LogAction.USER_REMOVED,
-                    guild: guild,
-                    user: member.user,
-                    channelName: channel.name,
-                    channelId: channelId,
-                    details: `${member.user.username} left the voice channel`,
-                });
+                try {
+                    await logAction({
+                        action: LogAction.USER_REMOVED,
+                        guild: guild,
+                        user: member.user,
+                        channelName: channel.name,
+                        channelId: channelId,
+                        details: `${member.user.username} left the voice channel`,
+                    });
+                } catch (logErr) {
+                    console.error('[HandleLeave] Failed to log user leave:', logErr);
+                }
             }
         }
         const channel = guild.channels.cache.get(channelId);
         if (channel && channel.type === ChannelType.GuildVoice) {
             if (channel.members.size === 0) {
-                await logAction({
-                    action: LogAction.CHANNEL_DELETED,
-                    guild: guild,
-                    channelName: channel.name,
-                    channelId: channelId,
-                    details: `Channel deleted (empty)`,
-                });
+                try {
+                    await logAction({
+                        action: LogAction.CHANNEL_DELETED,
+                        guild: guild,
+                        channelName: channel.name,
+                        channelId: channelId,
+                        details: `Channel deleted (empty)`,
+                    });
+                } catch (logErr) {
+                    console.error('[HandleLeave] Failed to log channel deletion:', logErr);
+                }
                 await deletePrivateChannel(channelId, guild.id);
             } else {
                 const allBots = channel.members.every(m => m.user.bot);
@@ -742,13 +750,17 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
                     for (const [, botMember] of channel.members) {
                         await botMember.voice.disconnect().catch(() => { });
                     }
-                    await logAction({
-                        action: LogAction.CHANNEL_DELETED,
-                        guild: guild,
-                        channelName: channel.name,
-                        channelId: channelId,
-                        details: `Channel deleted (only bots remained)`,
-                    });
+                    try {
+                        await logAction({
+                            action: LogAction.CHANNEL_DELETED,
+                            guild: guild,
+                            channelName: channel.name,
+                            channelId: channelId,
+                            details: `Channel deleted (only bots remained)`,
+                        });
+                    } catch (logErr) {
+                        console.error('[HandleLeave] Failed to log channel deletion (bots only):', logErr);
+                    }
                     await deletePrivateChannel(channelId, guild.id);
                 } else if (member && member.id === channelState.ownerId) {
                     console.log(`[HandleLeave] 👑 Owner ${member.user.tag} (${member.id}) left channel ${channelId}`);
@@ -760,21 +772,25 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
                         await transferChannelOwnership(client, channelId, guild, channel);
                     } else {
                         console.log(`[HandleLeave] No non-bot members available, channel will be deleted`);
-                        await logAction({
-                            action: LogAction.CHANNEL_DELETED,
-                            guild: guild,
-                            channelName: channel.name,
-                            channelId: channelId,
-                            details: `Owner left, no members to transfer to`,
-                        });
+                        try {
+                            await logAction({
+                                action: LogAction.CHANNEL_DELETED,
+                                guild: guild,
+                                channelName: channel.name,
+                                channelId: channelId,
+                                details: `Owner left, no members to transfer to`,
+                            });
+                        } catch (logErr) {
+                            console.error('[HandleLeave] Failed to log channel deletion (owner left):', logErr);
+                        }
                         await deletePrivateChannel(channelId, guild.id);
                     }
                 } else {
                     console.log(`[HandleLeave] Non-owner left. Member: ${member?.id}, Owner: ${channelState.ownerId}`);
                 }
             }
+            return;
         }
-        return;
     }
     const teamChannelState = getTeamChannelState(channelId);
     if (teamChannelState) {
@@ -799,15 +815,19 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
         const channel = guild.channels.cache.get(channelId);
         if (channel && channel.type === ChannelType.GuildVoice) {
             if (channel.members.size === 0) {
-                await logAction({
-                    action: LogAction.TEAM_CHANNEL_DELETED,
-                    guild: guild,
-                    channelName: channel.name,
-                    channelId: channelId,
-                    details: `Team channel deleted (empty)`,
-                    isTeamChannel: true,
-                    teamType: teamChannelState.teamType,
-                });
+                try {
+                    await logAction({
+                        action: LogAction.TEAM_CHANNEL_DELETED,
+                        guild: guild,
+                        channelName: channel.name,
+                        channelId: channelId,
+                        details: `Team channel deleted (empty)`,
+                        isTeamChannel: true,
+                        teamType: teamChannelState.teamType,
+                    });
+                } catch (logErr) {
+                    console.error('[HandleLeave] Failed to log team channel deletion:', logErr);
+                }
                 await deleteTeamChannel(channelId, guild.id);
             } else {
                 const allBots = channel.members.every(m => m.user.bot);
@@ -815,15 +835,19 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
                     for (const [, botMember] of channel.members) {
                         await botMember.voice.disconnect().catch(() => { });
                     }
-                    await logAction({
-                        action: LogAction.TEAM_CHANNEL_DELETED,
-                        guild: guild,
-                        channelName: channel.name,
-                        channelId: channelId,
-                        details: `Team channel deleted (only bots remained)`,
-                        isTeamChannel: true,
-                        teamType: teamChannelState.teamType,
-                    });
+                    try {
+                        await logAction({
+                            action: LogAction.TEAM_CHANNEL_DELETED,
+                            guild: guild,
+                            channelName: channel.name,
+                            channelId: channelId,
+                            details: `Team channel deleted (only bots remained)`,
+                            isTeamChannel: true,
+                            teamType: teamChannelState.teamType,
+                        });
+                    } catch (logErr) {
+                        console.error('[HandleLeave] Failed to log team channel deletion (bots):', logErr);
+                    }
                     await deleteTeamChannel(channelId, guild.id);
                 } else if (member && member.id === teamChannelState.ownerId) {
                     await transferTeamChannelOwnership(client, channelId, guild, channel);
