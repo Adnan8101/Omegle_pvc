@@ -69,16 +69,25 @@ export async function execute(
     }
     if (newState.channelId && newState.channelId !== oldState.channelId) {
         console.log(`[VCNS-JOIN] 🟢 User ${member.user.tag} (${member.id}) joining VC ${newState.channelId}`);
-        const wasKicked = await handleAccessProtection(client, newState);
-        if (!wasKicked) {
-            console.log(`[VCNS-JOIN] ✅ User ${member.user.tag} successfully joined - processing handleJoin`);
-            await handleJoin(client, newState);
-        } else {
-            console.log(`[VCNS-JOIN] ❌ User ${member.user.tag} was kicked by access protection`);
+        try {
+            const wasKicked = await handleAccessProtection(client, newState);
+            if (!wasKicked) {
+                console.log(`[VCNS-JOIN] ✅ User ${member.user.tag} successfully joined - processing handleJoin`);
+                await handleJoin(client, newState);
+            } else {
+                console.log(`[VCNS-JOIN] ❌ User ${member.user.tag} was kicked by access protection`);
+            }
+        } catch (err) {
+            console.error(`[VCNS-JOIN] ❌ Critical error in handleJoin sequence:`, err);
         }
     }
+
     if (oldState.channelId && oldState.channelId !== newState.channelId) {
-        await handleLeave(client, oldState);
+        try {
+            await handleLeave(client, oldState);
+        } catch (err) {
+            console.error(`[VCNS-LEAVE] ❌ Critical error in handleLeave sequence:`, err);
+        }
     }
 }
 async function handleBotJoin(client: PVCClient, state: VoiceState): Promise<void> {
@@ -870,24 +879,32 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
         }
         if (channel.members.size === 0) {
             if (isTeamChannel) {
-                await logAction({
-                    action: LogAction.TEAM_CHANNEL_DELETED,
-                    guild: guild,
-                    channelName: channel.name,
-                    channelId: channelId,
-                    details: `Team channel deleted (empty - DB fallback)`,
-                    isTeamChannel: true,
-                    teamType: dbTeam?.teamType.toLowerCase(),
-                });
+                try {
+                    await logAction({
+                        action: LogAction.TEAM_CHANNEL_DELETED,
+                        guild: guild,
+                        channelName: channel.name,
+                        channelId: channelId,
+                        details: `Team channel deleted (empty - DB fallback)`,
+                        isTeamChannel: true,
+                        teamType: dbTeam?.teamType.toLowerCase(),
+                    });
+                } catch (logErr) {
+                    console.error('[HandleLeave] Failed to log team fallback deletion:', logErr);
+                }
                 await deleteTeamChannel(channelId, guild.id);
             } else {
-                await logAction({
-                    action: LogAction.CHANNEL_DELETED,
-                    guild: guild,
-                    channelName: channel.name,
-                    channelId: channelId,
-                    details: `Channel deleted (empty - DB fallback)`,
-                });
+                try {
+                    await logAction({
+                        action: LogAction.CHANNEL_DELETED,
+                        guild: guild,
+                        channelName: channel.name,
+                        channelId: channelId,
+                        details: `Channel deleted (empty - DB fallback)`,
+                    });
+                } catch (logErr) {
+                    console.error('[HandleLeave] Failed to log fallback deletion:', logErr);
+                }
                 await deletePrivateChannel(channelId, guild.id);
             }
         } else {

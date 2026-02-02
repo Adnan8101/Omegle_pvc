@@ -46,18 +46,30 @@ export async function execute(client: PVCClient): Promise<void> {
                     const nonBotMembers = channel.members.filter(m => !m.user.bot);
                     if (nonBotMembers.size === 0) {
                         console.log(`[Ready] 🧹 Channel ${pvc.channelId} is empty on startup - deleting (Zombie Cleanup)`);
+                        let deletedFromDiscord = false;
                         try {
-                            await vcnsBridge.deleteVC({
-                                guild,
-                                channelId: pvc.channelId,
-                                isTeam: false,
-                            });
-                        } catch (err) {
-                            console.error(`[Ready] Failed to delete empty channel from Discord:`, err);
+                            if (channel.deletable) {
+                                await channel.delete('PVC Cleanup: Zombie Channel');
+                                deletedFromDiscord = true;
+                            } else {
+                                console.error(`[Ready] ❌ Cannot delete channel ${pvc.channelId} - Missing Permissions?`);
+                            }
+                        } catch (err: any) {
+                            if (err.code === 10003 || err.status === 404) { // Unknown Channel
+                                deletedFromDiscord = true;
+                            } else {
+                                console.error(`[Ready] Failed to delete empty channel from Discord:`, err);
+                            }
                         }
-                        await prisma.privateVoiceChannel.delete({ where: { channelId: pvc.channelId } }).catch(() => { });
-                        await prisma.voicePermission.deleteMany({ where: { channelId: pvc.channelId } }).catch(() => { });
-                        cleanedCount++;
+
+                        if (deletedFromDiscord) {
+                            await prisma.privateVoiceChannel.delete({ where: { channelId: pvc.channelId } }).catch(() => { });
+                            await prisma.voicePermission.deleteMany({ where: { channelId: pvc.channelId } }).catch(() => { });
+                            cleanedCount++;
+                            console.log(`[Ready] ✅ Successfully cleaned up zombie channel ${pvc.channelId}`);
+                        } else {
+                            console.log(`[Ready] ⚠️ Skipped DB deletion for ${pvc.channelId} because Discord deletion failed.`);
+                        }
                         continue;
                     }
 
@@ -105,18 +117,30 @@ export async function execute(client: PVCClient): Promise<void> {
                 const nonBotMembers = channel.members.filter(m => !m.user.bot);
                 if (nonBotMembers.size === 0) {
                     console.log(`[Ready] 🧹 Team Channel ${tc.channelId} is empty on startup - deleting (Zombie Cleanup)`);
+                    let deletedFromDiscord = false;
                     try {
-                        await vcnsBridge.deleteVC({
-                            guild,
-                            channelId: tc.channelId,
-                            isTeam: true,
-                        });
-                    } catch (err) {
-                        console.error(`[Ready] Failed to delete empty team channel from Discord:`, err);
+                        if (channel.deletable) {
+                            await channel.delete('Team PVC Cleanup: Zombie Channel');
+                            deletedFromDiscord = true;
+                        } else {
+                            console.error(`[Ready] ❌ Cannot delete team channel ${tc.channelId} - Missing Permissions?`);
+                        }
+                    } catch (err: any) {
+                        if (err.code === 10003 || err.status === 404) { // Unknown Channel
+                            deletedFromDiscord = true;
+                        } else {
+                            console.error(`[Ready] Failed to delete empty team channel from Discord:`, err);
+                        }
                     }
-                    await prisma.teamVoiceChannel.delete({ where: { channelId: tc.channelId } }).catch(() => { });
-                    await prisma.teamVoicePermission.deleteMany({ where: { channelId: tc.channelId } }).catch(() => { });
-                    cleanedCount++;
+
+                    if (deletedFromDiscord) {
+                        await prisma.teamVoiceChannel.delete({ where: { channelId: tc.channelId } }).catch(() => { });
+                        await prisma.teamVoicePermission.deleteMany({ where: { channelId: tc.channelId } }).catch(() => { });
+                        cleanedCount++;
+                        console.log(`[Ready] ✅ Successfully cleaned up zombie team channel ${tc.channelId}`);
+                    } else {
+                        console.log(`[Ready] ⚠️ Skipped DB deletion for ${tc.channelId} because Discord deletion failed.`);
+                    }
                     continue;
                 }
 
@@ -193,18 +217,31 @@ function startPeriodicSync(client: PVCClient, stateStore: any): void {
                 if (nonBotMembers.size === 0) {
                     console.log(`[PeriodicSync] 🧹 Channel ${pvc.channelId} found empty - deleting (Zombie Cleanup)`);
                     try {
-                        await vcnsBridge.deleteVC({
+                        const result = await vcnsBridge.deleteVC({
                             guild,
                             channelId: pvc.channelId,
                             isTeam: false,
                         });
+
+                        if (result.success) {
+                            await prisma.privateVoiceChannel.delete({ where: { channelId: pvc.channelId } }).catch(() => { });
+                            await prisma.voicePermission.deleteMany({ where: { channelId: pvc.channelId } }).catch(() => { });
+                            unregisterChannel(pvc.channelId);
+                            invalidateChannelPermissions(pvc.channelId);
+                        } else {
+                            // Check if it failed because it didn't exist
+                            const chCheck = guild.channels.cache.get(pvc.channelId);
+                            if (!chCheck) {
+                                console.log(`[PeriodicSync] Channel ${pvc.channelId} missing after failed delete - cleaning DB`);
+                                await prisma.privateVoiceChannel.delete({ where: { channelId: pvc.channelId } }).catch(() => { });
+                                unregisterChannel(pvc.channelId);
+                            } else {
+                                console.error(`[PeriodicSync] Failed to delete channel ${pvc.channelId}: ${result.error}`);
+                            }
+                        }
                     } catch (err) {
-                        console.error(`[PeriodicSync] Failed to delete channel:`, err);
+                        console.error(`[PeriodicSync] Critical error during cleanup:`, err);
                     }
-                    await prisma.privateVoiceChannel.delete({ where: { channelId: pvc.channelId } }).catch(() => { });
-                    await prisma.voicePermission.deleteMany({ where: { channelId: pvc.channelId } }).catch(() => { });
-                    unregisterChannel(pvc.channelId);
-                    invalidateChannelPermissions(pvc.channelId);
                     continue;
                 }
 
@@ -252,17 +289,28 @@ function startPeriodicSync(client: PVCClient, stateStore: any): void {
                 if (nonBotMembers.size === 0) {
                     console.log(`[PeriodicSync] 🧹 Team Channel ${tc.channelId} found empty - deleting (Zombie Cleanup)`);
                     try {
-                        await vcnsBridge.deleteVC({
+                        const result = await vcnsBridge.deleteVC({
                             guild,
                             channelId: tc.channelId,
                             isTeam: true,
                         });
+
+                        if (result.success) {
+                            await prisma.teamVoiceChannel.delete({ where: { channelId: tc.channelId } }).catch(() => { });
+                            await prisma.teamVoicePermission.deleteMany({ where: { channelId: tc.channelId } }).catch(() => { });
+                            unregisterTeamChannel(tc.channelId);
+                        } else {
+                            const chCheck = guild.channels.cache.get(tc.channelId);
+                            if (!chCheck) {
+                                await prisma.teamVoiceChannel.delete({ where: { channelId: tc.channelId } }).catch(() => { });
+                                unregisterTeamChannel(tc.channelId);
+                            } else {
+                                console.error(`[PeriodicSync] Failed to delete team channel ${tc.channelId}: ${result.error}`);
+                            }
+                        }
                     } catch (err) {
-                        console.error(`[PeriodicSync] Failed to delete team channel:`, err);
+                        console.error(`[PeriodicSync] Critical error during team cleanup:`, err);
                     }
-                    await prisma.teamVoiceChannel.delete({ where: { channelId: tc.channelId } }).catch(() => { });
-                    await prisma.teamVoicePermission.deleteMany({ where: { channelId: tc.channelId } }).catch(() => { });
-                    unregisterTeamChannel(tc.channelId);
                     continue;
                 }
 
