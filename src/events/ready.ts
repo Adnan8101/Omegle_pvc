@@ -168,6 +168,62 @@ export async function execute(client: PVCClient): Promise<void> {
             }
         }
         console.log(`[Ready] ✅ Registered ${registeredCount} channels, cleaned ${cleanedCount} stale entries`);
+
+        // ORPHAN CLEANUP LOGIC
+        for (const settings of guildSettings) {
+            const guild = client.guilds.cache.get(settings.guildId);
+            if (!guild || !settings.interfaceVcId) continue;
+
+            const interfaceVc = guild.channels.cache.get(settings.interfaceVcId);
+            if (interfaceVc && interfaceVc.parent) {
+                const categoryId = interfaceVc.parentId;
+                const knownPvcIds = new Set(settings.privateChannels.map(p => p.channelId));
+                knownPvcIds.add(settings.interfaceVcId);
+
+                // Add team channels to known list to avoid deleting them
+                const teamSettings = await prisma.teamVoiceSettings.findUnique({ where: { guildId: settings.guildId } });
+                if (teamSettings) {
+                    if (teamSettings.duoVcId) knownPvcIds.add(teamSettings.duoVcId);
+                    if (teamSettings.trioVcId) knownPvcIds.add(teamSettings.trioVcId);
+                    if (teamSettings.squadVcId) knownPvcIds.add(teamSettings.squadVcId);
+                }
+                const teamChannels = await prisma.teamVoiceChannel.findMany({ where: { guildId: settings.guildId } });
+                teamChannels.forEach(tc => knownPvcIds.add(tc.channelId));
+
+                const orphanChannels = guild.channels.cache.filter(ch =>
+                    ch.type === ChannelType.GuildVoice &&
+                    ch.parentId === categoryId &&
+                    !knownPvcIds.has(ch.id)
+                );
+
+                if (orphanChannels.size > 0) {
+                    console.log(`[Ready] 🔍 Found ${orphanChannels.size} orphan channels in category ${categoryId}`);
+                    for (const [channelId, channel] of orphanChannels) {
+                        // Double check it's a voice channel
+                        if (channel.type !== ChannelType.GuildVoice) continue;
+
+                        // If empty, delete immediately
+                        if (channel.members.size === 0) {
+                            console.log(`[Ready] 🧹 Orphan Channel ${channelId} is empty - deleting (Zombie Cleanup)`);
+                            try {
+                                if (channel.deletable) {
+                                    await channel.delete('PVC Cleanup: Orphaned Zombie Channel');
+                                    console.log(`[Ready] ✅ Deleted orphan channel ${channelId}`);
+                                } else {
+                                    console.error(`[Ready] ❌ Cannot delete orphan ${channelId} - Missing Permissions?`);
+                                }
+                            } catch (err) {
+                                console.error(`[Ready] Failed to delete orphan channel ${channelId}:`, err);
+                            }
+                        } else {
+                            // Optional: Adopt occupied orphans?
+                            // For now, leave them alone to avoid disrupting active sessions that might be valid permanent channels
+                            console.log(`[Ready] ⚠️ Orphan Channel ${channelId} has members - skipping delete`);
+                        }
+                    }
+                }
+            }
+        }
         const ownerPermissions = await prisma.ownerPermission.findMany();
         if (ownerPermissions.length > 0) {
             console.log(`[Ready] 🔑 Loading ${ownerPermissions.length} permanent access grants...`);
