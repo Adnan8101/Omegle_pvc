@@ -389,6 +389,37 @@ async function handleAccessProtection(
         return true; // Return true to kick
     }
     
+    // FIX: Check if user is BANNED from this specific channel (personal block)
+    const channelBan = await (dbState.teamType 
+        ? prisma.teamVoicePermission.findFirst({
+            where: { channelId: newChannelId, targetId: member.id, permission: 'ban' }
+        })
+        : prisma.voicePermission.findFirst({
+            where: { channelId: newChannelId, targetId: member.id, permission: 'ban' }
+        })
+    );
+    
+    if (channelBan) {
+        console.log(`[VCNS-ACCESS] 🚫 User ${member.user.tag} is BANNED from this channel - immediate kick`);
+        
+        // Send DM to blocked user
+        const ownerMember = await guild.members.fetch(ownerId).catch(() => null);
+        const ownerName = ownerMember?.displayName || 'the owner';
+        const blockEmbed = new EmbedBuilder()
+            .setColor(0xFF0000)
+            .setTitle('🚫 Blocked from Voice Channel')
+            .setDescription(
+                `You are **blocked** from **${ownerName}**'s voice channel in **${guild.name}**.\n\n` +
+                'You cannot join this channel by any means until you are unblocked.'
+            )
+            .setTimestamp();
+        await member.send({ embeds: [blockEmbed] }).catch(() => {
+            console.log(`[VCNS-ACCESS] Cannot DM blocked user ${member.user.tag}`);
+        });
+        
+        return true; // Return true to kick
+    }
+    
     // Bug #12 Fix: Use Promise.allSettled to prevent single failure from blocking all
     const results = await Promise.allSettled([
         getGuildSettings(guild.id),

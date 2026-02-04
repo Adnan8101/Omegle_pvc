@@ -293,21 +293,83 @@ async function handleBlockSelect(
         await interaction.reply({ content: 'You cannot block yourself from your own channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-    await updateVoicePermissions(channel, users, 'user', 'ban', { ViewChannel: false, Connect: false }, isTeamChannel);
     
-    // Bug #1 Fix: Invalidate cache after permission change
+    const guild = interaction.guild!;
+    const owner = await guild.members.fetch(ownerId).catch(() => null);
+    const ownerName = owner?.displayName || 'the owner';
+    
+    // FIX: For each user being blocked
+    for (const [userId, user] of users) {
+        // 1. Add ban to database
+        await VoiceStateService.addBan(channel.id, userId, 'user');
+        
+        // 2. Remove ALL existing permits/access
+        if (isTeamChannel) {
+            await prisma.teamVoicePermission.deleteMany({
+                where: {
+                    channelId: channel.id,
+                    targetId: userId,
+                    permission: 'permit',
+                },
+            }).catch(() => {});
+        } else {
+            // Remove from channel permits
+            await prisma.voicePermission.deleteMany({
+                where: {
+                    channelId: channel.id,
+                    targetId: userId,
+                    permission: 'permit',
+                },
+            }).catch(() => {});
+            
+            // Remove from permanent access (owner's trusted list)
+            await prisma.ownerPermission.deleteMany({
+                where: {
+                    guildId: guild.id,
+                    ownerId: ownerId,
+                    targetId: userId,
+                },
+            }).catch(() => {});
+        }
+        
+        // 3. Kick if currently in channel
+        const member = channel.members.get(userId);
+        if (member) {
+            try {
+                await member.voice.disconnect();
+                
+                // 4. Send DM notification
+                const blockEmbed = new EmbedBuilder()
+                    .setColor(0xFF0000)
+                    .setTitle('🚫 Blocked from Voice Channel')
+                    .setDescription(
+                        `You have been **blocked** from **${ownerName}**'s voice channel in **${guild.name}**.\n\n` +
+                        'You cannot join this channel by any means until you are unblocked.'
+                    )
+                    .setTimestamp();
+                await member.send({ embeds: [blockEmbed] }).catch(() => {
+                    console.log(`[Block] Cannot DM ${user.tag}`);
+                });
+            } catch (err) {
+                console.error(`[Block] Failed to kick ${userId}:`, err);
+            }
+        }
+    }
+    
+    // Invalidate cache after permission changes
     invalidateChannelPermissions(channel.id);
     
     await logAction({
         action: LogAction.USER_BANNED,
-        guild: interaction.guild!,
+        guild: guild,
         user: interaction.user,
         channelName: channel.name,
         channelId: channel.id,
         details: `Blocked ${users.size} user(s)`,
     });
+    
     await interaction.update({
-        content: `🚫 Blocked ${users.size} user(s) from your voice channel.`,
+        content: `🚫 Blocked ${users.size} user(s) from your voice channel. They have been kicked and cannot rejoin.`,
         components: [],
     });
 }
