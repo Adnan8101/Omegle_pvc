@@ -29,6 +29,13 @@ export class StateStore extends EventEmitter {
         super();
         this.systemState = this.createDefaultSystemState();
         this.startCleanupLoop();
+        
+        // Bug #3 Fix: Ensure cleanup on process termination
+        if (typeof process !== 'undefined') {
+            process.once('beforeExit', () => this.stop());
+            process.once('SIGTERM', () => this.stop());
+            process.once('SIGINT', () => this.stop());
+        }
     }
     public getSystemState(): Readonly<SystemState> {
         return { ...this.systemState };

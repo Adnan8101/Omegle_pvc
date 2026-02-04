@@ -491,4 +491,14 @@ function startPeriodicSync(client: PVCClient, stateStore: any): void {
             console.error('[PeriodicSync] Error during sync:', error);
         }
     }, 5 * 60 * 1000);
+
+    // AUTO-REFRESH: Sync all PVC/Team channels after bot startup
+    console.log('[Ready] 🔄 Starting automatic PVC refresh for all guilds...');
+    try {
+        const { performAutoRefresh } = await import('../utils/autoRefresh');
+        await performAutoRefresh(client);
+        console.log('[Ready] ✅ Auto-refresh completed for all guilds');
+    } catch (refreshError) {
+        console.error('[Ready] ⚠️ Auto-refresh encountered errors:', refreshError);
+    }
 }

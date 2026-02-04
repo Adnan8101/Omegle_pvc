@@ -48,10 +48,14 @@ export async function execute(
         });
         return;
     }
-    const [pvcChannel, teamChannel] = await Promise.all([
+    // Bug #12 Fix: Use Promise.allSettled to prevent single failure from blocking all
+    const results = await Promise.allSettled([
         prisma.privateVoiceChannel.findUnique({ where: { channelId } }),
         prisma.teamVoiceChannel.findUnique({ where: { channelId } }),
     ]);
+    const pvcChannel = results[0].status === 'fulfilled' ? results[0].value : null;
+    const teamChannel = results[1].status === 'fulfilled' ? results[1].value : null;
+    
     if (!pvcChannel && !teamChannel) {
         return;
     }

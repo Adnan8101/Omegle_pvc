@@ -19,6 +19,7 @@ import { canRunAdminCommand } from '../utils/permissions';
 import { logAction, LogAction } from '../utils/logger';
 import { invalidateGuildSettings, clearAllCaches as invalidateAllCaches, invalidateChannelPermissions, getOwnerPermissions as getPermanentPermissionsAndCache } from '../utils/cache';
 import { clearGuildState, registerInterfaceChannel, registerChannel, registerTeamChannel, registerTeamInterfaceChannel, transferOwnership, transferTeamOwnership, addUserToJoinOrder, type TeamType } from '../utils/voiceManager';
+import { RETRY_CONFIG, RATE_LIMITS } from '../utils/constants'; // Bug #14 Fix
 const MAIN_BUTTONS = [
     { id: 'pvc_lock' },
     { id: 'pvc_unlock' },
@@ -134,30 +135,40 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
 
     let pvcLogsWebhookUrl = settings?.logsWebhookUrl;
     if (pvcLogsChannel && pvcLogsChannel.type === ChannelType.GuildText) {
-        try {
-            const webhooks = await (pvcLogsChannel as any).fetchWebhooks();
-            const botWebhooks = webhooks.filter((w: any) => w.owner?.id === interaction.client.user?.id && w.name === 'PVC Logger');
-            let webhook = botWebhooks.first();
-            if (!webhook) {
-                const allBotWebhooks = webhooks.filter((w: any) => w.owner?.id === interaction.client.user?.id);
-                if (webhooks.size >= 15 && allBotWebhooks.size > 0) {
-                    for (const oldWebhook of allBotWebhooks.values()) {
-                        await oldWebhook.delete('Cleaning up old webhooks').catch(() => {});
+        // Bug #11 Fix: Add retry logic for webhook creation
+        let webhookAttempts = 0;
+        const maxWebhookAttempts = RETRY_CONFIG.MAX_WEBHOOK_ATTEMPTS; // Bug #14: Use constants
+        while (webhookAttempts < maxWebhookAttempts) {
+            try {
+                const webhooks = await (pvcLogsChannel as any).fetchWebhooks();
+                const botWebhooks = webhooks.filter((w: any) => w.owner?.id === interaction.client.user?.id && w.name === 'PVC Logger');
+                let webhook = botWebhooks.first();
+                if (!webhook) {
+                    const allBotWebhooks = webhooks.filter((w: any) => w.owner?.id === interaction.client.user?.id);
+                    if (webhooks.size >= 15 && allBotWebhooks.size > 0) {
+                        for (const oldWebhook of allBotWebhooks.values()) {
+                            await oldWebhook.delete('Cleaning up old webhooks').catch(() => {});
+                        }
+                    }
+                    webhook = await (pvcLogsChannel as any).createWebhook({
+                        name: 'PVC Logger',
+                        reason: 'PVC Logs Refresh',
+                    });
+                } else if (botWebhooks.size > 1) {
+                    const duplicates = botWebhooks.filter((w: any) => w.id !== webhook.id);
+                    for (const dup of duplicates.values()) {
+                        await dup.delete('Removing duplicate webhook').catch(() => {});
                     }
                 }
-                webhook = await (pvcLogsChannel as any).createWebhook({
-                    name: 'PVC Logger',
-                    reason: 'PVC Logs Refresh',
-                });
-            } else if (botWebhooks.size > 1) {
-                const duplicates = botWebhooks.filter((w: any) => w.id !== webhook.id);
-                for (const dup of duplicates.values()) {
-                    await dup.delete('Removing duplicate webhook').catch(() => {});
+                pvcLogsWebhookUrl = webhook.url;
+                break; // Success, exit retry loop
+            } catch (error: any) {
+                webhookAttempts++;
+                console.error(`[Refresh PVC] Error setting up PVC webhook (attempt ${webhookAttempts}/${maxWebhookAttempts}):`, error?.message || error);
+                if (webhookAttempts < maxWebhookAttempts) {
+                    await new Promise(resolve => setTimeout(resolve, RATE_LIMITS.WEBHOOK_RETRY_DELAY * webhookAttempts)); // Bug #14: Use constants
                 }
             }
-            pvcLogsWebhookUrl = webhook.url;
-        } catch (error: any) {
-            console.error('[Refresh PVC] Error setting up PVC webhook:', error?.message || error);
         }
     }
     let teamLogsWebhookUrl = teamSettings?.logsWebhookUrl;

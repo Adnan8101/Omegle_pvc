@@ -154,6 +154,10 @@ async function handleAddUserSelect(
         return;
     }
     await updateVoicePermissions(channel, users, 'user', 'permit', { ViewChannel: true, Connect: true, SendMessages: true, EmbedLinks: true, AttachFiles: true }, isTeamChannel);
+    
+    // Bug #1 Fix: Invalidate cache after permission change
+    invalidateChannelPermissions(channel.id);
+    
     const targetIds = Array.from(users.keys());
     if (!isTeamChannel) {
         await batchUpsertOwnerPermissions(
@@ -194,6 +198,10 @@ async function handleRemoveUserSelect(
     for (const id of targetIds) {
         await VoiceStateService.removePermit(channel.id, id);
     }
+    
+    // Bug #1 Fix: Invalidate cache after permission change
+    invalidateChannelPermissions(channel.id);
+    
     if (!isTeamChannel) {
         await batchDeleteOwnerPermissions(
             interaction.guild!.id,
@@ -286,6 +294,10 @@ async function handleBlockSelect(
         return;
     }
     await updateVoicePermissions(channel, users, 'user', 'ban', { ViewChannel: false, Connect: false }, isTeamChannel);
+    
+    // Bug #1 Fix: Invalidate cache after permission change
+    invalidateChannelPermissions(channel.id);
+    
     await logAction({
         action: LogAction.USER_BANNED,
         guild: interaction.guild!,
@@ -313,6 +325,10 @@ async function handleUnblockSelect(
     for (const id of targetIds) {
         await VoiceStateService.removeBan(channel.id, id);
     }
+    
+    // Bug #1 Fix: Invalidate cache after permission change
+    invalidateChannelPermissions(channel.id);
+    
     await interaction.update({
         content: `✅ Unblocked ${users.size} user(s) from your voice channel.`,
         components: [],

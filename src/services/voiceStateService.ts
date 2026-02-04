@@ -181,10 +181,8 @@ export class VoiceStateService {
             }
         }
         
-        await this.updateChannelDb(channelId, { isLocked });
-        this.syncToStateStore(channelId, { isLocked });
-        
-        // LAST: Update @everyone permission (deny Connect when locked)
+        // Bug #7 Fix: Update Discord first, then DB to prevent state desync
+        // STEP 1: Update @everyone permission (deny Connect when locked)
         if (channel && channel.type === ChannelType.GuildVoice) {
             try {
                 recordBotEdit(channelId);

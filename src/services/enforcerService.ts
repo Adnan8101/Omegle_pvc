@@ -88,17 +88,29 @@ class EnforcerService {
         if (!guild) return false;
         let isPvc = false;
         let isTeam = false;
+        let channelOwnerId: string | null = null;
         if (channelId) {
             const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
             const team = await prisma.teamVoiceChannel.findUnique({ where: { channelId } });
             isPvc = !!pvc;
             isTeam = !!team;
+            channelOwnerId = pvc?.ownerId || team?.ownerId || null;
+            
+            // Issue #21 Fix: Owner can always edit their own channel
+            if (channelOwnerId === userId) {
+                console.log(`[Enforcer] User ${userId} is channel owner - authorized`);
+                return true;
+            }
         }
-        const [pvcSettings, teamSettings, whitelist] = await Promise.all([
+        // Issue #22 Fix: Use Promise.allSettled for resilience
+        const results = await Promise.allSettled([
             getGuildSettings(guildId),
             prisma.teamVoiceSettings.findUnique({ where: { guildId } }),
             getWhitelist(guildId),
         ]);
+        const pvcSettings = results[0].status === 'fulfilled' ? results[0].value : null;
+        const teamSettings = results[1].status === 'fulfilled' ? results[1].value : null;
+        const whitelist = results[2].status === 'fulfilled' ? results[2].value : [];
         let strictnessEnabled = false;
         if (isTeam && teamSettings) {
             strictnessEnabled = teamSettings.adminStrictness;
@@ -211,11 +223,15 @@ class EnforcerService {
     }
     private async kickUnauthorizedMembers(channel: VoiceChannel, dbState: any): Promise<void> {
         const guild = channel.guild;
-        const [pvcSettings, teamSettings, whitelist] = await Promise.all([
+        // Bug #12 Fix: Use Promise.allSettled to prevent single failure from blocking all
+        const results = await Promise.allSettled([
             getGuildSettings(guild.id),
             prisma.teamVoiceSettings.findUnique({ where: { guildId: guild.id } }),
             getWhitelist(guild.id),
         ]);
+        const pvcSettings = results[0].status === 'fulfilled' ? results[0].value : null;
+        const teamSettings = results[1].status === 'fulfilled' ? results[1].value : null;
+        const whitelist = results[2].status === 'fulfilled' ? results[2].value : [];
         const isTeamChannel = 'teamType' in dbState;
         const strictnessEnabled = isTeamChannel ? teamSettings?.adminStrictness : pvcSettings?.adminStrictness;
         const isLocked = dbState.isLocked;
@@ -250,42 +266,61 @@ class EnforcerService {
         );
         for (const [memberId, member] of channel.members) {
             if (member.user.bot) continue;
+            
+            // Always allow the owner (unless globally blocked)
             if (memberId === dbState.ownerId && !globallyBlockedUserIds.has(memberId)) continue;
+            
+            // Kick globally blocked users immediately
             if (globallyBlockedUserIds.has(memberId)) {
                 await this.kickMemberInstantly(member, channel.name, dbState.ownerId, 'globally blocked');
                 continue;
             }
+            
             const memberRoleIds = member.roles.cache.map(r => r.id);
+            
+            // Kick banned users immediately
             const isBanned = bannedUserIds.has(memberId) ||
                 memberRoleIds.some(roleId => bannedRoleIds.has(roleId));
             if (isBanned) {
                 await this.kickMemberInstantly(member, channel.name, dbState.ownerId, 'blocked');
                 continue;
             }
+            
+            // Check if channel is restricted
             const isRestricted = isLocked || isHidden || isFull;
-            if (strictnessEnabled && isRestricted) {
+            if (!isRestricted) {
+                continue; // Channel is open, allow everyone (except banned)
+            }
+            
+            // BUG FIX: Check permitted users BEFORE admin strictness
+            // Owner's trusted users should always be allowed, regardless of admin strictness
+            const isPermitted = permittedUserIds.has(memberId) ||
+                memberRoleIds.some(roleId => permittedRoleIds.has(roleId));
+            if (isPermitted) {
+                continue;
+            }
+            
+            // Check permanent access (trusted users from /permanent_access)
+            const hasPermanentAccess = stateStore.hasPermanentAccess(guild.id, dbState.ownerId, memberId);
+            if (hasPermanentAccess) {
+                continue;
+            }
+            
+            // NOW check admin strictness (only for non-permitted users)
+            if (strictnessEnabled) {
                 const isWhitelisted = whitelist.some(
                     w => w.targetId === memberId || memberRoleIds.includes(w.targetId)
                 );
                 if (isWhitelisted) {
                     continue;
                 }
+                // Not whitelisted AND not permitted by owner = kick
                 const restrictionReason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
                 await this.kickMemberInstantly(member, channel.name, dbState.ownerId, `not whitelisted - channel ${restrictionReason} (admin strictness)`);
                 continue;
             }
-            if (!isRestricted) {
-                continue;
-            }
-            const isPermitted = permittedUserIds.has(memberId) ||
-                memberRoleIds.some(roleId => permittedRoleIds.has(roleId));
-            if (isPermitted) {
-                continue;
-            }
-            const hasPermanentAccess = stateStore.hasPermanentAccess(guild.id, dbState.ownerId, memberId);
-            if (hasPermanentAccess) {
-                continue;
-            }
+            
+            // No admin strictness, but channel is restricted and user not permitted = kick
             const reason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
             await this.kickMemberInstantly(member, channel.name, dbState.ownerId, reason);
         }

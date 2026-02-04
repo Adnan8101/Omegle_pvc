@@ -401,6 +401,23 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
             }
         }
     }
+    
+    // Bug #5 Fix: Validate all users are not bots
+    const validatedUsers: string[] = [];
+    for (const userId of userIdsToAdd) {
+        try {
+            const user = await guild.members.fetch(userId).catch(() => null);
+            if (user && !user.user.bot) {
+                validatedUsers.push(userId);
+            } else if (user && user.user.bot) {
+                console.log(`[AddUser] Skipping bot user ${userId}`);
+            }
+        } catch {
+            // Invalid user ID, skip
+        }
+    }
+    userIdsToAdd = validatedUsers;
+    
     if (channelOwnerId && userIdsToAdd.includes(channelOwnerId)) {
         const embed = new EmbedBuilder()
             .setDescription('You cannot add yourself to your own channel.')
@@ -438,6 +455,7 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
                         EmbedLinks: true,
                         AttachFiles: true,
                     },
+                    allowWhenHealthy: true, // CRITICAL: Allow !au to work even when system is healthy
                 });
             }
         }
@@ -460,6 +478,10 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
         } else {
             await batchUpsertPermissions(channelId, permissionsToAdd);
         }
+        
+        // Invalidate cache so access checks immediately see new permits
+        invalidateChannelPermissions(channelId);
+        
         if (isSecretCommand) {
             await message.react('✅').catch(() => { });
         } else {
@@ -721,6 +743,7 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
                     guild: channel.guild,
                     channelId,
                     targetId: userId,
+                    allowWhenHealthy: true, // CRITICAL: Allow !ru to work even when system is healthy
                 }).catch(() => { });
                 const memberInChannel = channel.members.get(userId);
                 if (memberInChannel) {

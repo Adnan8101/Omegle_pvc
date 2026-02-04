@@ -24,6 +24,7 @@ import { BUTTON_EMOJI_MAP } from '../../utils/canvasGenerator';
 import { logAction, LogAction } from '../../utils/logger';
 import { isPvcPaused } from '../../utils/pauseManager';
 import { recordBotEdit } from '../../events/channelUpdate';
+import { invalidateChannelPermissions } from '../../utils/cache'; // Bug #1 Fix
 export async function handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
     const { customId, guild, member } = interaction;
     if (!guild || !member) return;
@@ -300,6 +301,10 @@ async function handleLock(interaction: ButtonInteraction, channel: any): Promise
         addTempPermittedUsers(channel.id, memberIds);
     }
     await VoiceStateService.setLock(channel.id, true);
+    
+    // Bug #1 Fix: Invalidate cache after permission change
+    invalidateChannelPermissions(channel.id);
+    
     await interaction.reply({ content: '🔒 Your voice channel has been locked.', flags: [MessageFlags.Ephemeral] });
     await logAction({
         action: LogAction.CHANNEL_LOCKED,
@@ -312,6 +317,10 @@ async function handleLock(interaction: ButtonInteraction, channel: any): Promise
 }
 async function handleUnlock(interaction: ButtonInteraction, channel: any): Promise<void> {
     await VoiceStateService.setLock(channel.id, false);
+    
+    // Bug #1 Fix: Invalidate cache after permission change
+    invalidateChannelPermissions(channel.id);
+    
     await interaction.reply({ content: '🔓 Your voice channel has been unlocked.', flags: [MessageFlags.Ephemeral] });
     await logAction({
         action: LogAction.CHANNEL_UNLOCKED,
