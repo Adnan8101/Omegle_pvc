@@ -333,7 +333,7 @@ export async function execute(client: PVCClient): Promise<void> {
         console.error('[Ready] Error loading PVC state:', error);
     }
 }
-function startPeriodicSync(client: PVCClient, stateStore: any): void {
+async function startPeriodicSync(client: PVCClient, stateStore: any): Promise<void> {
     console.log('[Ready] Starting periodic sync check (every 5 minutes)...');
     setInterval(async () => {
         try {

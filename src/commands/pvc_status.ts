@@ -18,8 +18,14 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     if (!await validateServerCommand(interaction)) return;
     if (!await validateAdminCommand(interaction)) return;
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+    
+    const guild = interaction.guild;
+    if (!guild) {
+        await interaction.editReply({ content: 'This command can only be used in a server.' });
+        return;
+    }
+    
     try {
-        const guild = interaction.guild;
         const settings = await prisma.guildSettings.findUnique({
             where: { guildId: guild.id },
             include: {

@@ -10,27 +10,50 @@ export class VoiceStateService {
      */
     private static async addTempPermitToDb(channelId: string, userId: string, userTag: string): Promise<void> {
         const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
-        const permTable = pvc ? prisma.voicePermission : prisma.teamVoicePermission;
         
-        const existingPerm = await permTable.findUnique({
-            where: { channelId_targetId: { channelId, targetId: userId } },
-        }).catch(() => null);
-        
-        if (!existingPerm || existingPerm.permission !== 'permit') {
-            await permTable.deleteMany({
-                where: { channelId, targetId: userId },
-            }).catch(() => {});
+        // Fix Prisma union type issue by using separate paths
+        if (pvc) {
+            const existingPerm = await prisma.voicePermission.findUnique({
+                where: { channelId_targetId: { channelId, targetId: userId } },
+            }).catch(() => null);
             
-            await permTable.create({
-                data: {
-                    channelId,
-                    targetId: userId,
-                    targetType: 'user',
-                    permission: 'permit',
-                },
-            }).catch(() => {});
+            if (!existingPerm || existingPerm.permission !== 'permit') {
+                await prisma.voicePermission.deleteMany({
+                    where: { channelId, targetId: userId },
+                }).catch(() => {});
+                
+                await prisma.voicePermission.create({
+                    data: {
+                        channelId,
+                        targetId: userId,
+                        targetType: 'user',
+                        permission: 'permit',
+                    },
+                }).catch(() => {});
+                
+                console.log(`[VoiceStateService] ✅ Added temp permit (PVC DB) for ${userTag} (${userId})`);
+            }
+        } else {
+            const existingPerm = await prisma.teamVoicePermission.findUnique({
+                where: { channelId_targetId: { channelId, targetId: userId } },
+            }).catch(() => null);
             
-            console.log(`[VoiceStateService] ✅ Added temp permit (DB) for ${userTag} (${userId})`);
+            if (!existingPerm || existingPerm.permission !== 'permit') {
+                await prisma.teamVoicePermission.deleteMany({
+                    where: { channelId, targetId: userId },
+                }).catch(() => {});
+                
+                await prisma.teamVoicePermission.create({
+                    data: {
+                        channelId,
+                        targetId: userId,
+                        targetType: 'user',
+                        permission: 'permit',
+                    },
+                }).catch(() => {});
+                
+                console.log(`[VoiceStateService] ✅ Added temp permit (Team DB) for ${userTag} (${userId})`);
+            }
         }
     }
 

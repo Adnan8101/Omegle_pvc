@@ -19,7 +19,7 @@ export async function validateAdminCommand(interaction: ChatInputCommandInteract
 
 export async function validateChannelType(
     interaction: ChatInputCommandInteraction,
-    channel: Channel | null,
+    channel: any, // Accept any type from interaction.options
     expectedType: ChannelType,
     errorMessage: string
 ): Promise<boolean> {
