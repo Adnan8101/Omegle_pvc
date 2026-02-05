@@ -1083,6 +1083,7 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
         }
         
         if (!channel || channel.type !== ChannelType.GuildVoice) return;
+        
         const isTeamChannel = Boolean(dbTeam);
         const ownerId = dbPvc?.ownerId || dbTeam?.ownerId;
         if (dbPvc) {
@@ -1091,27 +1092,7 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
             registerTeamChannel(channelId, guild.id, dbTeam.ownerId, dbTeam.teamType.toLowerCase() as TeamType);
         }
         
-        // CRITICAL FIX: Fetch channel from Discord if not in cache
-        let channel = guild.channels.cache.get(channelId);
-        if (!channel) {
-            try {
-                console.log(`[HandleLeave] Channel ${channelId} (DB fallback) not in cache, fetching from Discord...`);
-                channel = await guild.channels.fetch(channelId) as any;
-                console.log(`[HandleLeave] ✅ Successfully fetched channel ${channelId} (DB fallback) from Discord`);
-            } catch (fetchErr) {
-                console.error(`[HandleLeave] ❌ Failed to fetch channel ${channelId} (DB fallback) from Discord:`, fetchErr);
-                // Channel might be already deleted, clean up our records
-                console.log(`[HandleLeave] Channel not found on Discord (DB fallback), cleaning up database...`);
-                if (isTeamChannel) {
-                    await deleteTeamChannel(channelId, guild.id);
-                } else {
-                    await deletePrivateChannel(channelId, guild.id);
-                }
-                return;
-            }
-        }
-        
-        if (!channel || channel.type !== ChannelType.GuildVoice) return;
+        if (channel.members.size === 0) {
             if (isTeamChannel) {
                 try {
                     await logAction({
