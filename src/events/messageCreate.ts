@@ -437,24 +437,38 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
         permission: 'permit' as const,
     }));
     try {
+        const discordResults: { userId: string; success: boolean; error?: string }[] = [];
         if (channel && channel.type === ChannelType.GuildVoice) {
             recordBotEdit(channelId);
+            console.log(`[AddUser] 🔧 Setting Discord permissions for ${userIdsToAdd.length} users...`);
             for (const userId of userIdsToAdd) {
-                await vcnsBridge.editPermission({
-                    guild: channel.guild,
-                    channelId,
-                    targetId: userId,
-                    permissions: {
-                        ViewChannel: true,
-                        Connect: true,
-                        SendMessages: true,
-                        EmbedLinks: true,
-                        AttachFiles: true,
-                    },
-                    allowWhenHealthy: true, 
-                });
+                try {
+                    const result = await vcnsBridge.editPermission({
+                        guild: channel.guild,
+                        channelId,
+                        targetId: userId,
+                        permissions: {
+                            ViewChannel: true,
+                            Connect: true,
+                            SendMessages: true,
+                            EmbedLinks: true,
+                            AttachFiles: true,
+                        },
+                        allowWhenHealthy: true, 
+                    });
+                    discordResults.push({ userId, success: result.success, error: result.error });
+                    if (!result.success) {
+                        console.error(`[AddUser] ❌ Failed to set Discord perms for ${userId}: ${result.error}`);
+                    }
+                } catch (err: any) {
+                    console.error(`[AddUser] ❌ Exception setting Discord perms for ${userId}:`, err);
+                    discordResults.push({ userId, success: false, error: err.message });
+                }
             }
+            const successCount = discordResults.filter(r => r.success).length;
+            console.log(`[AddUser] ✅ Discord permissions set: ${successCount}/${userIdsToAdd.length} succeeded`);
         }
+        console.log(`[AddUser] 💾 Updating database permissions...`);
         if (isTeamChannel) {
             for (const perm of permissionsToAdd) {
                 await prisma.teamVoicePermission.upsert({
@@ -474,7 +488,13 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
         } else {
             await batchUpsertPermissions(channelId, permissionsToAdd);
         }
+        console.log(`[AddUser] ✅ Database permissions updated for ${userIdsToAdd.length} users`);
+        await new Promise(resolve => setTimeout(resolve, 150));
         invalidateChannelPermissions(channelId);
+        console.log(`[AddUser] ✅ Cache invalidated for channel ${channelId}`);
+        console.log(`[AddUser] 📊 Tracking access grants...`);
+        const frequentUsers = await trackAccessGrant(guild.id, message.author.id, userIdsToAdd);
+        console.log(`[AddUser] ✅ All operations complete - reacting to message`);
         if (isSecretCommand) {
             await message.react('✅').catch(() => { });
         } else {
@@ -482,6 +502,8 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
             for (let i = 0; i < count; i++) {
                 await message.react(NUMBER_EMOJIS[i]).catch(() => { });
             }
+        }
+        if (!isSecretCommand) {
             if (shouldShowHint) {
                 clearCommandTracking('au', message.author.id, guild.id);
                 const hintEmbed = new EmbedBuilder()
@@ -508,7 +530,6 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
                     .setFooter({ text: 'This saves time and makes managing your VC easier!' });
                 await message.reply({ embeds: [frequencyTipEmbed] }).catch(() => { });
             }
-            const frequentUsers = await trackAccessGrant(guild.id, message.author.id, userIdsToAdd);
             if (frequentUsers.length > 0) {
                 for (const freq of frequentUsers) {
                     await markAccessSuggested(guild.id, message.author.id, freq.targetId);
@@ -728,27 +749,50 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
     }
     const shouldShowHint = !isSecretCommand && trackCommandUsage('ru', message.author.id, guild.id, userIdsToRemove.length);
     const channel = guild.channels.cache.get(channelId);
-    try {
+    try {\n        const discordResults: { userId: string; removed: boolean; kicked: boolean; errors: string[] }[] = [];
         if (channel && channel.type === ChannelType.GuildVoice) {
             recordBotEdit(channelId);
+            console.log(`[RemoveUser] 🔧 Removing Discord permissions for ${userIdsToRemove.length} users...`);
             for (const userId of userIdsToRemove) {
-                await vcnsBridge.removePermission({
-                    guild: channel.guild,
-                    channelId,
-                    targetId: userId,
-                    allowWhenHealthy: true, 
-                }).catch(() => { });
-                const memberInChannel = channel.members.get(userId);
-                if (memberInChannel) {
-                    await vcnsBridge.kickUser({
+                const result = { userId, removed: false, kicked: false, errors: [] as string[] };
+                try {
+                    const removeResult = await vcnsBridge.removePermission({
                         guild: channel.guild,
                         channelId,
-                        userId,
-                        reason: 'Removed/banned from channel',
-                    }).catch(() => { });
+                        targetId: userId,
+                        allowWhenHealthy: true, 
+                    });
+                    result.removed = removeResult.success;
+                    if (!removeResult.success) {
+                        result.errors.push(`Permission removal: ${removeResult.error}`);
+                    }
+                } catch (err: any) {
+                    result.errors.push(`Exception removing permission: ${err.message}`);
+                }
+                const memberInChannel = channel.members.get(userId);
+                if (memberInChannel) {
+                    try {
+                        await vcnsBridge.kickUser({
+                            guild: channel.guild,
+                            channelId,
+                            userId,
+                            reason: 'Removed/banned from channel',
+                        });
+                        result.kicked = true;
+                    } catch (err: any) {
+                        result.errors.push(`Failed to kick: ${err.message}`);
+                    }
+                }
+                discordResults.push(result);
+                if (result.errors.length > 0) {
+                    console.error(`[RemoveUser] ⚠️ Errors for ${userId}:`, result.errors);
                 }
             }
+            const removedCount = discordResults.filter(r => r.removed).length;
+            const kickedCount = discordResults.filter(r => r.kicked).length;
+            console.log(`[RemoveUser] ✅ Discord operations: ${removedCount}/${userIdsToRemove.length} removed, ${kickedCount} kicked`);
         }
+        console.log(`[RemoveUser] 💾 Updating database permissions...`);
         if (isTeamChannel) {
             await prisma.teamVoicePermission.deleteMany({
                 where: { channelId, targetId: { in: userIdsToRemove } },
@@ -774,7 +818,11 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
                 })),
             });
         }
+        console.log(`[RemoveUser] ✅ Database updated - ${userIdsToRemove.length} users banned`);
+        await new Promise(resolve => setTimeout(resolve, 150));
         invalidateChannelPermissions(channelId);
+        console.log(`[RemoveUser] ✅ Cache invalidated for channel ${channelId}`);
+        console.log(`[RemoveUser] ✅ All operations complete - reacting to message`);
         if (isSecretCommand) {
             await message.react('✅').catch(() => { });
         } else {

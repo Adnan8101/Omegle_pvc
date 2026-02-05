@@ -168,7 +168,7 @@ async function handleAccessProtection(
         }).catch(() => { });
         return true;
     }
-    let dbState = await VoiceStateService.getVCState(newChannelId);
+    let dbState = await VoiceStateService.getVCState(newChannelId, true);
     if (!dbState) {
         const memoryState = stateStore.getChannelState(newChannelId);
         if (memoryState) {
@@ -354,9 +354,9 @@ async function handleAccessProtection(
         }
         return false;
     }
-    console.log(`[VCNS-ACCESS] 🎟️ Checking channel permits for ${member.user.tag}, permissions count: ${dbPermissions.length}`);
+    console.log(`[VCNS-ACCESS] 🎟️ Checking channel permits for ${member.user.tag} (${member.id}), permissions count: ${dbPermissions.length}`);
     if (dbPermissions.length > 0) {
-        console.log(`[VCNS-ACCESS] 🎟️ All permissions in DB:`, dbPermissions.map((p: any) => `${p.targetId}:${p.permission}`).join(', '));
+        console.log(`[VCNS-ACCESS] 🎟️ All permissions in DB:`, dbPermissions.map((p: any) => `targetId=${p.targetId}, targetType=${p.targetType}, permission=${p.permission}`).join(' | '));
     }
     const hasDirectPermit = dbPermissions.some(
         (p: any) => p.targetId === member.id && p.permission === 'permit'
@@ -365,7 +365,7 @@ async function handleAccessProtection(
         (p: any) => memberRoleIds.includes(p.targetId) && p.targetType === 'role' && p.permission === 'permit'
     );
     const hasChannelPermit = hasDirectPermit || hasRolePermit;
-    console.log(`[VCNS-ACCESS] 🎟️ Permit check for ${member.id}: direct=${hasDirectPermit}, role=${hasRolePermit}, has=${hasChannelPermit}`);
+    console.log(`[VCNS-ACCESS] 🎟️ Permit check for ${member.user.tag} (${member.id}): direct=${hasDirectPermit}, role=${hasRolePermit}, total=${hasChannelPermit}`);
     if (hasChannelPermit) {
         console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} has CHANNEL PERMIT (permanent !au OR temporary lock/hide) - bypass all restrictions`);
         return false;

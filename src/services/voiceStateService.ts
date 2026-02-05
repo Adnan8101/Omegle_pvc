@@ -92,9 +92,9 @@ export class VoiceStateService {
             return false;
         }
     }
-    static async getVCState(channelId: string): Promise<any | null> {
+    static async getVCState(channelId: string, forceRefreshPermissions: boolean = false): Promise<any | null> {
         try {
-            console.log(`[VoiceStateService] 🔍 getVCState called for channelId: ${channelId}`);
+            console.log(`[VoiceStateService] 🔍 getVCState called for channelId: ${channelId}, forceRefresh=${forceRefreshPermissions}`);
             const memoryState = stateStore.getChannelState(channelId);
             let state = await prisma.privateVoiceChannel.findUnique({
                 where: { channelId },

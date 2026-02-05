@@ -226,9 +226,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         await interaction.editReply('❌ Failed to update settings in database. Please try again.');
         return;
     }
-    
     await interaction.editReply('🔄 **Refresh started!** Processing channels, syncing permissions, and updating interface...\nThis may take a moment for large servers.');
-    
     console.log('[Refresh PVC] Invalidating caches...');
     invalidateGuildSettings(guild.id);
     invalidateAllCaches();

@@ -154,7 +154,10 @@ async function handleAddUserSelect(
         return;
     }
     await updateVoicePermissions(channel, users, 'user', 'permit', { ViewChannel: true, Connect: true, SendMessages: true, EmbedLinks: true, AttachFiles: true }, isTeamChannel);
+    console.log(`[AddUserSelect] ✅ Voice permissions updated for ${users.size} users`);
+    await new Promise(resolve => setTimeout(resolve, 150));
     invalidateChannelPermissions(channel.id);
+    console.log(`[AddUserSelect] ✅ Cache invalidated for channel ${channel.id}`);
     const targetIds = Array.from(users.keys());
     if (!isTeamChannel) {
         await batchUpsertOwnerPermissions(
@@ -171,6 +174,7 @@ async function handleAddUserSelect(
         channelId: channel.id,
         details: `Added ${users.size} user(s)`,
     });
+    console.log(`[AddUserSelect] ✅ All operations complete - updating interaction`);
     await interaction.update({
         content: `✅ Trusted ${users.size} user(s) in your voice channel.`,
         components: [],
@@ -195,7 +199,10 @@ async function handleRemoveUserSelect(
     for (const id of targetIds) {
         await VoiceStateService.removePermit(channel.id, id);
     }
+    console.log(`[RemoveUserSelect] ✅ Permissions removed for ${users.size} users`);
+    await new Promise(resolve => setTimeout(resolve, 150));
     invalidateChannelPermissions(channel.id);
+    console.log(`[RemoveUserSelect] ✅ Cache invalidated for channel ${channel.id}`);
     if (!isTeamChannel) {
         await batchDeleteOwnerPermissions(
             interaction.guild!.id,
@@ -211,6 +218,7 @@ async function handleRemoveUserSelect(
         channelId: channel.id,
         details: `Removed ${users.size} user(s)`,
     });
+    console.log(`[RemoveUserSelect] ✅ All operations complete - updating interaction`);
     await interaction.update({
         content: `✅ Untrusted ${users.size} user(s) from your voice channel.`,
         components: [],
@@ -336,7 +344,10 @@ async function handleBlockSelect(
             }
         }
     }
+    console.log(`[BlockSelect] ✅ Blocked ${users.size} users`);
+    await new Promise(resolve => setTimeout(resolve, 150));
     invalidateChannelPermissions(channel.id);
+    console.log(`[BlockSelect] ✅ Cache invalidated for channel ${channel.id}`);
     await logAction({
         action: LogAction.USER_BANNED,
         guild: guild,
@@ -345,6 +356,7 @@ async function handleBlockSelect(
         channelId: channel.id,
         details: `Blocked ${users.size} user(s)`,
     });
+    console.log(`[BlockSelect] ✅ All operations complete - updating interaction`);
     await interaction.update({
         content: `🚫 Blocked ${users.size} user(s) from your voice channel. They have been kicked and cannot rejoin.`,
         components: [],
@@ -364,7 +376,11 @@ async function handleUnblockSelect(
     for (const id of targetIds) {
         await VoiceStateService.removeBan(channel.id, id);
     }
+    console.log(`[UnblockSelect] ✅ Unblocked ${users.size} users`);
+    await new Promise(resolve => setTimeout(resolve, 150));
     invalidateChannelPermissions(channel.id);
+    console.log(`[UnblockSelect] ✅ Cache invalidated for channel ${channel.id}`);
+    console.log(`[UnblockSelect] ✅ All operations complete - updating interaction`);
     await interaction.update({
         content: `✅ Unblocked ${users.size} user(s) from your voice channel.`,
         components: [],
