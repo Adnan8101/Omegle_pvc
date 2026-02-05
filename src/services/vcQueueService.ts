@@ -68,9 +68,15 @@ export class VCQueueService {
             console.log(`[VCQueue] User ${data.userId} already has pending request ${existing.id}`);
             return existing as VCCreationRequest;
         }
+        
+        // Serialize permission data (with BigInt support for Discord.js permissions)
         const permissionData = data.permissionOverwrites 
-            ? JSON.stringify(data.permissionOverwrites) 
+            ? JSON.stringify(data.permissionOverwrites, (key, value) =>
+                typeof value === 'bigint' ? value.toString() : value
+            ) 
             : null;
+        
+        // Create new request with 24 hour expiration (extended on each retry)
         const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
         const request = await prisma.vCCreationRequest.create({
             data: {
