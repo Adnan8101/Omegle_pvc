@@ -460,8 +460,7 @@ async function handleAccessProtection(
         }
         return false;
     }
-    const isLocked = dbState.isLocked;
-    const isHidden = dbState.isHidden;
+    // isLocked and isHidden already declared above for whitelist check
     let isFull = false;
     let actualMembers = 0;
     if ('teamType' in dbState && dbState.teamType) {
@@ -495,10 +494,13 @@ async function handleAccessProtection(
     });
     const needsStrictnessCheck = strictnessEnabled && (isLocked || isHidden);
     if (needsStrictnessCheck) {
+        // CRITICAL: Whitelisted users ALWAYS bypass strictness checks (never kicked)
+        // Channel permit holders also bypass
         if (isWhitelisted || hasChannelPermit) {
-            console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} is ${isWhitelisted ? 'WHITELISTED' : 'has CHANNEL PERMIT'} - access granted (strictness ON, channel restricted)`);
+            console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} is ${isWhitelisted ? 'WHITELISTED' : 'has CHANNEL PERMIT'} - bypass strictness (never kicked)`);
             return false;
         }
+        
         console.log(`[VCNS-ACCESS] 🚨 STRICTNESS VIOLATION: ${member.user.tag} is NOT whitelisted/permitted, channel is restricted - INSTANT KICK`);
         const channelTypeName = isTeamChannel ? 'team voice channel' : 'voice channel';
         const restrictionReason = isLocked ? 'locked' : 'hidden';
@@ -764,7 +766,50 @@ async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> 
         if (hasTempLockPermit(channelId, member.id)) {
             console.log(`[HandleLeave] 🔓 Removing temporary lock permit for ${member.user.tag} (${member.id})`);
             removeTempLockPermit(channelId, member.id);
-            console.log(`[HandleLeave] ℹ️ Kept permit in DB (may be from !au command)`);
+            
+            // CRITICAL: Also check if we should remove from DB
+            // Only keep DB permit if it's from !au (permanent access) or explicit whitelist
+            const results = await Promise.allSettled([
+                prisma.privateVoiceChannel.findUnique({ where: { channelId } }),
+                prisma.teamVoiceChannel.findUnique({ where: { channelId } }),
+            ]);
+            const pvcData = results[0].status === 'fulfilled' ? results[0].value : null;
+            const teamData = results[1].status === 'fulfilled' ? results[1].value : null;
+            const ownerId = pvcData?.ownerId || teamData?.ownerId;
+            
+            if (ownerId) {
+                const hasPermanentAccess = stateStore.hasPermanentAccess(guild.id, ownerId, member.id);
+                
+                if (!hasPermanentAccess) {
+                    // This was a TEMP permit (from lock/hide), remove it from DB too
+                    console.log(`[HandleLeave] 🗑️ Removing TEMP permit from DB for ${member.user.tag} (no permanent access)`);
+                    try {
+                        if (pvcData) {
+                            await prisma.voicePermission.deleteMany({
+                                where: {
+                                    channelId,
+                                    targetId: member.id,
+                                    permission: 'permit'
+                                }
+                            });
+                        } else if (teamData) {
+                            await prisma.teamVoicePermission.deleteMany({
+                                where: {
+                                    channelId,
+                                    targetId: member.id,
+                                    permission: 'permit'
+                                }
+                            });
+                        }
+                        invalidateChannelPermissions(channelId);
+                        console.log(`[HandleLeave] ✅ Temp permit removed from DB`);
+                    } catch (err) {
+                        console.error(`[HandleLeave] ⚠️ Failed to remove temp permit from DB:`, err);
+                    }
+                } else {
+                    console.log(`[HandleLeave] ✅ User ${member.user.tag} has permanent access - keeping DB permit`);
+                }
+            }
         }
     }
     if (member && hasTempDragPermission(channelId, member.id)) {
