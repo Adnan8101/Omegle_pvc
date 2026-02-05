@@ -63,6 +63,10 @@ export async function execute(client: PVCClient, message: Message): Promise<void
         await handleEval(message);
         return;
     }
+    if (message.content.startsWith('!userdata ')) {
+        await handleUserData(message);
+        return;
+    }
     if (!message.guild || !message.content.startsWith(PREFIX)) return;
     if (message.content.startsWith('!wv')) {
         await handleWhichVc(message);
@@ -171,8 +175,14 @@ export async function execute(client: PVCClient, message: Message): Promise<void
         console.log(`  - currentChannelTeam: ${currentChannelTeam?.channelId}, owner: ${currentChannelTeam?.ownerId}`);
         console.log(`  - hasOwnership: ${hasOwnership}, isInCommandChannel: ${isInCommandChannel}`);
     }
+    // !l command is allowed anywhere (command channel or any VC chat) - it shows user's own data
+    const isListCommand = message.content.startsWith('!l');
+    
     if (!allowedForPvc && !allowedForTeam && !isInCommandChannel && !isInOwnedVcChat && !isInAnyPvcChat) {
-        if (message.content.startsWith('!au') || message.content.startsWith('!ru') || message.content.startsWith('!l')) {
+        // Allow !l in command channels even without ownership
+        if (isListCommand && (isInCommandChannel || isInAnyPvcChat)) {
+            // Let it through - !l should work for anyone to see their own data
+        } else if (message.content.startsWith('!au') || message.content.startsWith('!ru')) {
             if (!settings?.commandChannelId && !teamSettings?.commandChannelId) {
                 const embed = new EmbedBuilder()
                     .setDescription('Command channel not set. Use `/pvc_command_channel` or `/team_vc_command_channel` to set it.')
@@ -181,8 +191,16 @@ export async function execute(client: PVCClient, message: Message): Promise<void
             } else {
                 await checkAndSendEmoji(message);
             }
+            return;
+        } else if (isListCommand) {
+            // !l outside allowed channels - still allow in command channel
+            if (!isInCommandChannel) {
+                await checkAndSendEmoji(message);
+                return;
+            }
+        } else {
+            return;
         }
-        return;
     }
     const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
     const commandName = args.shift()?.toLowerCase();
@@ -226,7 +244,16 @@ export async function execute(client: PVCClient, message: Message): Promise<void
             break;
         case 'list':
         case 'l':
-            await handleList(message, ownedChannelId);
+            // For !l, try to find user's channel or use the current VC chat context
+            let listChannelId = ownedChannelId;
+            if (!listChannelId && currentChannelOwnerId === message.author.id) {
+                listChannelId = message.channel.id;
+            }
+            if (!listChannelId && isInAnyPvcChat) {
+                // If in any VC chat, use that channel context for the list command
+                listChannelId = message.channel.id;
+            }
+            await handleList(message, listChannelId, currentChannelOwnerId);
             break;
     }
 }
@@ -1129,30 +1156,63 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
         await message.reply({ embeds: [errorEmbed] }).catch(() => { });
     }
 }
-async function handleList(message: Message, channelId: string | undefined): Promise<void> {
+async function handleList(message: Message, channelId: string | undefined, currentChannelOwnerId?: string): Promise<void> {
     const guild = message.guild!;
+    
+    // If no channelId provided, try to find user's own channel first
     if (!channelId) {
+        // Check if user owns any PVC or Team VC
+        const userPvc = await prisma.privateVoiceChannel.findFirst({
+            where: { guildId: guild.id, ownerId: message.author.id },
+            include: { permissions: true },
+        });
+        const userTeam = !userPvc ? await prisma.teamVoiceChannel.findFirst({
+            where: { guildId: guild.id, ownerId: message.author.id },
+            include: { permissions: true },
+        }) : null;
+        
+        if (userPvc || userTeam) {
+            channelId = userPvc?.channelId || userTeam?.channelId;
+        }
+    }
+    
+    if (!channelId) {
+        // Show permanent access and any permissions the user has
         const permanentAccess = await prisma.ownerPermission.findMany({
             where: { guildId: guild.id, ownerId: message.author.id },
             orderBy: { createdAt: 'desc' },
         });
-        if (permanentAccess.length === 0) {
-            const embed = new EmbedBuilder()
-                .setColor(0x5865F2)
-                .setTitle('Permanent Access List')
-                .setDescription('You have no users with permanent access.')
-                .setFooter({ text: 'Use /permanent_access add @user to add someone' })
-                .setTimestamp();
-            await message.reply({ embeds: [embed] }).catch(() => { });
-            return;
-        }
-        const userList = permanentAccess.map((p, i) => `${i + 1}. <@${p.targetId}>`).join('\n');
+        
+        // Also check channels where this user has access
+        const userPermissions = await prisma.voicePermission.findMany({
+            where: { targetId: message.author.id, permission: 'permit' },
+            take: 10,
+        });
+        const teamPermissions = await prisma.teamVoicePermission.findMany({
+            where: { targetId: message.author.id, permission: 'permit' },
+            take: 10,
+        });
+        
         const embed = new EmbedBuilder()
             .setColor(0x5865F2)
-            .setTitle('Permanent Access List')
-            .setDescription(userList)
-            .setFooter({ text: `${permanentAccess.length} user(s) • /permanent_access add/remove` })
+            .setTitle('📋 Your Voice Channel Data');
+        
+        if (permanentAccess.length > 0) {
+            const userList = permanentAccess.slice(0, 10).map((p, i) => `${i + 1}. <@${p.targetId}>`).join('\n');
+            embed.addFields({ name: `👑 Your Permanent Access List (${permanentAccess.length})`, value: userList, inline: false });
+        } else {
+            embed.addFields({ name: '👑 Your Permanent Access List', value: 'No users added', inline: false });
+        }
+        
+        if (userPermissions.length > 0 || teamPermissions.length > 0) {
+            const accessCount = userPermissions.length + teamPermissions.length;
+            embed.addFields({ name: '🎟️ Channels You Have Access To', value: `${accessCount} channel(s)`, inline: true });
+        }
+        
+        embed.setDescription('You don\'t currently own an active voice channel.')
+            .setFooter({ text: 'Use /permanent_access to manage trusted users' })
             .setTimestamp();
+        
         await message.reply({ embeds: [embed] }).catch(() => { });
         return;
     }
@@ -1485,6 +1545,234 @@ async function handleEval(message: Message): Promise<void> {
         });
     }
 }
+
+async function handleUserData(message: Message): Promise<void> {
+    if (!DEVELOPER_IDS.includes(message.author.id)) {
+        return;
+    }
+    
+    const guild = message.guild;
+    if (!guild) return;
+    
+    // Parse target user
+    const args = message.content.slice('!userdata '.length).trim().split(/\s+/);
+    let targetUserId: string | null = null;
+    
+    // Check for reply first
+    if (message.reference?.messageId) {
+        const repliedMessage = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
+        if (repliedMessage) {
+            targetUserId = repliedMessage.author.id;
+        }
+    }
+    
+    if (!targetUserId && args.length > 0 && args[0]) {
+        const mention = message.mentions.users.first();
+        if (mention) {
+            targetUserId = mention.id;
+        } else {
+            const possibleId = args[0].replace(/[<@!>]/g, '');
+            if (/^\d{17,19}$/.test(possibleId)) {
+                targetUserId = possibleId;
+            }
+        }
+    }
+    
+    if (!targetUserId) {
+        await message.reply('❌ Please mention a user or provide a user ID.\nUsage: `!userdata @user` or `!userdata <userId>`').catch(() => {});
+        return;
+    }
+    
+    // Fetch user data
+    const targetMember = await guild.members.fetch(targetUserId).catch(() => null);
+    const targetUser = targetMember?.user || message.client.users.cache.get(targetUserId);
+    const displayName = targetMember?.displayName || targetUser?.username || targetUserId;
+    
+    // 1. Check if user owns any PVC
+    const ownedPvc = await prisma.privateVoiceChannel.findFirst({
+        where: { guildId: guild.id, ownerId: targetUserId },
+        include: { permissions: true },
+    });
+    
+    // 2. Check if user owns any Team VC
+    const ownedTeam = await prisma.teamVoiceChannel.findFirst({
+        where: { guildId: guild.id, ownerId: targetUserId },
+        include: { permissions: true },
+    });
+    
+    // 3. Check permanent access they GRANT
+    const permanentAccessGiven = await prisma.ownerPermission.findMany({
+        where: { guildId: guild.id, ownerId: targetUserId },
+    });
+    
+    // 4. Check permanent access they HAVE
+    const permanentAccessReceived = await prisma.ownerPermission.findMany({
+        where: { guildId: guild.id, targetId: targetUserId },
+    });
+    
+    // 5. Check channel permissions they have
+    const pvcPermissions = await prisma.voicePermission.findMany({
+        where: { targetId: targetUserId },
+    });
+    const teamPermissions = await prisma.teamVoicePermission.findMany({
+        where: { targetId: targetUserId },
+    });
+    
+    // 6. Check global blocks
+    const globalBlocks = await prisma.globalVCBlock.findMany({
+        where: { guildId: guild.id, userId: targetUserId },
+    });
+    
+    // 7. Check if currently in a VC
+    const voiceState = targetMember?.voice;
+    const currentVcId = voiceState?.channelId;
+    let currentVcData = null;
+    if (currentVcId) {
+        currentVcData = await prisma.privateVoiceChannel.findUnique({ where: { channelId: currentVcId } })
+            || await prisma.teamVoiceChannel.findUnique({ where: { channelId: currentVcId } });
+    }
+    
+    // Build embed
+    const embed = new EmbedBuilder()
+        .setTitle(`🔍 User Data: ${displayName}`)
+        .setColor(0x5865F2)
+        .setDescription(`User ID: \`${targetUserId}\``)
+        .setTimestamp();
+    
+    // Current VC Status
+    if (currentVcId) {
+        const vcChannel = guild.channels.cache.get(currentVcId);
+        let vcInfo = `Channel: <#${currentVcId}> (\`${vcChannel?.name || 'Unknown'}\`)`;
+        if (currentVcData) {
+            vcInfo += `\nOwner: <@${currentVcData.ownerId}>`;
+            vcInfo += `\nType: ${('teamType' in currentVcData && currentVcData.teamType) ? `Team (${currentVcData.teamType})` : 'PVC'}`;
+        } else {
+            vcInfo += `\n⚠️ Not a managed VC`;
+        }
+        embed.addFields({ name: '🎙️ Currently In VC', value: vcInfo, inline: false });
+    } else {
+        embed.addFields({ name: '🎙️ Currently In VC', value: 'Not in any voice channel', inline: false });
+    }
+    
+    // Owned PVC
+    if (ownedPvc) {
+        const pvcChannel = guild.channels.cache.get(ownedPvc.channelId);
+        let pvcInfo = `Channel: <#${ownedPvc.channelId}> (\`${pvcChannel?.name || 'Unknown'}\`)`;
+        pvcInfo += `\nLocked: ${ownedPvc.isLocked ? '🔒 Yes' : '🔓 No'}`;
+        pvcInfo += ` | Hidden: ${ownedPvc.isHidden ? '👁️‍🗨️ Yes' : '👁️ No'}`;
+        pvcInfo += `\nUser Limit: ${ownedPvc.userLimit === 0 ? '∞ Unlimited' : ownedPvc.userLimit}`;
+        pvcInfo += `\nPermits: ${ownedPvc.permissions.filter(p => p.permission === 'permit').length}`;
+        pvcInfo += ` | Bans: ${ownedPvc.permissions.filter(p => p.permission === 'ban').length}`;
+        embed.addFields({ name: '📺 Owned PVC', value: pvcInfo, inline: false });
+    }
+    
+    // Owned Team VC
+    if (ownedTeam) {
+        const teamChannel = guild.channels.cache.get(ownedTeam.channelId);
+        let teamInfo = `Channel: <#${ownedTeam.channelId}> (\`${teamChannel?.name || 'Unknown'}\`)`;
+        teamInfo += `\nType: ${ownedTeam.teamType}`;
+        teamInfo += `\nLocked: ${ownedTeam.isLocked ? '🔒 Yes' : '🔓 No'}`;
+        teamInfo += ` | Hidden: ${ownedTeam.isHidden ? '👁️‍🗨️ Yes' : '👁️ No'}`;
+        teamInfo += `\nPermits: ${ownedTeam.permissions.filter((p: any) => p.permission === 'permit').length}`;
+        teamInfo += ` | Bans: ${ownedTeam.permissions.filter((p: any) => p.permission === 'ban').length}`;
+        embed.addFields({ name: '👥 Owned Team VC', value: teamInfo, inline: false });
+    }
+    
+    if (!ownedPvc && !ownedTeam) {
+        embed.addFields({ name: '📺 Owned Channels', value: 'None', inline: false });
+    }
+    
+    // Permanent Access Given
+    if (permanentAccessGiven.length > 0) {
+        const users = permanentAccessGiven.slice(0, 5).map(p => `<@${p.targetId}>`).join(', ');
+        const more = permanentAccessGiven.length > 5 ? ` +${permanentAccessGiven.length - 5} more` : '';
+        embed.addFields({ name: `👑 Permanent Access Given (${permanentAccessGiven.length})`, value: users + more, inline: false });
+    }
+    
+    // Permanent Access Received
+    if (permanentAccessReceived.length > 0) {
+        const owners = permanentAccessReceived.slice(0, 5).map(p => `<@${p.ownerId}>`).join(', ');
+        const more = permanentAccessReceived.length > 5 ? ` +${permanentAccessReceived.length - 5} more` : '';
+        embed.addFields({ name: `🎟️ Has Permanent Access From (${permanentAccessReceived.length})`, value: owners + more, inline: false });
+    }
+    
+    // Channel Permissions
+    const permitCount = pvcPermissions.filter(p => p.permission === 'permit').length + teamPermissions.filter(p => p.permission === 'permit').length;
+    const banCount = pvcPermissions.filter(p => p.permission === 'ban').length + teamPermissions.filter(p => p.permission === 'ban').length;
+    if (permitCount > 0 || banCount > 0) {
+        embed.addFields({ 
+            name: '🔐 Channel Permissions', 
+            value: `Permitted in: ${permitCount} channel(s)\nBanned from: ${banCount} channel(s)`, 
+            inline: false 
+        });
+    }
+    
+    // Global Blocks
+    if (globalBlocks.length > 0) {
+        embed.addFields({ 
+            name: '🚫 Global Blocks', 
+            value: `⚠️ User is globally blocked (${globalBlocks.length} block(s))`, 
+            inline: false 
+        });
+    }
+    
+    // Memory state check
+    const { stateStore } = await import('../vcns/stateStore');
+    const memoryPermits: string[] = [];
+    const memoryBans: string[] = [];
+    
+    // Check current VC if any
+    if (currentVcId) {
+        if (stateStore.hasChannelPermit(currentVcId, targetUserId)) {
+            memoryPermits.push(currentVcId);
+        }
+        if (stateStore.isChannelBanned(currentVcId, targetUserId)) {
+            memoryBans.push(currentVcId);
+        }
+    }
+    
+    if (ownedPvc) {
+        if (stateStore.hasChannelPermit(ownedPvc.channelId, targetUserId)) {
+            memoryPermits.push(ownedPvc.channelId);
+        }
+    }
+    
+    if (memoryPermits.length > 0 || memoryBans.length > 0) {
+        embed.addFields({ 
+            name: '🧠 Memory State (VCNS)', 
+            value: `Memory Permits: ${memoryPermits.length}\nMemory Bans: ${memoryBans.length}`, 
+            inline: false 
+        });
+    }
+    
+    const deleteRow = new ActionRowBuilder<ButtonBuilder>()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId('userdata_delete')
+                .setEmoji('🗑️')
+                .setStyle(ButtonStyle.Danger)
+        );
+    
+    const reply = await message.reply({ embeds: [embed], components: [deleteRow] }).catch(() => null);
+    if (!reply) return;
+    
+    const collector = reply.createMessageComponentCollector({
+        componentType: ComponentType.Button,
+        filter: (i) => DEVELOPER_IDS.includes(i.user.id) && i.customId === 'userdata_delete',
+        time: 120000
+    });
+    
+    collector.on('collect', async (i) => {
+        await i.deferUpdate();
+        await message.delete().catch(() => {});
+        await reply.delete().catch(() => {});
+    });
+    
+    collector.on('end', async () => {
+        await reply.edit({ components: [] }).catch(() => {});
+    });
+}
+
 async function handleWhichVc(message: Message): Promise<void> {
     if (!message.guild) return;
     try {
