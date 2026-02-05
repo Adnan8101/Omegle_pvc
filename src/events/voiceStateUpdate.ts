@@ -249,7 +249,60 @@ async function handleAccessProtection(
         return false;
     }
 
-    // CRITICAL: First check stateStore memory (most up-to-date from !au/!ru commands)
+    // CRITICAL: Check PERMANENT ACCESS FIRST - this OVERRIDES everything (even bans)
+    const hasPermanentAccess = stateStore.hasPermanentAccess(guild.id, ownerId, member.id);
+    console.log(`[VCNS-ACCESS] 🔑 Permanent access check for ${member.user.tag}: ${hasPermanentAccess}`);
+    
+    if (hasPermanentAccess) {
+        console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} has PERMANENT ACCESS - bypass ALL restrictions (including bans)`);
+        // Sync Discord permissions for permanent access user
+        const channel = guild.channels.cache.get(newChannelId);
+        if (channel && channel.type === ChannelType.GuildVoice) {
+            try {
+                const { recordBotEdit } = await import('../events/channelUpdate');
+                recordBotEdit(newChannelId);
+                await vcnsBridge.editPermission({
+                    guild,
+                    channelId: newChannelId,
+                    targetId: member.id,
+                    permissions: {
+                        ViewChannel: true,
+                        Connect: true,
+                    },
+                    allowWhenHealthy: true,
+                });
+                console.log(`[VCNS-ACCESS] ✅ Synced Discord permissions for permanent access user ${member.user.tag}`);
+            } catch (err) {
+                console.error(`[VCNS-ACCESS] ❌ Failed to set Discord permissions:`, err);
+            }
+        }
+        // Ensure DB has permit (remove any ban, add permit)
+        try {
+            if ('teamType' in dbState) {
+                await prisma.teamVoicePermission.upsert({
+                    where: { channelId_targetId: { channelId: newChannelId, targetId: member.id } },
+                    update: { permission: 'permit', targetType: 'user' },
+                    create: { channelId: newChannelId, targetId: member.id, targetType: 'user', permission: 'permit' },
+                });
+            } else {
+                await prisma.voicePermission.upsert({
+                    where: { channelId_targetId: { channelId: newChannelId, targetId: member.id } },
+                    update: { permission: 'permit', targetType: 'user' },
+                    create: { channelId: newChannelId, targetId: member.id, targetType: 'user', permission: 'permit' },
+                });
+            }
+            invalidateChannelPermissions(newChannelId);
+            // Also update stateStore memory
+            stateStore.removeChannelBan(newChannelId, member.id);
+            stateStore.addChannelPermit(newChannelId, member.id);
+            console.log(`[VCNS-ACCESS] ✅ Ensured DB permit & memory for permanent access user ${member.user.tag}`);
+        } catch (dbErr) {
+            console.error(`[VCNS-ACCESS] ⚠️ Failed to ensure DB permit:`, dbErr);
+        }
+        return false; // Allow access - permanent access users are NEVER kicked
+    }
+
+    // CRITICAL: Then check stateStore memory (most up-to-date from !au/!ru commands)
     const memoryPermit = stateStore.hasChannelPermit(newChannelId, member.id);
     const memoryBan = stateStore.isChannelBanned(newChannelId, member.id);
     
@@ -326,73 +379,10 @@ async function handleAccessProtection(
         }).catch(() => { });
         return true;
     }
-    const hasPermanentAccess = stateStore.hasPermanentAccess(guild.id, ownerId, member.id);
-    console.log(`[VCNS-ACCESS] 🔑 Permanent access check for ${member.user.tag}: ${hasPermanentAccess}`);
-    if (hasPermanentAccess) {
-        console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} has PERMANENT ACCESS from owner - bypass all restrictions`);
-        const channel = guild.channels.cache.get(newChannelId);
-        if (channel && channel.type === ChannelType.GuildVoice) {
-            try {
-                const { recordBotEdit } = await import('../events/channelUpdate');
-                recordBotEdit(newChannelId);
-                await vcnsBridge.editPermission({
-                    guild,
-                    channelId: newChannelId,
-                    targetId: member.id,
-                    permissions: {
-                        ViewChannel: true,
-                        Connect: true,
-                    },
-                    allowWhenHealthy: true,
-                });
-                console.log(`[VCNS-ACCESS] ✅ Synced Discord permissions for permanent access user ${member.user.tag}`);
-            } catch (err) {
-                console.error(`[VCNS-ACCESS] ❌ Failed to set Discord permissions:`, err);
-            }
-        }
-        try {
-            if ('teamType' in dbState) {
-                await prisma.teamVoicePermission.upsert({
-                    where: {
-                        channelId_targetId: {
-                            channelId: newChannelId,
-                            targetId: member.id,
-                        },
-                    },
-                    update: { permission: 'permit', targetType: 'user' },
-                    create: {
-                        channelId: newChannelId,
-                        targetId: member.id,
-                        targetType: 'user',
-                        permission: 'permit',
-                    },
-                });
-            } else {
-                await prisma.voicePermission.upsert({
-                    where: {
-                        channelId_targetId: {
-                            channelId: newChannelId,
-                            targetId: member.id,
-                        },
-                    },
-                    update: { permission: 'permit', targetType: 'user' },
-                    create: {
-                        channelId: newChannelId,
-                        targetId: member.id,
-                        targetType: 'user',
-                        permission: 'permit',
-                    },
-                });
-            }
-            invalidateChannelPermissions(newChannelId);
-            // Also update stateStore memory
-            stateStore.addChannelPermit(newChannelId, member.id);
-            console.log(`[VCNS-ACCESS] ✅ Ensured DB permit for permanent access user ${member.user.tag}`);
-        } catch (dbErr) {
-            console.error(`[VCNS-ACCESS] ⚠️ Failed to ensure DB permit:`, dbErr);
-        }
-        return false;
-    }
+    
+    // Note: Permanent access is already checked at the TOP of this function
+    // Any user reaching this point does NOT have permanent access
+    
     console.log(`[VCNS-ACCESS] 🎟️ Checking channel permits for ${member.user.tag} (${member.id}), permissions count: ${dbPermissions.length}`);
     if (dbPermissions.length > 0) {
         console.log(`[VCNS-ACCESS] 🎟️ All permissions in DB:`, dbPermissions.map((p: any) => `targetId=${p.targetId}, targetType=${p.targetType}, permission=${p.permission}`).join(' | '));
@@ -410,7 +400,7 @@ async function handleAccessProtection(
         return false;
     }
     console.log(`[VCNS-ACCESS] ⚙️ Loading guild settings for admin strictness...`);
-    const isTeamChannel = 'teamType' in dbState;
+    const isTeamChannel = 'teamType' in dbState && !!dbState.teamType;
     const globalBlocks = await prisma.globalVCBlock.findMany({
         where: { guildId: guild.id, userId: member.id },
     });
@@ -484,7 +474,9 @@ async function handleAccessProtection(
     const isHidden = dbState.isHidden;
     let isFull = false;
     let actualMembers = 0;
-    if ('teamType' in dbState && dbState.teamType) {
+    const isTeamChannelByType = 'teamType' in dbState && !!dbState.teamType;
+    console.log(`[VCNS-ACCESS] 📌 Channel type: isTeamChannel=${isTeamChannelByType}, teamType=${dbState.teamType || 'none'}`);
+    if (isTeamChannelByType) {
         const teamTypeLower = (dbState.teamType as string).toLowerCase() as keyof typeof TEAM_USER_LIMITS;
         const teamLimit = TEAM_USER_LIMITS[teamTypeLower];
         if (teamLimit) {
@@ -492,13 +484,17 @@ async function handleAccessProtection(
             if (voiceChannel && voiceChannel.type === ChannelType.GuildVoice) {
                 actualMembers = voiceChannel.members.size;
                 isFull = actualMembers > teamLimit;
+                console.log(`[VCNS-ACCESS] 📊 Team capacity: actualMembers=${actualMembers}, teamLimit=${teamLimit}, isFull=${isFull}`);
             }
         }
     } else {
         const voiceChannel = newState.channel;
         if (voiceChannel && voiceChannel.type === ChannelType.GuildVoice) {
             actualMembers = voiceChannel.members.size;
-            isFull = dbState.userLimit > 0 && actualMembers > dbState.userLimit;
+            // Explicitly check for valid positive userLimit (0 or undefined/null means unlimited)
+            const userLimit = typeof dbState.userLimit === 'number' ? dbState.userLimit : 0;
+            isFull = userLimit > 0 && actualMembers > userLimit;
+            console.log(`[VCNS-ACCESS] 📊 Capacity check: actualMembers=${actualMembers}, userLimit=${userLimit}, isFull=${isFull}`);
         }
     }
     const isRestricted = isLocked || isHidden || isFull;

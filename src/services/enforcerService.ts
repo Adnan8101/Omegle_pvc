@@ -241,7 +241,10 @@ class EnforcerService {
                 isFull = channel.members.size >= teamLimit;
             }
         } else {
-            isFull = dbState.userLimit > 0 && channel.members.size > dbState.userLimit;
+            // Explicitly check for valid positive userLimit (0 or undefined/null means unlimited)
+            const userLimit = typeof dbState.userLimit === 'number' ? dbState.userLimit : 0;
+            isFull = userLimit > 0 && channel.members.size > userLimit;
+            console.log(`[Enforcer] 📊 Capacity check: members=${channel.members.size}, userLimit=${userLimit}, isFull=${isFull}`);
         }
         const globalBlocks = await prisma.globalVCBlock.findMany({
             where: { guildId: guild.id },
