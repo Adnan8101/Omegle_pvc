@@ -117,12 +117,24 @@ export class VoiceStateService {
     static async getVCState(channelId: string): Promise<any | null> {
         try {
             console.log(`[VoiceStateService] 🔍 getVCState called for channelId: ${channelId}`);
+            
+            // CRITICAL FIX: Check stateStore first for real-time state (isLocked, isHidden, userLimit)
+            const memoryState = stateStore.getChannelState(channelId);
+            
             let state = await prisma.privateVoiceChannel.findUnique({
                 where: { channelId },
                 include: { permissions: true },
             });
             if (state) {
-                console.log(`[VoiceStateService] ✅ Found PVC in DB: channelId=${channelId}, ownerId=${state.ownerId}, isLocked=${state.isLocked}`);
+                // Merge stateStore values if available (they're more current than DB)
+                if (memoryState) {
+                    state.isLocked = memoryState.isLocked;
+                    state.isHidden = memoryState.isHidden;
+                    state.userLimit = memoryState.userLimit || 0;
+                    console.log(`[VoiceStateService] ✅ Found PVC in DB + merged stateStore: channelId=${channelId}, ownerId=${state.ownerId}, isLocked=${state.isLocked}, isHidden=${state.isHidden}`);
+                } else {
+                    console.log(`[VoiceStateService] ✅ Found PVC in DB: channelId=${channelId}, ownerId=${state.ownerId}, isLocked=${state.isLocked}`);
+                }
                 return state;
             }
             console.log(`[VoiceStateService] ⚠️ Not found in privateVoiceChannel, checking teamVoiceChannel...`);
@@ -131,7 +143,15 @@ export class VoiceStateService {
                 include: { permissions: true },
             }) as any;
             if (state) {
-                console.log(`[VoiceStateService] ✅ Found Team VC in DB: channelId=${channelId}, ownerId=${state.ownerId}`);
+                // Merge stateStore values if available (they're more current than DB)
+                if (memoryState) {
+                    state.isLocked = memoryState.isLocked;
+                    state.isHidden = memoryState.isHidden;
+                    state.userLimit = memoryState.userLimit || 0;
+                    console.log(`[VoiceStateService] ✅ Found Team VC in DB + merged stateStore: channelId=${channelId}, ownerId=${state.ownerId}, isLocked=${state.isLocked}, isHidden=${state.isHidden}`);
+                } else {
+                    console.log(`[VoiceStateService] ✅ Found Team VC in DB: channelId=${channelId}, ownerId=${state.ownerId}`);
+                }
                 return state;
             }
             console.log(`[VoiceStateService] ❌ Channel ${channelId} NOT FOUND in any database table`);
@@ -157,6 +177,11 @@ export class VoiceStateService {
         }
     }
     static async setLock(channelId: string, isLocked: boolean): Promise<void> {
+        // CRITICAL: Update stateStore IMMEDIATELY (synchronous) before any async operations
+        // This prevents race conditions where users join during the lock process
+        this.syncToStateStore(channelId, { isLocked });
+        console.log(`[VoiceStateService] ✅ Updated stateStore IMMEDIATELY: isLocked=${isLocked} for channel ${channelId}`);
+        
         const channel = client.channels.cache.get(channelId) as VoiceChannel | undefined;
         const { recordBotEdit } = await import('../events/channelUpdate');
         
@@ -185,6 +210,7 @@ export class VoiceStateService {
                                     Connect: true,
                                     ViewChannel: null, // Keep existing
                                 },
+                                allowWhenHealthy: true, // Allow immediate sync for lock operation
                             });
                             console.log(`[VoiceStateService] ✅ Set Discord Connect permission for ${member.user.tag} (${member.id})`);
                         } catch (err) {
@@ -204,7 +230,10 @@ export class VoiceStateService {
             }
         }
         
-        // Bug #7 Fix: Update Discord first, then DB to prevent state desync
+        // Update database (async, but stateStore already updated above)
+        await this.updateChannelDb(channelId, { isLocked });
+        console.log(`[VoiceStateService] ✅ Updated DB: isLocked=${isLocked} for channel ${channelId}`);
+        
         // STEP 1: Update @everyone permission (deny Connect when locked)
         if (channel && channel.type === ChannelType.GuildVoice) {
             try {
@@ -234,6 +263,11 @@ export class VoiceStateService {
         // We've already set the Discord permissions above, which is sufficient.
     }
     static async setHidden(channelId: string, isHidden: boolean): Promise<void> {
+        // CRITICAL: Update stateStore IMMEDIATELY (synchronous) before any async operations
+        // This prevents race conditions where users join during the hide process
+        this.syncToStateStore(channelId, { isHidden });
+        console.log(`[VoiceStateService] ✅ Updated stateStore IMMEDIATELY: isHidden=${isHidden} for channel ${channelId}`);
+        
         const channel = client.channels.cache.get(channelId) as VoiceChannel | undefined;
         const { recordBotEdit } = await import('../events/channelUpdate');
         
@@ -262,6 +296,7 @@ export class VoiceStateService {
                                     ViewChannel: true,
                                     Connect: null, // Keep existing
                                 },
+                                allowWhenHealthy: true, // Allow immediate sync for hide operation
                             });
                             console.log(`[VoiceStateService] ✅ Set Discord ViewChannel permission for ${member.user.tag} (${member.id})`);
                         } catch (err) {
@@ -281,8 +316,9 @@ export class VoiceStateService {
             }
         }
         
+        // Update database (async, but stateStore already updated above)
         await this.updateChannelDb(channelId, { isHidden });
-        this.syncToStateStore(channelId, { isHidden });
+        console.log(`[VoiceStateService] ✅ Updated DB: isHidden=${isHidden} for channel ${channelId}`);
         
         // LAST: Update @everyone permission (deny ViewChannel when hidden)
         if (channel && channel.type === ChannelType.GuildVoice) {
