@@ -219,6 +219,7 @@ class EnforcerService {
     }
     private async kickUnauthorizedMembers(channel: VoiceChannel, dbState: any): Promise<void> {
         const guild = channel.guild;
+        const channelId = channel.id;
         const results = await Promise.allSettled([
             getGuildSettings(guild.id),
             prisma.teamVoiceSettings.findUnique({ where: { guildId: guild.id } }),
@@ -259,6 +260,17 @@ class EnforcerService {
         const permittedRoleIds = new Set(
             permissions.filter((p: any) => p.permission === 'permit' && p.targetType === 'role').map((p: any) => p.targetId)
         );
+        
+        // CRITICAL: Also include stateStore memory permissions (most recent from !au/!ru commands)
+        const memoryPermits = stateStore.getChannelPermits(channelId);
+        const memoryBans = stateStore.getChannelBans(channelId);
+        for (const userId of memoryPermits) {
+            permittedUserIds.add(userId);
+        }
+        for (const userId of memoryBans) {
+            bannedUserIds.add(userId);
+        }
+        
         for (const [memberId, member] of channel.members) {
             if (member.user.bot) continue;
             if (memberId === dbState.ownerId && !globallyBlockedUserIds.has(memberId)) continue;
@@ -442,6 +454,32 @@ class EnforcerService {
                 });
             }
         }
+        
+        // CRITICAL: Also include stateStore memory permissions (most recent from !au/!ru commands)
+        const channelId = dbState.channelId;
+        const memoryPermits = stateStore.getChannelPermits(channelId);
+        const memoryBans = stateStore.getChannelBans(channelId);
+        const alreadyProcessed = new Set((dbState.permissions || []).map((p: any) => p.targetId));
+        
+        for (const userId of memoryPermits) {
+            if (!alreadyProcessed.has(userId)) {
+                overwrites.push({
+                    id: userId,
+                    type: OverwriteType.Member,
+                    allow: [PermissionFlagsBits.Connect, PermissionFlagsBits.ViewChannel],
+                });
+            }
+        }
+        for (const userId of memoryBans) {
+            if (!alreadyProcessed.has(userId)) {
+                overwrites.push({
+                    id: userId,
+                    type: OverwriteType.Member,
+                    deny: [PermissionFlagsBits.Connect, PermissionFlagsBits.ViewChannel],
+                });
+            }
+        }
+        
         const permanentAccessTargets = stateStore.getPermanentAccessTargets(guildId, dbState.ownerId);
         for (const targetId of permanentAccessTargets) {
             const alreadyHasPermission = (dbState.permissions || []).some(

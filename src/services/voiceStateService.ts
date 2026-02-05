@@ -96,6 +96,8 @@ export class VoiceStateService {
         try {
             console.log(`[VoiceStateService] 🔍 getVCState called for channelId: ${channelId}, forceRefresh=${forceRefreshPermissions}`);
             const memoryState = stateStore.getChannelState(channelId);
+            
+            // CRITICAL: Always use fresh DB read, no caching
             let state = await prisma.privateVoiceChannel.findUnique({
                 where: { channelId },
                 include: { permissions: true },
@@ -109,6 +111,28 @@ export class VoiceStateService {
                 } else {
                     console.log(`[VoiceStateService] ✅ Found PVC in DB: channelId=${channelId}, ownerId=${state.ownerId}, isLocked=${state.isLocked}`);
                 }
+                
+                // CRITICAL: Merge stateStore memory permissions with DB permissions
+                // Memory permissions are most recent (from !au/!ru commands)
+                const memoryPermits = stateStore.getChannelPermits(channelId);
+                const memoryBans = stateStore.getChannelBans(channelId);
+                if (memoryPermits.length > 0 || memoryBans.length > 0) {
+                    console.log(`[VoiceStateService] 🧠 Merging memory permissions: ${memoryPermits.length} permits, ${memoryBans.length} bans`);
+                    // Create a map of DB permissions
+                    const permissionMap = new Map<string, any>();
+                    for (const perm of state.permissions) {
+                        permissionMap.set(perm.targetId, perm);
+                    }
+                    // Override with memory permissions (they are more recent)
+                    for (const userId of memoryPermits) {
+                        permissionMap.set(userId, { targetId: userId, targetType: 'user', permission: 'permit' });
+                    }
+                    for (const userId of memoryBans) {
+                        permissionMap.set(userId, { targetId: userId, targetType: 'user', permission: 'ban' });
+                    }
+                    state.permissions = Array.from(permissionMap.values());
+                }
+                
                 return state;
             }
             console.log(`[VoiceStateService] ⚠️ Not found in privateVoiceChannel, checking teamVoiceChannel...`);
@@ -125,6 +149,25 @@ export class VoiceStateService {
                 } else {
                     console.log(`[VoiceStateService] ✅ Found Team VC in DB: channelId=${channelId}, ownerId=${state.ownerId}`);
                 }
+                
+                // CRITICAL: Merge stateStore memory permissions for team channels too
+                const memoryPermits = stateStore.getChannelPermits(channelId);
+                const memoryBans = stateStore.getChannelBans(channelId);
+                if (memoryPermits.length > 0 || memoryBans.length > 0) {
+                    console.log(`[VoiceStateService] 🧠 Merging memory permissions for team: ${memoryPermits.length} permits, ${memoryBans.length} bans`);
+                    const permissionMap = new Map<string, any>();
+                    for (const perm of state.permissions) {
+                        permissionMap.set(perm.targetId, perm);
+                    }
+                    for (const userId of memoryPermits) {
+                        permissionMap.set(userId, { targetId: userId, targetType: 'user', permission: 'permit' });
+                    }
+                    for (const userId of memoryBans) {
+                        permissionMap.set(userId, { targetId: userId, targetType: 'user', permission: 'ban' });
+                    }
+                    state.permissions = Array.from(permissionMap.values());
+                }
+                
                 return state;
             }
             console.log(`[VoiceStateService] ❌ Channel ${channelId} NOT FOUND in any database table`);

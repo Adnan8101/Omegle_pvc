@@ -430,7 +430,20 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
     }
     const shouldShowHint = !isSecretCommand && trackCommandUsage('au', message.author.id, guild.id, userIdsToAdd.length);
     const shouldShowFrequencyTip = !isSecretCommand && trackAuFrequency(message.author.id, guild.id);
-    const channel = guild.channels.cache.get(channelId);
+    
+    // CRITICAL: Fetch channel fresh from API, not cache
+    let channel = guild.channels.cache.get(channelId);
+    if (!channel) {
+        try {
+            const fetched = await guild.channels.fetch(channelId);
+            if (fetched && fetched.type === ChannelType.GuildVoice) {
+                channel = fetched;
+            }
+        } catch (fetchErr) {
+            console.error(`[AddUser] ❌ Failed to fetch channel ${channelId}:`, fetchErr);
+        }
+    }
+    
     const permissionsToAdd = userIdsToAdd.map(userId => ({
         targetId: userId,
         targetType: 'user' as const,
@@ -489,9 +502,120 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
             await batchUpsertPermissions(channelId, permissionsToAdd);
         }
         console.log(`[AddUser] ✅ Database permissions updated for ${userIdsToAdd.length} users`);
-        await new Promise(resolve => setTimeout(resolve, 150));
+        
+        // CRITICAL: Invalidate cache FIRST to prevent stale reads
         invalidateChannelPermissions(channelId);
         console.log(`[AddUser] ✅ Cache invalidated for channel ${channelId}`);
+        
+        // CRITICAL: Update stateStore memory for immediate access checks
+        for (const userId of userIdsToAdd) {
+            stateStore.addChannelPermit(channelId, userId);
+        }
+        console.log(`[AddUser] ✅ StateStore memory updated with ${userIdsToAdd.length} permits`);
+        
+        // CRITICAL: Cross-check verification - verify Discord + DB + Memory ALL have the permissions before reacting
+        await new Promise(resolve => setTimeout(resolve, 150)); // Delay for consistency
+        
+        console.log(`[AddUser] 🔍 Starting FULL cross-check verification...`);
+        let allVerified = true;
+        const verificationResults: { userId: string; discord: boolean; db: boolean; memory: boolean }[] = [];
+        
+        // Refresh channel from Discord API for permission check
+        let freshChannel = channel;
+        if (channel && channel.type === ChannelType.GuildVoice) {
+            try {
+                const fetched = await guild.channels.fetch(channelId);
+                if (fetched && fetched.type === ChannelType.GuildVoice) {
+                    freshChannel = fetched;
+                }
+            } catch {}
+        }
+        
+        for (const userId of userIdsToAdd) {
+            const result = { userId, discord: false, db: false, memory: false };
+            
+            // 1. Check Discord permission
+            if (freshChannel && freshChannel.type === ChannelType.GuildVoice) {
+                const overwrite = freshChannel.permissionOverwrites.cache.get(userId);
+                result.discord = overwrite ? overwrite.allow.has('Connect') : false;
+            }
+            
+            // 2. Check DB permission
+            const dbCheck = isTeamChannel
+                ? await prisma.teamVoicePermission.findUnique({
+                    where: { channelId_targetId: { channelId, targetId: userId } }
+                })
+                : await prisma.voicePermission.findUnique({
+                    where: { channelId_targetId: { channelId, targetId: userId } }
+                });
+            result.db = dbCheck?.permission === 'permit';
+            
+            // 3. Check Memory (stateStore)
+            result.memory = stateStore.hasChannelPermit(channelId, userId);
+            
+            verificationResults.push(result);
+            
+            if (!result.discord || !result.db || !result.memory) {
+                allVerified = false;
+                console.error(`[AddUser] ❌ Cross-check FAILED for ${userId}: Discord=${result.discord}, DB=${result.db}, Memory=${result.memory}`);
+            } else {
+                console.log(`[AddUser] ✅ Cross-check PASSED for ${userId}: Discord=${result.discord}, DB=${result.db}, Memory=${result.memory}`);
+            }
+        }
+        
+        // If verification failed, retry the failed parts
+        if (!allVerified) {
+            console.log(`[AddUser] ⚠️ Some verifications failed - attempting retry...`);
+            for (const result of verificationResults) {
+                if (!result.discord || !result.db || !result.memory) {
+                    const userId = result.userId;
+                    
+                    // Retry Discord permission
+                    if (!result.discord && channel && channel.type === ChannelType.GuildVoice) {
+                        try {
+                            recordBotEdit(channelId);
+                            await vcnsBridge.editPermission({
+                                guild: channel.guild,
+                                channelId,
+                                targetId: userId,
+                                permissions: { ViewChannel: true, Connect: true },
+                                allowWhenHealthy: true,
+                            });
+                        } catch {}
+                    }
+                    
+                    // Retry DB
+                    if (!result.db) {
+                        try {
+                            if (isTeamChannel) {
+                                await prisma.teamVoicePermission.upsert({
+                                    where: { channelId_targetId: { channelId, targetId: userId } },
+                                    create: { channelId, targetId: userId, targetType: 'user', permission: 'permit' },
+                                    update: { permission: 'permit' },
+                                });
+                            } else {
+                                await prisma.voicePermission.upsert({
+                                    where: { channelId_targetId: { channelId, targetId: userId } },
+                                    create: { channelId, targetId: userId, targetType: 'user', permission: 'permit' },
+                                    update: { permission: 'permit' },
+                                });
+                            }
+                        } catch {}
+                    }
+                    
+                    // Retry Memory
+                    if (!result.memory) {
+                        stateStore.addChannelPermit(channelId, userId);
+                    }
+                }
+            }
+            invalidateChannelPermissions(channelId);
+            await new Promise(resolve => setTimeout(resolve, 100));
+            console.log(`[AddUser] ✅ Retry completed`);
+        }
+        
+        console.log(`[AddUser] ✅ Full cross-check verification ${allVerified ? 'PASSED' : 'completed with retry'}`);
+        
         console.log(`[AddUser] 📊 Tracking access grants...`);
         const frequentUsers = await trackAccessGrant(guild.id, message.author.id, userIdsToAdd);
         console.log(`[AddUser] ✅ All operations complete - reacting to message`);
@@ -748,7 +872,20 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
         return;
     }
     const shouldShowHint = !isSecretCommand && trackCommandUsage('ru', message.author.id, guild.id, userIdsToRemove.length);
-    const channel = guild.channels.cache.get(channelId);
+    
+    // CRITICAL: Fetch channel fresh from API, not cache
+    let channel = guild.channels.cache.get(channelId);
+    if (!channel) {
+        try {
+            const fetched = await guild.channels.fetch(channelId);
+            if (fetched && fetched.type === ChannelType.GuildVoice) {
+                channel = fetched;
+            }
+        } catch (fetchErr) {
+            console.error(`[RemoveUser] ❌ Failed to fetch channel ${channelId}:`, fetchErr);
+        }
+    }
+    
     try {
         const discordResults: { userId: string; removed: boolean; kicked: boolean; errors: string[] }[] = [];
         
@@ -771,7 +908,18 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
                 } catch (err: any) {
                     result.errors.push(`Exception removing permission: ${err.message}`);
                 }
-                const memberInChannel = channel.members.get(userId);
+                
+                // CRITICAL: Fetch member fresh to check if still in channel
+                let memberInChannel = channel.members.get(userId);
+                if (!memberInChannel) {
+                    try {
+                        const member = await guild.members.fetch(userId).catch(() => null);
+                        if (member && member.voice.channelId === channelId) {
+                            memberInChannel = member;
+                        }
+                    } catch {}
+                }
+                
                 if (memberInChannel) {
                     try {
                         await vcnsBridge.kickUser({
@@ -821,9 +969,124 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
             });
         }
         console.log(`[RemoveUser] ✅ Database updated - ${userIdsToRemove.length} users banned`);
-        await new Promise(resolve => setTimeout(resolve, 150));
+        
+        // CRITICAL: Invalidate cache FIRST to prevent stale reads
         invalidateChannelPermissions(channelId);
         console.log(`[RemoveUser] ✅ Cache invalidated for channel ${channelId}`);
+        
+        // CRITICAL: Update stateStore memory for immediate access checks
+        for (const userId of userIdsToRemove) {
+            stateStore.removeChannelPermit(channelId, userId);
+            stateStore.addChannelBan(channelId, userId);
+        }
+        console.log(`[RemoveUser] ✅ StateStore memory updated with ${userIdsToRemove.length} bans`);
+        
+        // CRITICAL: Cross-check verification - verify Discord + DB + Memory ALL have the bans before reacting
+        await new Promise(resolve => setTimeout(resolve, 150)); // Delay for consistency
+        
+        console.log(`[RemoveUser] 🔍 Starting FULL cross-check verification...`);
+        let allVerified = true;
+        const verificationResults: { userId: string; discord: boolean; db: boolean; memory: boolean }[] = [];
+        
+        // Refresh channel from Discord API for permission check
+        let freshChannel = channel;
+        if (channel && channel.type === ChannelType.GuildVoice) {
+            try {
+                const fetched = await guild.channels.fetch(channelId);
+                if (fetched && fetched.type === ChannelType.GuildVoice) {
+                    freshChannel = fetched;
+                }
+            } catch {}
+        }
+        
+        for (const userId of userIdsToRemove) {
+            const result = { userId, discord: false, db: false, memory: false };
+            
+            // 1. Check Discord permission (should NOT have Connect, or overwrite removed)
+            if (freshChannel && freshChannel.type === ChannelType.GuildVoice) {
+                const overwrite = freshChannel.permissionOverwrites.cache.get(userId);
+                // If no overwrite or if deny has Connect, it's correctly removed/banned
+                result.discord = !overwrite || overwrite.deny.has('Connect') || !overwrite.allow.has('Connect');
+            } else {
+                result.discord = true; // Can't verify, assume OK
+            }
+            
+            // 2. Check DB permission
+            const dbCheck = isTeamChannel
+                ? await prisma.teamVoicePermission.findUnique({
+                    where: { channelId_targetId: { channelId, targetId: userId } }
+                })
+                : await prisma.voicePermission.findUnique({
+                    where: { channelId_targetId: { channelId, targetId: userId } }
+                });
+            result.db = dbCheck?.permission === 'ban';
+            
+            // 3. Check Memory (stateStore)
+            result.memory = stateStore.isChannelBanned(channelId, userId);
+            
+            verificationResults.push(result);
+            
+            if (!result.discord || !result.db || !result.memory) {
+                allVerified = false;
+                console.error(`[RemoveUser] ❌ Cross-check FAILED for ${userId}: Discord=${result.discord}, DB=${result.db}, Memory=${result.memory}`);
+            } else {
+                console.log(`[RemoveUser] ✅ Cross-check PASSED for ${userId}: Discord=${result.discord}, DB=${result.db}, Memory=${result.memory}`);
+            }
+        }
+        
+        // If verification failed, retry the failed parts
+        if (!allVerified) {
+            console.log(`[RemoveUser] ⚠️ Some verifications failed - attempting retry...`);
+            for (const result of verificationResults) {
+                if (!result.discord || !result.db || !result.memory) {
+                    const userId = result.userId;
+                    
+                    // Retry Discord permission removal
+                    if (!result.discord && channel && channel.type === ChannelType.GuildVoice) {
+                        try {
+                            recordBotEdit(channelId);
+                            await vcnsBridge.removePermission({
+                                guild: channel.guild,
+                                channelId,
+                                targetId: userId,
+                                allowWhenHealthy: true,
+                            });
+                        } catch {}
+                    }
+                    
+                    // Retry DB
+                    if (!result.db) {
+                        try {
+                            if (isTeamChannel) {
+                                await prisma.teamVoicePermission.upsert({
+                                    where: { channelId_targetId: { channelId, targetId: userId } },
+                                    create: { channelId, targetId: userId, targetType: 'user', permission: 'ban' },
+                                    update: { permission: 'ban' },
+                                });
+                            } else {
+                                await prisma.voicePermission.upsert({
+                                    where: { channelId_targetId: { channelId, targetId: userId } },
+                                    create: { channelId, targetId: userId, targetType: 'user', permission: 'ban' },
+                                    update: { permission: 'ban' },
+                                });
+                            }
+                        } catch {}
+                    }
+                    
+                    // Retry Memory
+                    if (!result.memory) {
+                        stateStore.removeChannelPermit(channelId, userId);
+                        stateStore.addChannelBan(channelId, userId);
+                    }
+                }
+            }
+            invalidateChannelPermissions(channelId);
+            await new Promise(resolve => setTimeout(resolve, 100));
+            console.log(`[RemoveUser] ✅ Retry completed`);
+        }
+        
+        console.log(`[RemoveUser] ✅ Full cross-check verification ${allVerified ? 'PASSED' : 'completed with retry'}`);
+        
         console.log(`[RemoveUser] ✅ All operations complete - reacting to message`);
         if (isSecretCommand) {
             await message.react('✅').catch(() => { });

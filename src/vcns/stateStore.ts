@@ -25,6 +25,8 @@ export class StateStore extends EventEmitter {
     private cleanupInterval: NodeJS.Timeout | null = null;
     private globalBlocks: Map<string, { reason?: string; blockedAt: number }> = new Map(); 
     private permanentAccess: Map<string, Set<string>> = new Map(); 
+    private channelPermits: Map<string, Set<string>> = new Map(); // channelId -> Set of permitted userIds
+    private channelBans: Map<string, Set<string>> = new Map(); // channelId -> Set of banned userIds
     constructor() {
         super();
         this.systemState = this.createDefaultSystemState();
@@ -202,6 +204,9 @@ export class StateStore extends EventEmitter {
         if (state) {
             this.ownerToChannel.delete(`${state.guildId}:${state.ownerId}`);
             this.channelStates.delete(channelId);
+            // Also clean up channel permits and bans
+            this.channelPermits.delete(channelId);
+            this.channelBans.delete(channelId);
             this.emit('channelDeleted', channelId);
         }
     }
@@ -277,6 +282,72 @@ export class StateStore extends EventEmitter {
             this.addPermanentAccess(grant.guildId, grant.ownerId, grant.targetId);
         }
     }
+
+    // Channel-level permit management (for !au command)
+    public addChannelPermit(channelId: string, userId: string): void {
+        if (!this.channelPermits.has(channelId)) {
+            this.channelPermits.set(channelId, new Set());
+        }
+        this.channelPermits.get(channelId)!.add(userId);
+        // Remove from bans if present
+        this.channelBans.get(channelId)?.delete(userId);
+        console.log(`[StateStore] ✅ Added channel permit: channel=${channelId}, user=${userId}`);
+    }
+
+    public removeChannelPermit(channelId: string, userId: string): void {
+        this.channelPermits.get(channelId)?.delete(userId);
+        console.log(`[StateStore] ✅ Removed channel permit: channel=${channelId}, user=${userId}`);
+    }
+
+    public hasChannelPermit(channelId: string, userId: string): boolean {
+        return this.channelPermits.get(channelId)?.has(userId) || false;
+    }
+
+    // Channel-level ban management (for !ru command)
+    public addChannelBan(channelId: string, userId: string): void {
+        if (!this.channelBans.has(channelId)) {
+            this.channelBans.set(channelId, new Set());
+        }
+        this.channelBans.get(channelId)!.add(userId);
+        // Remove from permits if present
+        this.channelPermits.get(channelId)?.delete(userId);
+        console.log(`[StateStore] ✅ Added channel ban: channel=${channelId}, user=${userId}`);
+    }
+
+    public removeChannelBan(channelId: string, userId: string): void {
+        this.channelBans.get(channelId)?.delete(userId);
+        console.log(`[StateStore] ✅ Removed channel ban: channel=${channelId}, user=${userId}`);
+    }
+
+    public isChannelBanned(channelId: string, userId: string): boolean {
+        return this.channelBans.get(channelId)?.has(userId) || false;
+    }
+
+    public getChannelPermits(channelId: string): string[] {
+        return Array.from(this.channelPermits.get(channelId) || []);
+    }
+
+    public getChannelBans(channelId: string): string[] {
+        return Array.from(this.channelBans.get(channelId) || []);
+    }
+
+    public clearChannelPermissions(channelId: string): void {
+        this.channelPermits.delete(channelId);
+        this.channelBans.delete(channelId);
+        console.log(`[StateStore] ✅ Cleared all permissions for channel ${channelId}`);
+    }
+
+    // Load channel permissions from DB
+    public loadChannelPermissions(channelId: string, permissions: Array<{ targetId: string; permission: string }>): void {
+        for (const perm of permissions) {
+            if (perm.permission === 'permit') {
+                this.addChannelPermit(channelId, perm.targetId);
+            } else if (perm.permission === 'ban') {
+                this.addChannelBan(channelId, perm.targetId);
+            }
+        }
+    }
+
     public clearGuildState(guildId: string): void {
         for (const [channelId, state] of this.channelStates) {
             if (state.guildId === guildId) {

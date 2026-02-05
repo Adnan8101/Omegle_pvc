@@ -248,7 +248,44 @@ async function handleAccessProtection(
         console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} is OWNER - access granted`);
         return false;
     }
-    const dbPermissions = dbState.permissions || [];
+
+    // CRITICAL: First check stateStore memory (most up-to-date from !au/!ru commands)
+    const memoryPermit = stateStore.hasChannelPermit(newChannelId, member.id);
+    const memoryBan = stateStore.isChannelBanned(newChannelId, member.id);
+    
+    console.log(`[VCNS-ACCESS] 🧠 Memory check for ${member.user.tag}: permit=${memoryPermit}, ban=${memoryBan}`);
+    
+    // If memory says user is permitted, allow immediately (skip DB check)
+    if (memoryPermit && !memoryBan) {
+        console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} has MEMORY PERMIT - instant access granted`);
+        return false;
+    }
+    
+    // If memory says user is banned, kick immediately
+    if (memoryBan) {
+        console.log(`[VCNS-ACCESS] 🚫 User ${member.user.tag} has MEMORY BAN - instant kick`);
+        try {
+            await vcnsBridge.kickUser({
+                guild,
+                channelId: newChannelId,
+                userId: member.id,
+                reason: 'Blocked from this channel',
+                isImmediate: true,
+            });
+        } catch (err) {
+            console.error(`[VCNS-ACCESS] ❌ Failed to kick memory-banned user ${member.id}:`, err);
+        }
+        return true;
+    }
+
+    // CRITICAL: Fresh DB read for permissions (bypass any caching)
+    const freshPermissions = dbState.teamType
+        ? await prisma.teamVoicePermission.findMany({ where: { channelId: newChannelId } })
+        : await prisma.voicePermission.findMany({ where: { channelId: newChannelId } });
+    
+    const dbPermissions = freshPermissions.length > 0 ? freshPermissions : (dbState.permissions || []);
+    console.log(`[VCNS-ACCESS] 📊 Fresh DB permissions count: ${freshPermissions.length}, fallback count: ${dbState.permissions?.length || 0}`);
+    
     const memberRoleIds = member.roles.cache.map(r => r.id);
     const isUserBanned = dbPermissions.some(
         (p: any) => p.targetId === member.id && p.permission === 'ban'
@@ -348,6 +385,8 @@ async function handleAccessProtection(
                 });
             }
             invalidateChannelPermissions(newChannelId);
+            // Also update stateStore memory
+            stateStore.addChannelPermit(newChannelId, member.id);
             console.log(`[VCNS-ACCESS] ✅ Ensured DB permit for permanent access user ${member.user.tag}`);
         } catch (dbErr) {
             console.error(`[VCNS-ACCESS] ⚠️ Failed to ensure DB permit:`, dbErr);
@@ -1764,6 +1803,14 @@ async function enforceAdminStrictness(
     if (!isLocked && !isHidden && !isFull) return;
     const settings = await getGuildSettings(guild.id);
     if (!settings?.adminStrictness) return;
+    
+    // CRITICAL: Check stateStore memory first (most up-to-date from !au/!ru)
+    const memoryPermit = stateStore.hasChannelPermit(channelId, member.id);
+    if (memoryPermit) {
+        console.log(`[StrictnessCheck] ✅ User ${member.user.tag} has MEMORY PERMIT - skip strictness kick`);
+        return;
+    }
+    
     const memberRoleIds = member.roles.cache.map(r => r.id);
     const [channelPerms, whitelist] = await Promise.all([
         getChannelPermissions(channelId),
