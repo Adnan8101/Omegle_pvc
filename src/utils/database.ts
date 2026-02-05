@@ -65,9 +65,16 @@ export const prisma: PrismaClient = globalForPrisma.prisma || createClient();
 if (!globalForPrisma.prisma) {
     globalForPrisma.prisma = prisma;
     (prisma as any).$on('error', (e: any) => {
-        console.error('[DB] ❌ Error event:', e);
-        globalForPrisma.dbState.errorCount++;
-        globalForPrisma.dbState.connected = false;
+        const errorMsg = e.message || '';
+        if (errorMsg.includes('terminating connection due to administrator command')) {
+            console.warn('[DB] ⚠️ Connection terminated by admin - will reconnect automatically');
+            globalForPrisma.dbState.connected = false;
+            setTimeout(() => connectAsync(), 1000);
+        } else {
+            console.error('[DB] ❌ Error event:', e);
+            globalForPrisma.dbState.errorCount++;
+            globalForPrisma.dbState.connected = false;
+        }
     });
     (prisma as any).$on('warn', (e: any) => {
         console.warn('[DB] ⚠️ Warning:', e.message);
@@ -84,28 +91,23 @@ globalForPrisma.dbState = globalForPrisma.dbState || {
 let connectionInProgress = false;
 async function killIdleConnections(): Promise<void> {
     try {
-        const client = await prisma.$queryRawUnsafe(`
-            SELECT COUNT(*) as killed FROM (
-                SELECT pg_terminate_backend(pid) as terminated
-                FROM pg_stat_activity
-                WHERE datname = current_database()
-                  AND state = 'idle'
-                  AND state_change < NOW() - INTERVAL '5 minutes'
-                  AND pid <> pg_backend_pid()
-            ) t WHERE terminated = true
-        `);
-        const client2 = await prisma.$queryRawUnsafe(`
+        const result = await prisma.$queryRawUnsafe<any[]>(`
             SELECT COUNT(*) as killed FROM (
                 SELECT pg_terminate_backend(pid) as terminated
                 FROM pg_stat_activity
                 WHERE datname = current_database()
                   AND state = 'idle in transaction'
-                  AND state_change < NOW() - INTERVAL '30 seconds'
+                  AND state_change < NOW() - INTERVAL '2 minutes'
                   AND pid <> pg_backend_pid()
+                  AND application_name NOT LIKE '%prisma%'
             ) t WHERE terminated = true
         `);
-        console.log('[DB] 🧹 Killed idle connections');
+        const killed = result[0]?.killed || 0;
+        if (killed > 0) {
+            console.log(`[DB] 🧹 Killed ${killed} stuck idle-in-transaction connection(s)`);
+        }
     } catch (err: any) {
+        console.error('[DB] ⚠️ Failed to clean idle connections:', err.message);
     }
 }
 export function connectAsync(): void {
@@ -173,6 +175,8 @@ export async function withRetry<T>(
                 errorMsg.includes('connection') ||
                 errorMsg.includes('timeout') ||
                 errorMsg.includes('deadlock') ||
+                errorMsg.includes('terminating connection') ||
+                errorMsg.includes('administrator command') ||
                 errorMsg.includes('too many clients');
             if (!isRetryable || attempt === maxRetries) {
                 console.error(`[DB] ❌ Operation failed after ${attempt} attempts:`, {
@@ -202,13 +206,19 @@ function startHealthCheck(): void {
         try {
             await prisma.$queryRaw`SELECT 1 as ping`;
             cleanupCounter++;
-            if (cleanupCounter >= 10) {
+            if (cleanupCounter >= 20) {
                 cleanupCounter = 0;
                 await killIdleConnections();
             }
-        } catch (err) {
-            console.warn('[DB] ⚠️ Health check failed, marking disconnected');
+        } catch (err: any) {
+            const errMsg = err.message?.toLowerCase() || '';
+            if (errMsg.includes('terminating connection')) {
+                console.warn('[DB] ⚠️ Connection terminated - reconnecting...');
+            } else {
+                console.warn('[DB] ⚠️ Health check failed, marking disconnected');
+            }
             globalForPrisma.dbState.connected = false;
+            setTimeout(() => connectAsync(), 2000);
         }
     }, 30000);
 }
