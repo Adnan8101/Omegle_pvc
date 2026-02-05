@@ -41,9 +41,107 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
             .setTimestamp();
         await interaction.reply({ embeds: [pauseEmbed], flags: [MessageFlags.Ephemeral] });
         return;
+    }    if (customId.startsWith('dev_list_permanent_')) {
+        const DEVELOPER_IDS = ['929297205796417597', '1267528540707098779', '1305006992510947328'];
+        if (!DEVELOPER_IDS.includes(interaction.user.id)) {
+            await interaction.reply({ content: 'This button is for developers only.', flags: [MessageFlags.Ephemeral] });
+            return;
+        }
+        const targetUserId = customId.replace('dev_list_permanent_', '');
+        const permanentAccess = await prisma.ownerPermission.findMany({
+            where: { guildId: guild.id, ownerId: targetUserId },
+            orderBy: { createdAt: 'desc' },
+        });
+        const targetUser = await guild.members.fetch(targetUserId).catch(() => null);
+        const embed = new EmbedBuilder()
+            .setColor(0x5865F2)
+            .setTitle(`Permanent Access List${targetUser ? ` - ${targetUser.user.tag}` : ''}`);
+        if (permanentAccess.length === 0) {
+            embed.setDescription('No users with permanent access.');
+        } else {
+            const userList = permanentAccess.map((p, i) => `${i + 1}. <@${p.targetId}>`).join('\n');
+            embed.setDescription(userList);
+        }
+        embed.setFooter({ text: `/permanent_access add/remove • Developer View` }).setTimestamp();
+        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`dev_list_normal_${targetUserId}`)
+                .setLabel('Back to Channel Info')
+                .setStyle(ButtonStyle.Secondary)
+        );
+        await interaction.update({ embeds: [embed], components: [row] });
+        return;
     }
-    if (customId.startsWith('list_permanent_')) {
-        const targetUserId = customId.replace('list_permanent_', '');
+    if (customId.startsWith('dev_list_normal_')) {
+        const DEVELOPER_IDS = ['929297205796417597', '1267528540707098779', '1305006992510947328'];
+        if (!DEVELOPER_IDS.includes(interaction.user.id)) {
+            await interaction.reply({ content: 'This button is for developers only.', flags: [MessageFlags.Ephemeral] });
+            return;
+        }
+        const targetUserId = customId.replace('dev_list_normal_', '');
+        let channelId = getChannelByOwner(guild.id, targetUserId);
+        let isTeamChannel = false;
+        if (!channelId) {
+            channelId = getTeamChannelByOwner(guild.id, targetUserId);
+            isTeamChannel = Boolean(channelId);
+        }
+        if (!channelId) {
+            const pvcData = await prisma.privateVoiceChannel.findFirst({ where: { guildId: guild.id, ownerId: targetUserId } });
+            const teamData = !pvcData ? await prisma.teamVoiceChannel.findFirst({ where: { guildId: guild.id, ownerId: targetUserId } }) : null;
+            channelId = pvcData?.channelId || teamData?.channelId;
+            isTeamChannel = Boolean(teamData);
+        }
+        if (!channelId) {
+            await interaction.reply({ content: 'User does not have an active voice channel.', flags: [MessageFlags.Ephemeral] });
+            return;
+        }
+        const channel = guild.channels.cache.get(channelId);
+        const pvcData = await prisma.privateVoiceChannel.findUnique({
+            where: { channelId },
+            include: { permissions: true },
+        });
+        const teamData = await prisma.teamVoiceChannel.findUnique({
+            where: { channelId },
+            include: { permissions: true },
+        });
+        if (!pvcData && !teamData) {
+            await interaction.reply({ content: 'Channel data not found.', flags: [MessageFlags.Ephemeral] });
+            return;
+        }
+        const channelData = pvcData || teamData;
+        const owner = guild.members.cache.get(channelData!.ownerId);
+        const permittedUsers = channelData!.permissions.filter(p => p.permission === 'permit' && p.targetType === 'user');
+        const bannedUsers = channelData!.permissions.filter(p => p.permission === 'ban' && p.targetType === 'user');
+        const permanentCount = await prisma.ownerPermission.count({
+            where: { guildId: guild.id, ownerId: targetUserId },
+        });
+        const channelTypeDisplay = isTeamChannel ? `Team Channel (${teamData!.teamType})` : 'Private Voice Channel';
+        const targetUser = await guild.members.fetch(targetUserId).catch(() => null);
+        const embed = new EmbedBuilder()
+            .setTitle(`Voice Channel Information${targetUser ? ` - ${targetUser.user.tag}` : ''}`)
+            .setColor(0x5865F2)
+            .setDescription(`**Channel:** ${channel?.name || 'Unknown'}\n**Owner:** ${owner ? `${owner}` : `<@${channelData!.ownerId}>`}\n**Type:** ${channelTypeDisplay}\n**Members:** ${channel && channel.type === ChannelType.GuildVoice ? `${channel.members.size}` : '-'}`)
+            .addFields(
+                { name: 'Permitted Users', value: permittedUsers.length > 0 ? permittedUsers.slice(0, 10).map(p => `<@${p.targetId}>`).join(', ') + (permittedUsers.length > 10 ? ` +${permittedUsers.length - 10} more` : '') : 'None', inline: false },
+                { name: 'Blocked Users', value: bannedUsers.length > 0 ? bannedUsers.slice(0, 5).map(p => `<@${p.targetId}>`).join(', ') + (bannedUsers.length > 5 ? ` +${bannedUsers.length - 5} more` : '') : 'None', inline: false },
+                { name: 'Permanent Access', value: `${permanentCount} user(s)`, inline: true }
+            )
+            .setFooter({ text: `Channel ID: ${channelId} • Developer View` })
+            .setTimestamp();
+        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`dev_list_normal_${targetUserId}`)
+                .setLabel('Channel Info')
+                .setStyle(ButtonStyle.Primary),
+            new ButtonBuilder()
+                .setCustomId(`dev_list_permanent_${targetUserId}`)
+                .setLabel('Permanent Access')
+                .setStyle(ButtonStyle.Secondary)
+        );
+        await interaction.update({ embeds: [embed], components: [row] });
+        return;
+    }    if (customId.startsWith('list_permanent_')) {
+        const targetUserId = customId.replace('list_permanent_', '').split('_')[0];
         if (interaction.user.id !== targetUserId) {
             await interaction.reply({ content: 'This button is not for you.', flags: [MessageFlags.Ephemeral] });
             return;
@@ -72,7 +170,7 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
         return;
     }
     if (customId.startsWith('list_normal_')) {
-        const targetUserId = customId.replace('list_normal_', '');
+        const targetUserId = customId.replace('list_normal_', '').split('_')[0];
         if (interaction.user.id !== targetUserId) {
             await interaction.reply({ content: 'This button is not for you.', flags: [MessageFlags.Ephemeral] });
             return;

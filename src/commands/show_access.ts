@@ -36,8 +36,20 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     const targetUser = interaction.options.getUser('user');
     const userId = targetUser ? targetUser.id : interaction.user.id;
     let channelId = getChannelByOwner(interaction.guild.id, userId);
+    let isTeamChannel = false;
     if (!channelId) {
         channelId = getTeamChannelByOwner(interaction.guild.id, userId);
+        isTeamChannel = Boolean(channelId);
+    }
+    if (!channelId) {
+        const pvcData = await prisma.privateVoiceChannel.findFirst({
+            where: { guildId: interaction.guild.id, ownerId: userId },
+        });
+        const teamData = !pvcData ? await prisma.teamVoiceChannel.findFirst({
+            where: { guildId: interaction.guild.id, ownerId: userId },
+        }) : null;
+        channelId = pvcData?.channelId || teamData?.channelId;
+        isTeamChannel = Boolean(teamData);
     }
     if (!channelId) {
         const permanentAccess = await prisma.ownerPermission.findMany({
@@ -48,7 +60,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
             const embed = new EmbedBuilder()
                 .setColor(0x5865F2)
                 .setTitle('Permanent Access List')
-                .setDescription(`${targetUser ? `<@${userId}>` : 'You'} ${targetUser ? 'has' : 'have'} no users with permanent access.`)
+                .setDescription(`${targetUser ? `<@${userId}>` : 'You'} ${targetUser ? 'has' : 'have'} no users with permanent access and no active voice channel.`)
                 .setFooter({ text: 'Use /permanent_access add @user to add someone' })
                 .setTimestamp();
             await interaction.editReply({ embeds: [embed] });
@@ -81,7 +93,6 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         return;
     }
     const channelData = pvcData || teamData;
-    const isTeamChannel = Boolean(teamData);
     const owner = interaction.guild.members.cache.get(channelData!.ownerId);
     const permittedUsers = channelData!.permissions.filter(p => p.permission === 'permit' && p.targetType === 'user');
     const bannedUsers = channelData!.permissions.filter(p => p.permission === 'ban' && p.targetType === 'user');
@@ -94,55 +105,24 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     const embed = new EmbedBuilder()
         .setTitle(`Voice Channel Information${targetUser ? ` - ${targetUser.tag}` : ''}`)
         .setColor(0x5865F2)
+        .setDescription(`**Channel:** ${channel?.name || 'Unknown'}\n**Owner:** ${owner ? `${owner}` : `<@${channelData!.ownerId}>`}\n**Type:** ${channelTypeDisplay}\n**Members:** ${channel && channel.type === ChannelType.GuildVoice ? `${channel.members.size}` : '-'}`)
         .addFields(
-            { name: 'Type', value: channelTypeDisplay, inline: true },
-            { name: 'Channel', value: channel?.name || 'Unknown', inline: true },
-            { name: 'Owner', value: owner ? `${owner}` : `<@${channelData!.ownerId}>`, inline: true },
-            { name: 'Members', value: channel && channel.type === ChannelType.GuildVoice ? `${channel.members.size}` : '-', inline: true },
-        );
-    if (permittedUsers.length > 0) {
-        const userMentions = permittedUsers.slice(0, 10).map(p => `<@${p.targetId}>`).join(', ');
-        const more = permittedUsers.length > 10 ? ` +${permittedUsers.length - 10} more` : '';
-        embed.addFields({ name: `Permitted (${permittedUsers.length})`, value: userMentions + more, inline: false });
-    }
-    if (bannedUsers.length > 0) {
-        const bannedMentions = bannedUsers.slice(0, 5).map(p => `<@${p.targetId}>`).join(', ');
-        const more = bannedUsers.length > 5 ? ` +${bannedUsers.length - 5} more` : '';
-        embed.addFields({ name: `Blocked (${bannedUsers.length})`, value: bannedMentions + more, inline: false });
-    }
-    embed.addFields({ name: 'Permanent Access', value: `${permanentCount} user(s)`, inline: true });
-    embed.setFooter({ text: 'Use /permanent_access to manage trusted users' }).setTimestamp();
+            { name: 'Permitted Users', value: permittedUsers.length > 0 ? permittedUsers.slice(0, 10).map(p => `<@${p.targetId}>`).join(', ') + (permittedUsers.length > 10 ? ` +${permittedUsers.length - 10} more` : '') : 'None', inline: false },
+            { name: 'Blocked Users', value: bannedUsers.length > 0 ? bannedUsers.slice(0, 5).map(p => `<@${p.targetId}>`).join(', ') + (bannedUsers.length > 5 ? ` +${bannedUsers.length - 5} more` : '') : 'None', inline: false },
+            { name: 'Permanent Access', value: `${permanentCount} user(s)`, inline: true }
+        )
+        .setFooter({ text: `Channel ID: ${channelId} • Developer View` })
+        .setTimestamp();
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
-            .setCustomId(`list_permanent_${userId}_${interaction.user.id}`)
-            .setLabel('View Permanent Access')
+            .setCustomId(`dev_list_normal_${userId}`)
+            .setLabel('Channel Info')
+            .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+            .setCustomId(`dev_list_permanent_${userId}`)
+            .setLabel('Permanent Access')
             .setStyle(ButtonStyle.Secondary)
     );
-    const reply = await interaction.editReply({ embeds: [embed], components: [row] });
-    const collector = reply.createMessageComponentCollector({
-        filter: (i) => i.user.id === interaction.user.id && i.customId === `list_permanent_${userId}_${interaction.user.id}`,
-        time: 60000,
-        max: 1,
-    });
-    collector.on('collect', async (buttonInteraction) => {
-        const permanentAccess = await prisma.ownerPermission.findMany({
-            where: { guildId: interaction.guild!.id, ownerId: userId },
-            orderBy: { createdAt: 'desc' },
-        });
-        const permEmbed = new EmbedBuilder()
-            .setColor(0x5865F2)
-            .setTitle(`Permanent Access List${targetUser ? ` - ${targetUser.tag}` : ''}`);
-        if (permanentAccess.length === 0) {
-            permEmbed.setDescription('No users with permanent access.');
-        } else {
-            const userList = permanentAccess.map((p, i) => `${i + 1}. <@${p.targetId}>`).join('\n');
-            permEmbed.setDescription(userList);
-        }
-        permEmbed.setFooter({ text: '/permanent_access add/remove' }).setTimestamp();
-        await buttonInteraction.update({ embeds: [permEmbed], components: [] }).catch(() => { });
-    });
-    collector.on('end', () => {
-        interaction.editReply({ components: [] }).catch(() => { });
-    });
+    await interaction.editReply({ embeds: [embed], components: [row] });
 }
 export const command: Command = { data: data as any, execute };
