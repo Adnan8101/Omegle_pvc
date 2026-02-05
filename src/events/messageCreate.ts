@@ -749,7 +749,9 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
     }
     const shouldShowHint = !isSecretCommand && trackCommandUsage('ru', message.author.id, guild.id, userIdsToRemove.length);
     const channel = guild.channels.cache.get(channelId);
-    try {\n        const discordResults: { userId: string; removed: boolean; kicked: boolean; errors: string[] }[] = [];
+    try {
+        const discordResults: { userId: string; removed: boolean; kicked: boolean; errors: string[] }[] = [];
+        
         if (channel && channel.type === ChannelType.GuildVoice) {
             recordBotEdit(channelId);
             console.log(`[RemoveUser] 🔧 Removing Discord permissions for ${userIdsToRemove.length} users...`);
