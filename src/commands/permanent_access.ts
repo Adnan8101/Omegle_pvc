@@ -96,8 +96,6 @@ export const command: Command = {
             });
             stateStore.addPermanentAccess(guildId, ownerId, targetUser.id);
             invalidateOwnerPermissions(guildId, ownerId);
-            
-            // Sync permissions for existing active channels
             try {
                 const activeChannels = await prisma.privateVoiceChannel.findMany({
                     where: { guildId, ownerId },
@@ -105,10 +103,9 @@ export const command: Command = {
                 const activeTeamChannels = await prisma.teamVoiceChannel.findMany({
                     where: { guildId, ownerId },
                 });
-
                 for (const pvc of activeChannels) {
                     const channel = interaction.guild?.channels.cache.get(pvc.channelId);
-                    if (channel && channel.type === 2) { // GuildVoice
+                    if (channel && channel.type === 2) { 
                         await prisma.voicePermission.upsert({
                             where: {
                                 channelId_targetId: {
@@ -124,7 +121,6 @@ export const command: Command = {
                                 permission: 'permit',
                             },
                         }).catch(() => {});
-
                         const { recordBotEdit } = await import('../events/channelUpdate');
                         recordBotEdit(pvc.channelId);
                         await (channel as any).permissionOverwrites.edit(targetUser.id, {
@@ -133,7 +129,6 @@ export const command: Command = {
                         }).catch(() => {});
                     }
                 }
-
                 for (const tc of activeTeamChannels) {
                     const channel = interaction.guild?.channels.cache.get(tc.channelId);
                     if (channel && channel.type === 2) {
@@ -152,7 +147,6 @@ export const command: Command = {
                                 permission: 'permit',
                             },
                         }).catch(() => {});
-
                         const { recordBotEdit } = await import('../events/channelUpdate');
                         recordBotEdit(tc.channelId);
                         await (channel as any).permissionOverwrites.edit(targetUser.id, {
@@ -164,7 +158,6 @@ export const command: Command = {
             } catch (syncErr) {
                 console.error('[PermanentAccess] Failed to sync existing channels:', syncErr);
             }
-            
             const embed = new EmbedBuilder()
                 .setColor(0x57F287)
                 .setTitle('Permanent Access Added')

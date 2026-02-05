@@ -22,15 +22,12 @@ class LockManager {
         if (existing) {
             if (now < existing.expiresAt) {
                 if (existing.holder === holder) {
-                    // Bug #2 Fix: Extend lock duration for same holder
                     existing.expiresAt = now + durationMs;
                     return true;
                 }
-                // Bug #2 Fix: Log lock contention for debugging
                 console.warn(`[LockManager] Lock contention: ${resourceKey} held by ${existing.holder}, requested by ${holder}`);
                 return false;
             }
-            // Bug #2 Fix: Clean up expired lock
             console.log(`[LockManager] Expired lock removed: ${resourceKey}`);
             this.locks.delete(resourceKey);
         }

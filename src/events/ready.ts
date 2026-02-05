@@ -12,6 +12,10 @@ export const once = true;
 export async function execute(client: PVCClient): Promise<void> {
     setRecordBotEditFn(recordBotEdit);
     await loadAllTeamInterfaces();
+    console.log('[Ready] 🚀 Starting VC Creation Queue Worker...');
+    const { vcQueueWorker } = await import('../services/vcQueueWorker');
+    await vcQueueWorker.start(client);
+    console.log('[Ready] ✅ VC Creation Queue Worker started');
     console.log('[Ready] Loading PVC state from database...');
     const { stateStore } = await import('../vcns/index');
     try {
@@ -27,8 +31,6 @@ export async function execute(client: PVCClient): Promise<void> {
                 const interfaceChannel = guild.channels.cache.get(settings.interfaceVcId);
                 if (interfaceChannel) {
                     registerInterfaceChannel(settings.guildId, settings.interfaceVcId);
-
-                    // KICKSTART: Check for waiting users in PVC Interface
                     if (interfaceChannel.type === ChannelType.GuildVoice && interfaceChannel.members.size > 0) {
                         const waitingMembers = interfaceChannel.members.filter(m => !m.user.bot);
                         if (waitingMembers.size > 0) {
@@ -42,8 +44,6 @@ export async function execute(client: PVCClient): Promise<void> {
                     }
                 }
             }
-
-            // KICKSTART: Check for waiting users in Team Interfaces
             const teamSettings = await prisma.teamVoiceSettings.findUnique({ where: { guildId: settings.guildId } });
             if (teamSettings) {
                 const teamInterfaces = [
@@ -51,7 +51,6 @@ export async function execute(client: PVCClient): Promise<void> {
                     { type: 'Trio', id: teamSettings.trioVcId },
                     { type: 'Squad', id: teamSettings.squadVcId }
                 ];
-
                 for (const iface of teamInterfaces) {
                     if (iface.id) {
                         const channel = guild.channels.cache.get(iface.id);
@@ -96,13 +95,12 @@ export async function execute(client: PVCClient): Promise<void> {
                                 console.error(`[Ready] ❌ Cannot delete channel ${pvc.channelId} - Missing Permissions?`);
                             }
                         } catch (err: any) {
-                            if (err.code === 10003 || err.status === 404) { // Unknown Channel
+                            if (err.code === 10003 || err.status === 404) { 
                                 deletedFromDiscord = true;
                             } else {
                                 console.error(`[Ready] Failed to delete empty channel from Discord:`, err);
                             }
                         }
-
                         if (deletedFromDiscord) {
                             await prisma.privateVoiceChannel.delete({ where: { channelId: pvc.channelId } }).catch(() => { });
                             await prisma.voicePermission.deleteMany({ where: { channelId: pvc.channelId } }).catch(() => { });
@@ -113,7 +111,6 @@ export async function execute(client: PVCClient): Promise<void> {
                         }
                         continue;
                     }
-
                     registerChannel(pvc.channelId, pvc.guildId, pvc.ownerId, false);
                     if (!stateStore.getChannelState(pvc.channelId)) {
                         stateStore.registerChannel({
@@ -167,13 +164,12 @@ export async function execute(client: PVCClient): Promise<void> {
                             console.error(`[Ready] ❌ Cannot delete team channel ${tc.channelId} - Missing Permissions?`);
                         }
                     } catch (err: any) {
-                        if (err.code === 10003 || err.status === 404) { // Unknown Channel
+                        if (err.code === 10003 || err.status === 404) { 
                             deletedFromDiscord = true;
                         } else {
                             console.error(`[Ready] Failed to delete empty team channel from Discord:`, err);
                         }
                     }
-
                     if (deletedFromDiscord) {
                         await prisma.teamVoiceChannel.delete({ where: { channelId: tc.channelId } }).catch(() => { });
                         await prisma.teamVoicePermission.deleteMany({ where: { channelId: tc.channelId } }).catch(() => { });
@@ -184,7 +180,6 @@ export async function execute(client: PVCClient): Promise<void> {
                     }
                     continue;
                 }
-
                 registerTeamChannel(tc.channelId, tc.guildId, tc.ownerId, tc.teamType.toLowerCase() as TeamType, false);
                 if (!stateStore.getChannelState(tc.channelId)) {
                     stateStore.registerChannel({
@@ -209,19 +204,14 @@ export async function execute(client: PVCClient): Promise<void> {
             }
         }
         console.log(`[Ready] ✅ Registered ${registeredCount} channels, cleaned ${cleanedCount} stale entries`);
-
-        // ORPHAN CLEANUP LOGIC
         for (const settings of guildSettings) {
             const guild = client.guilds.cache.get(settings.guildId);
             if (!guild || !settings.interfaceVcId) continue;
-
             const interfaceVc = guild.channels.cache.get(settings.interfaceVcId);
             if (interfaceVc && interfaceVc.parent) {
                 const categoryId = interfaceVc.parentId;
                 const knownPvcIds = new Set(settings.privateChannels.map(p => p.channelId));
                 knownPvcIds.add(settings.interfaceVcId);
-
-                // Add team channels to known list to avoid deleting them
                 const teamSettings = await prisma.teamVoiceSettings.findUnique({ where: { guildId: settings.guildId } });
                 if (teamSettings) {
                     if (teamSettings.duoVcId) knownPvcIds.add(teamSettings.duoVcId);
@@ -230,20 +220,15 @@ export async function execute(client: PVCClient): Promise<void> {
                 }
                 const teamChannels = await prisma.teamVoiceChannel.findMany({ where: { guildId: settings.guildId } });
                 teamChannels.forEach(tc => knownPvcIds.add(tc.channelId));
-
                 const orphanChannels = guild.channels.cache.filter(ch =>
                     ch.type === ChannelType.GuildVoice &&
                     ch.parentId === categoryId &&
                     !knownPvcIds.has(ch.id)
                 );
-
                 if (orphanChannels.size > 0) {
                     console.log(`[Ready] 🔍 Found ${orphanChannels.size} orphan channels in category ${categoryId}`);
                     for (const [channelId, channel] of orphanChannels) {
-                        // Double check it's a voice channel
                         if (channel.type !== ChannelType.GuildVoice) continue;
-
-                        // If empty, delete immediately
                         if (channel.members.size === 0) {
                             console.log(`[Ready] 🧹 Orphan Channel ${channelId} is empty - deleting (Zombie Cleanup)`);
                             try {
@@ -257,10 +242,8 @@ export async function execute(client: PVCClient): Promise<void> {
                                 console.error(`[Ready] Failed to delete orphan channel ${channelId}:`, err);
                             }
                         } else {
-                            // Adopt occupied orphans
                             console.log(`[Ready] ⚠️ Orphan Channel ${channelId} has members - Attempting adoption...`);
                             let ownerId: string | null = null;
-                            // Try to find owner from permissions (someone with MoveMembers)
                             for (const [targetId, overwrite] of channel.permissionOverwrites.cache) {
                                 if (targetId === guild.id || targetId === client.user?.id) continue;
                                 if (overwrite.type === OverwriteType.Member && overwrite.allow.has(PermissionFlagsBits.MoveMembers)) {
@@ -268,18 +251,15 @@ export async function execute(client: PVCClient): Promise<void> {
                                     break;
                                 }
                             }
-                            // Fallback: Pick first non-bot member
                             if (!ownerId) {
                                 const nonBotMember = channel.members.find(m => !m.user.bot);
                                 if (nonBotMember) ownerId = nonBotMember.id;
                             }
-
                             if (ownerId) {
                                 try {
                                     const everyoneOverwrite = channel.permissionOverwrites.cache.get(guild.id);
                                     const isLocked = everyoneOverwrite?.deny.has(PermissionFlagsBits.Connect) ?? false;
                                     const isHidden = everyoneOverwrite?.deny.has(PermissionFlagsBits.ViewChannel) ?? false;
-
                                     await prisma.privateVoiceChannel.create({
                                         data: {
                                             channelId: channelId,
@@ -289,8 +269,6 @@ export async function execute(client: PVCClient): Promise<void> {
                                             isHidden: isHidden,
                                         },
                                     });
-
-                                    // Register in memory immediately so it's managed
                                     registerChannel(channelId, guild.id, ownerId, false);
                                     if (!stateStore.getChannelState(channelId)) {
                                         stateStore.registerChannel({
@@ -361,8 +339,6 @@ async function startPeriodicSync(client: PVCClient, stateStore: any): Promise<vo
                     await prisma.privateVoiceChannel.delete({ where: { channelId: pvc.channelId } }).catch(() => { });
                     continue;
                 }
-
-                // Fix: Check for empty channels during sync
                 const nonBotMembers = channel.members.filter(m => !m.user.bot);
                 if (nonBotMembers.size === 0) {
                     console.log(`[PeriodicSync] 🧹 Channel ${pvc.channelId} found empty - deleting (Zombie Cleanup)`);
@@ -372,14 +348,12 @@ async function startPeriodicSync(client: PVCClient, stateStore: any): Promise<vo
                             channelId: pvc.channelId,
                             isTeam: false,
                         });
-
                         if (result.success) {
                             await prisma.privateVoiceChannel.delete({ where: { channelId: pvc.channelId } }).catch(() => { });
                             await prisma.voicePermission.deleteMany({ where: { channelId: pvc.channelId } }).catch(() => { });
                             unregisterChannel(pvc.channelId);
                             invalidateChannelPermissions(pvc.channelId);
                         } else {
-                            // Check if it failed because it didn't exist
                             const chCheck = guild.channels.cache.get(pvc.channelId);
                             if (!chCheck) {
                                 console.log(`[PeriodicSync] Channel ${pvc.channelId} missing after failed delete - cleaning DB`);
@@ -394,7 +368,6 @@ async function startPeriodicSync(client: PVCClient, stateStore: any): Promise<vo
                     }
                     continue;
                 }
-
                 if (!stateStore.getChannelState(pvc.channelId)) {
                     stateStore.registerChannel({
                         channelId: pvc.channelId,
@@ -433,8 +406,6 @@ async function startPeriodicSync(client: PVCClient, stateStore: any): Promise<vo
                     await prisma.teamVoiceChannel.delete({ where: { channelId: tc.channelId } }).catch(() => { });
                     continue;
                 }
-
-                // Fix: Check for empty team channels during sync
                 const nonBotMembers = channel.members.filter(m => !m.user.bot);
                 if (nonBotMembers.size === 0) {
                     console.log(`[PeriodicSync] 🧹 Team Channel ${tc.channelId} found empty - deleting (Zombie Cleanup)`);
@@ -444,7 +415,6 @@ async function startPeriodicSync(client: PVCClient, stateStore: any): Promise<vo
                             channelId: tc.channelId,
                             isTeam: true,
                         });
-
                         if (result.success) {
                             await prisma.teamVoiceChannel.delete({ where: { channelId: tc.channelId } }).catch(() => { });
                             await prisma.teamVoicePermission.deleteMany({ where: { channelId: tc.channelId } }).catch(() => { });
@@ -463,7 +433,6 @@ async function startPeriodicSync(client: PVCClient, stateStore: any): Promise<vo
                     }
                     continue;
                 }
-
                 if (!stateStore.getChannelState(tc.channelId)) {
                     stateStore.registerChannel({
                         channelId: tc.channelId,
@@ -491,8 +460,6 @@ async function startPeriodicSync(client: PVCClient, stateStore: any): Promise<vo
             console.error('[PeriodicSync] Error during sync:', error);
         }
     }, 5 * 60 * 1000);
-
-    // AUTO-REFRESH: Sync all PVC/Team channels after bot startup
     console.log('[Ready] 🔄 Starting automatic PVC refresh for all guilds...');
     try {
         const { performAutoRefresh } = await import('../utils/autoRefresh');

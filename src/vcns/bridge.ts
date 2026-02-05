@@ -110,7 +110,6 @@ export class VCNSBridge {
             const dbChannel = await prisma.privateVoiceChannel.findUnique({
                 where: { channelId: existingChannelId || undefined },
             }).catch(() => null);
-            
             if (!dbChannel && existingChannelId) {
                 const { unregisterChannel } = await import('../utils/voiceManager');
                 unregisterChannel(existingChannelId);
@@ -449,7 +448,6 @@ export class VCNSBridge {
         try {
             const channel = options.guild.channels.cache.get(options.channelId);
             if (!channel || !channel.isVoiceBased()) {
-                // Bug #8 Fix: Better error logging
                 console.error(`[VCNSBridge] editPermission failed: channel ${options.channelId} not found or not voice-based`);
                 return { success: false, queued: false, error: 'Channel not found' };
             }
@@ -463,7 +461,6 @@ export class VCNSBridge {
             );
             return { success: true, queued: false };
         } catch (error: any) {
-            // Bug #8 Fix: More detailed error logging
             console.error(`[VCNSBridge] editPermission error for channel ${options.channelId}, target ${options.targetId}:`, error);
             return { success: false, queued: false, error: error.message };
         }
@@ -480,7 +477,6 @@ export class VCNSBridge {
         try {
             const channel = options.guild.channels.cache.get(options.channelId);
             if (!channel || !channel.isVoiceBased()) {
-                // Bug #8 Fix: Better error logging
                 console.error(`[VCNSBridge] removePermission failed: channel ${options.channelId} not found or not voice-based`);
                 return { success: false, queued: false, error: 'Channel not found' };
             }
@@ -494,7 +490,6 @@ export class VCNSBridge {
             );
             return { success: true, queued: false };
         } catch (error: any) {
-            // Bug #8 Fix: More detailed error logging
             console.error(`[VCNSBridge] removePermission error for channel ${options.channelId}, target ${options.targetId}:`, error);
             return { success: false, queued: false, error: error.message };
         }

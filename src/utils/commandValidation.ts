@@ -1,6 +1,5 @@
 import { MessageFlags, ChannelType, type ChatInputCommandInteraction, type Channel } from 'discord.js';
 import { canRunAdminCommand } from './permissions';
-
 export async function validateServerCommand(interaction: ChatInputCommandInteraction): Promise<boolean> {
     if (!interaction.guild) {
         await interaction.reply({ content: 'This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
@@ -8,7 +7,6 @@ export async function validateServerCommand(interaction: ChatInputCommandInterac
     }
     return true;
 }
-
 export async function validateAdminCommand(interaction: ChatInputCommandInteraction): Promise<boolean> {
     if (!await canRunAdminCommand(interaction)) {
         await interaction.reply({ content: '❌ You need a role higher than the bot to use this command, or be the bot developer.', flags: [MessageFlags.Ephemeral] });
@@ -16,10 +14,9 @@ export async function validateAdminCommand(interaction: ChatInputCommandInteract
     }
     return true;
 }
-
 export async function validateChannelType(
     interaction: ChatInputCommandInteraction,
-    channel: any, // Accept any type from interaction.options
+    channel: any, 
     expectedType: ChannelType,
     errorMessage: string
 ): Promise<boolean> {
@@ -29,7 +26,6 @@ export async function validateChannelType(
     }
     return true;
 }
-
 export async function validateRequiredChannels(
     interaction: ChatInputCommandInteraction,
     validations: Array<{

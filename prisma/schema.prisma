@@ -360,3 +360,60 @@ model GiveawayInviteTracker {
 // =====================================
 // END GIVEAWAY SYSTEM MODELS
 // =====================================
+
+// =====================================
+// VC CREATION QUEUE SYSTEM
+// =====================================
+
+enum VCRequestType {
+  PVC
+  TEAM_DUO
+  TEAM_TRIO
+  TEAM_SQUAD
+}
+
+enum VCRequestStatus {
+  PENDING      // Waiting in queue
+  PROCESSING   // Being created
+  COMPLETED    // Successfully created
+  FAILED       // Failed with error
+  RETRYING     // Scheduled for retry
+  EXPIRED      // Timed out completely
+  CANCELLED    // User left before completion
+}
+
+model VCCreationRequest {
+  id                 String          @id @default(uuid())
+  userId             String
+  guildId            String
+  requestType        VCRequestType
+  status             VCRequestStatus @default(PENDING)
+  
+  // Tracking
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  completedAt        DateTime?
+  expiresAt          DateTime        // Hard expiration (e.g., 1 hour)
+  
+  // Retry logic
+  retryCount         Int             @default(0)
+  maxRetries         Int             @default(999)  // Effectively infinite
+  nextRetryAt        DateTime?
+  lastError          String?
+  
+  // Result
+  channelId          String?         // Set when successfully created
+  
+  // Priority
+  priority           Int             @default(5)    // 1 = highest, 10 = lowest
+  
+  // Context (JSON serialized)
+  channelName        String
+  parentId           String?
+  permissionData     String?         // JSON string of permission overwrites
+  
+  @@index([userId, guildId])
+  @@index([guildId, status])
+  @@index([status, nextRetryAt])
+  @@index([createdAt])
+}

@@ -24,7 +24,7 @@ import { BUTTON_EMOJI_MAP } from '../../utils/canvasGenerator';
 import { logAction, LogAction } from '../../utils/logger';
 import { isPvcPaused } from '../../utils/pauseManager';
 import { recordBotEdit } from '../../events/channelUpdate';
-import { invalidateChannelPermissions } from '../../utils/cache'; // Bug #1 Fix
+import { invalidateChannelPermissions } from '../../utils/cache'; 
 export async function handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
     const { customId, guild, member } = interaction;
     if (!guild || !member) return;
@@ -301,10 +301,7 @@ async function handleLock(interaction: ButtonInteraction, channel: any): Promise
         addTempPermittedUsers(channel.id, memberIds);
     }
     await VoiceStateService.setLock(channel.id, true);
-    
-    // Bug #1 Fix: Invalidate cache after permission change
     invalidateChannelPermissions(channel.id);
-    
     await interaction.reply({ content: '🔒 Your voice channel has been locked.', flags: [MessageFlags.Ephemeral] });
     await logAction({
         action: LogAction.CHANNEL_LOCKED,
@@ -317,10 +314,7 @@ async function handleLock(interaction: ButtonInteraction, channel: any): Promise
 }
 async function handleUnlock(interaction: ButtonInteraction, channel: any): Promise<void> {
     await VoiceStateService.setLock(channel.id, false);
-    
-    // Bug #1 Fix: Invalidate cache after permission change
     invalidateChannelPermissions(channel.id);
-    
     await interaction.reply({ content: '🔓 Your voice channel has been unlocked.', flags: [MessageFlags.Ephemeral] });
     await logAction({
         action: LogAction.CHANNEL_UNLOCKED,
@@ -729,12 +723,10 @@ async function handleDeleteConfirm(interaction: ButtonInteraction): Promise<void
         });
     } catch (err: any) {
         console.error(`[DeleteConfirm] Failed to delete channel ${channelId}:`, err);
-        // Fix: Handle specific error cases gracefully
-        if (err.code === 10008) { // Unknown Message
+        if (err.code === 10008) { 
             console.log('[DeleteConfirm] Interaction message already deleted, ignoring.');
             return;
         }
-        // Attempt to update user if possible, but don't crash if it fails
         try {
             await interaction.update({
                 content: 'Failed to delete the channel or it was already deleted.',

@@ -154,10 +154,7 @@ async function handleAddUserSelect(
         return;
     }
     await updateVoicePermissions(channel, users, 'user', 'permit', { ViewChannel: true, Connect: true, SendMessages: true, EmbedLinks: true, AttachFiles: true }, isTeamChannel);
-    
-    // Bug #1 Fix: Invalidate cache after permission change
     invalidateChannelPermissions(channel.id);
-    
     const targetIds = Array.from(users.keys());
     if (!isTeamChannel) {
         await batchUpsertOwnerPermissions(
@@ -198,10 +195,7 @@ async function handleRemoveUserSelect(
     for (const id of targetIds) {
         await VoiceStateService.removePermit(channel.id, id);
     }
-    
-    // Bug #1 Fix: Invalidate cache after permission change
     invalidateChannelPermissions(channel.id);
-    
     if (!isTeamChannel) {
         await batchDeleteOwnerPermissions(
             interaction.guild!.id,
@@ -293,17 +287,11 @@ async function handleBlockSelect(
         await interaction.reply({ content: 'You cannot block yourself from your own channel.', flags: [MessageFlags.Ephemeral] });
         return;
     }
-    
     const guild = interaction.guild!;
     const owner = await guild.members.fetch(ownerId).catch(() => null);
     const ownerName = owner?.displayName || 'the owner';
-    
-    // FIX: For each user being blocked
     for (const [userId, user] of users) {
-        // 1. Add ban to database
         await VoiceStateService.addBan(channel.id, userId, 'user');
-        
-        // 2. Remove ALL existing permits/access
         if (isTeamChannel) {
             await prisma.teamVoicePermission.deleteMany({
                 where: {
@@ -313,7 +301,6 @@ async function handleBlockSelect(
                 },
             }).catch(() => {});
         } else {
-            // Remove from channel permits
             await prisma.voicePermission.deleteMany({
                 where: {
                     channelId: channel.id,
@@ -321,8 +308,6 @@ async function handleBlockSelect(
                     permission: 'permit',
                 },
             }).catch(() => {});
-            
-            // Remove from permanent access (owner's trusted list)
             await prisma.ownerPermission.deleteMany({
                 where: {
                     guildId: guild.id,
@@ -331,14 +316,10 @@ async function handleBlockSelect(
                 },
             }).catch(() => {});
         }
-        
-        // 3. Kick if currently in channel
         const member = channel.members.get(userId);
         if (member) {
             try {
                 await member.voice.disconnect();
-                
-                // 4. Send DM notification
                 const blockEmbed = new EmbedBuilder()
                     .setColor(0xFF0000)
                     .setTitle('🚫 Blocked from Voice Channel')
@@ -355,10 +336,7 @@ async function handleBlockSelect(
             }
         }
     }
-    
-    // Invalidate cache after permission changes
     invalidateChannelPermissions(channel.id);
-    
     await logAction({
         action: LogAction.USER_BANNED,
         guild: guild,
@@ -367,7 +345,6 @@ async function handleBlockSelect(
         channelId: channel.id,
         details: `Blocked ${users.size} user(s)`,
     });
-    
     await interaction.update({
         content: `🚫 Blocked ${users.size} user(s) from your voice channel. They have been kicked and cannot rejoin.`,
         components: [],
@@ -387,10 +364,7 @@ async function handleUnblockSelect(
     for (const id of targetIds) {
         await VoiceStateService.removeBan(channel.id, id);
     }
-    
-    // Bug #1 Fix: Invalidate cache after permission change
     invalidateChannelPermissions(channel.id);
-    
     await interaction.update({
         content: `✅ Unblocked ${users.size} user(s) from your voice channel.`,
         components: [],

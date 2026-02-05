@@ -70,13 +70,11 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     if (!await validateChannelType(interaction, logsChannel, ChannelType.GuildText, 'Logs channel must be a text channel.')) return;
     if (!await validateChannelType(interaction, commandChannel, ChannelType.GuildText, 'Command channel must be a text channel.')) return;
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
-    
     const guild = interaction.guild;
     if (!guild) {
         await interaction.editReply({ content: 'This command can only be used in a server.' });
         return;
     }
-    
     console.log('[PVC Setup] Starting PVC setup process...');
     console.log('[PVC Setup] Guild:', guild.name, '(' + guild.id + ')');
     console.log('[PVC Setup] Category:', category.name, '(' + category.id + ')');

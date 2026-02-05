@@ -39,13 +39,11 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
     if (!await validateChannelType(interaction, category, ChannelType.GuildCategory, 'Please select a valid category channel.')) return;
     if (!await validateChannelType(interaction, logsChannel, ChannelType.GuildText, 'Logs channel must be a text channel.')) return;
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
-    
     const guild = interaction.guild;
     if (!guild) {
         await interaction.editReply({ content: 'This command can only be used in a server.' });
         return;
     }
-    
     try {
         const guild = interaction.guild;
         const duoVc = await guild.channels.create({

@@ -1,5 +1,4 @@
-import { CACHE_TTL } from './constants'; // Bug #14 Fix: Use named constants
-
+import { CACHE_TTL } from './constants'; 
 interface CacheEntry<T> {
     data: T;
     expiresAt: number;
@@ -66,9 +65,6 @@ class TTLCache<K, V> {
         return this.cache.size;
     }
 }
-
-// Bug #14 Fix: Removed duplicate CACHE_TTL definition (now imported from constants.ts)
-
 interface CachedGuildSettings {
     id: string;
     guildId: string;

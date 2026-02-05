@@ -95,14 +95,11 @@ class EnforcerService {
             isPvc = !!pvc;
             isTeam = !!team;
             channelOwnerId = pvc?.ownerId || team?.ownerId || null;
-            
-            // Issue #21 Fix: Owner can always edit their own channel
             if (channelOwnerId === userId) {
                 console.log(`[Enforcer] User ${userId} is channel owner - authorized`);
                 return true;
             }
         }
-        // Issue #22 Fix: Use Promise.allSettled for resilience
         const results = await Promise.allSettled([
             getGuildSettings(guildId),
             prisma.teamVoiceSettings.findUnique({ where: { guildId } }),
@@ -196,7 +193,6 @@ class EnforcerService {
                 this.enforcingChannels.delete(channelId);
                 return;
             }
-
             if (!channel) {
                 console.warn(`[Enforcer] Channel ${channelId} could not be resolved. Aborting.`);
                 this.enforcingChannels.delete(channelId);
@@ -223,7 +219,6 @@ class EnforcerService {
     }
     private async kickUnauthorizedMembers(channel: VoiceChannel, dbState: any): Promise<void> {
         const guild = channel.guild;
-        // Bug #12 Fix: Use Promise.allSettled to prevent single failure from blocking all
         const results = await Promise.allSettled([
             getGuildSettings(guild.id),
             prisma.teamVoiceSettings.findUnique({ where: { guildId: guild.id } }),
@@ -266,47 +261,31 @@ class EnforcerService {
         );
         for (const [memberId, member] of channel.members) {
             if (member.user.bot) continue;
-            
-            // Always allow the owner (unless globally blocked)
             if (memberId === dbState.ownerId && !globallyBlockedUserIds.has(memberId)) continue;
-            
-            // Kick globally blocked users immediately
             if (globallyBlockedUserIds.has(memberId)) {
                 await this.kickMemberInstantly(member, channel.name, dbState.ownerId, 'globally blocked');
                 continue;
             }
-            
             const memberRoleIds = member.roles.cache.map(r => r.id);
-            
-            // Kick banned users immediately
             const isBanned = bannedUserIds.has(memberId) ||
                 memberRoleIds.some(roleId => bannedRoleIds.has(roleId));
             if (isBanned) {
                 await this.kickMemberInstantly(member, channel.name, dbState.ownerId, 'blocked');
                 continue;
             }
-            
-            // Check if channel is restricted
             const isRestricted = isLocked || isHidden || isFull;
             if (!isRestricted) {
-                continue; // Channel is open, allow everyone (except banned)
+                continue; 
             }
-            
-            // BUG FIX: Check permitted users BEFORE admin strictness
-            // Owner's trusted users should always be allowed, regardless of admin strictness
             const isPermitted = permittedUserIds.has(memberId) ||
                 memberRoleIds.some(roleId => permittedRoleIds.has(roleId));
             if (isPermitted) {
                 continue;
             }
-            
-            // Check permanent access (trusted users from /permanent_access)
             const hasPermanentAccess = stateStore.hasPermanentAccess(guild.id, dbState.ownerId, memberId);
             if (hasPermanentAccess) {
                 continue;
             }
-            
-            // NOW check admin strictness (only for non-permitted users)
             if (strictnessEnabled) {
                 const isWhitelisted = whitelist.some(
                     w => w.targetId === memberId || memberRoleIds.includes(w.targetId)
@@ -314,13 +293,10 @@ class EnforcerService {
                 if (isWhitelisted) {
                     continue;
                 }
-                // Not whitelisted AND not permitted by owner = kick
                 const restrictionReason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
                 await this.kickMemberInstantly(member, channel.name, dbState.ownerId, `not whitelisted - channel ${restrictionReason} (admin strictness)`);
                 continue;
             }
-            
-            // No admin strictness, but channel is restricted and user not permitted = kick
             const reason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
             await this.kickMemberInstantly(member, channel.name, dbState.ownerId, reason);
         }
