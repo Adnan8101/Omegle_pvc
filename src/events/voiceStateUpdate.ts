@@ -460,7 +460,9 @@ async function handleAccessProtection(
         }
         return false;
     }
-    // isLocked and isHidden already declared above for whitelist check
+    
+    const isLocked = dbState.isLocked;
+    const isHidden = dbState.isHidden;
     let isFull = false;
     let actualMembers = 0;
     if ('teamType' in dbState && dbState.teamType) {
