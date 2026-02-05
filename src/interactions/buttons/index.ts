@@ -700,11 +700,11 @@ async function handleDeleteConfirm(interaction: ButtonInteraction): Promise<void
         if (isTeamChannel) {
             const { unregisterTeamChannel } = await import('../../utils/voiceManager');
             unregisterTeamChannel(channelId);
-            await prisma.teamVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+            await prisma.teamVoiceChannel.deleteMany({ where: { channelId } }).catch(() => { });
             await prisma.teamVoicePermission.deleteMany({ where: { channelId } }).catch(() => { });
         } else {
             unregisterChannel(channelId);
-            await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+            await prisma.privateVoiceChannel.deleteMany({ where: { channelId } }).catch(() => { });
             await prisma.voicePermission.deleteMany({ where: { channelId } }).catch(() => { });
         }
         await logAction({
@@ -765,7 +765,7 @@ async function handleAdminDelete(interaction: ButtonInteraction): Promise<void> 
             });
         }
         unregisterChannel(channelId);
-        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+        await prisma.privateVoiceChannel.deleteMany({ where: { channelId } }).catch(() => { });
         await prisma.voicePermission.deleteMany({ where: { channelId } }).catch(() => { });
         await interaction.update({
             content: `Channel **${channelName}** deleted successfully.`,

@@ -226,6 +226,9 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         await interaction.editReply('❌ Failed to update settings in database. Please try again.');
         return;
     }
+    
+    await interaction.editReply('🔄 **Refresh started!** Processing channels, syncing permissions, and updating interface...\nThis may take a moment for large servers.');
+    
     console.log('[Refresh PVC] Invalidating caches...');
     invalidateGuildSettings(guild.id);
     invalidateAllCaches();
@@ -438,7 +441,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                         console.log(`[Refresh PVC] Channel ${pvc.channelId} is empty, deleting...`);
                         try {
                             await channel.delete('Refresh: Empty channel cleanup');
-                            await prisma.privateVoiceChannel.delete({ where: { channelId: pvc.channelId } });
+                            await prisma.privateVoiceChannel.deleteMany({ where: { channelId: pvc.channelId } });
                             channelsDeleted++;
                             console.log(`[Refresh PVC] Deleted empty channel ${pvc.channelId}`);
                         } catch (deleteErr) {
@@ -518,7 +521,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                         console.log(`[Refresh PVC] Team channel ${tc.channelId} is empty, deleting...`);
                         try {
                             await channel.delete('Refresh: Empty team channel cleanup');
-                            await prisma.teamVoiceChannel.delete({ where: { channelId: tc.channelId } });
+                            await prisma.teamVoiceChannel.deleteMany({ where: { channelId: tc.channelId } });
                             channelsDeleted++;
                             console.log(`[Refresh PVC] Deleted empty team channel ${tc.channelId}`);
                         } catch (deleteErr) {

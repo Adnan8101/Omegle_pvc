@@ -162,8 +162,8 @@ class EnforcerService {
                         channel = fetchedChannel as VoiceChannel;
                     } else if (fetchedChannel) {
                         console.log(`[Enforcer] Channel ${channelId} exists but type is ${fetchedChannel.type} (not Voice). Cleaning up DB...`);
-                        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
-                        await prisma.teamVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+                        await prisma.privateVoiceChannel.deleteMany({ where: { channelId } }).catch(() => { });
+                        await prisma.teamVoiceChannel.deleteMany({ where: { channelId } }).catch(() => { });
                         this.enforcingChannels.delete(channelId);
                         return;
                     }
@@ -176,8 +176,8 @@ class EnforcerService {
                         fetchErr.status === 403;
                     if (isDefinitiveMissing || isAccessDenied) {
                         console.log(`[Enforcer] Channel ${channelId} confirmed missing/inaccessible. Cleaning up DB...`);
-                        await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
-                        await prisma.teamVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+                        await prisma.privateVoiceChannel.deleteMany({ where: { channelId } }).catch(() => { });
+                        await prisma.teamVoiceChannel.deleteMany({ where: { channelId } }).catch(() => { });
                         this.enforcingChannels.delete(channelId);
                         return;
                     } else {
@@ -188,8 +188,8 @@ class EnforcerService {
                 }
             }
             if (channel && channel.type !== ChannelType.GuildVoice) {
-                await prisma.privateVoiceChannel.delete({ where: { channelId } }).catch(() => { });
-                await prisma.teamVoiceChannel.delete({ where: { channelId } }).catch(() => { });
+                await prisma.privateVoiceChannel.deleteMany({ where: { channelId } }).catch(() => { });
+                await prisma.teamVoiceChannel.deleteMany({ where: { channelId } }).catch(() => { });
                 this.enforcingChannels.delete(channelId);
                 return;
             }

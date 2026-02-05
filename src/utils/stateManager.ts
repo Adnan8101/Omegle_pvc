@@ -18,7 +18,7 @@ export async function cleanupStaleChannels(): Promise<{ removed: number; total: 
                 const channel = guild.channels.cache.get(pvc.channelId);
                 if (!channel || channel.type !== ChannelType.GuildVoice) {
                     unregisterChannel(pvc.channelId);
-                    await prisma.privateVoiceChannel.delete({
+                    await prisma.privateVoiceChannel.deleteMany({
                         where: { channelId: pvc.channelId },
                     }).catch(() => { });
                     removed++;

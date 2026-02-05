@@ -45,7 +45,7 @@ export async function validateVoiceChannel(guild: Guild, channelId: string): Pro
 }
 async function cleanupStaleChannel(channelId: string): Promise<void> {
     unregisterChannel(channelId);
-    await prisma.privateVoiceChannel.delete({
+    await prisma.privateVoiceChannel.deleteMany({
         where: { channelId },
     }).catch(() => { });
 }

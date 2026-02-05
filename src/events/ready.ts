@@ -102,7 +102,7 @@ export async function execute(client: PVCClient): Promise<void> {
                             }
                         }
                         if (deletedFromDiscord) {
-                            await prisma.privateVoiceChannel.delete({ where: { channelId: pvc.channelId } }).catch(() => { });
+                            await prisma.privateVoiceChannel.deleteMany({ where: { channelId: pvc.channelId } }).catch(() => { });
                             await prisma.voicePermission.deleteMany({ where: { channelId: pvc.channelId } }).catch(() => { });
                             cleanedCount++;
                             console.log(`[Ready] ✅ Successfully cleaned up zombie channel ${pvc.channelId}`);
@@ -127,7 +127,7 @@ export async function execute(client: PVCClient): Promise<void> {
                     }
                     registeredCount++;
                 } else {
-                    await prisma.privateVoiceChannel.delete({
+                    await prisma.privateVoiceChannel.deleteMany({
                         where: { channelId: pvc.channelId },
                     }).catch(() => { });
                     cleanedCount++;
@@ -171,7 +171,7 @@ export async function execute(client: PVCClient): Promise<void> {
                         }
                     }
                     if (deletedFromDiscord) {
-                        await prisma.teamVoiceChannel.delete({ where: { channelId: tc.channelId } }).catch(() => { });
+                        await prisma.teamVoiceChannel.deleteMany({ where: { channelId: tc.channelId } }).catch(() => { });
                         await prisma.teamVoicePermission.deleteMany({ where: { channelId: tc.channelId } }).catch(() => { });
                         cleanedCount++;
                         console.log(`[Ready] ✅ Successfully cleaned up zombie team channel ${tc.channelId}`);
@@ -197,7 +197,7 @@ export async function execute(client: PVCClient): Promise<void> {
                 }
                 registeredCount++;
             } else {
-                await prisma.teamVoiceChannel.delete({
+                await prisma.teamVoiceChannel.deleteMany({
                     where: { channelId: tc.channelId },
                 }).catch(() => { });
                 cleanedCount++;
@@ -336,7 +336,7 @@ async function startPeriodicSync(client: PVCClient, stateStore: any): Promise<vo
                     }
                 }
                 if (!channel || channel.type !== ChannelType.GuildVoice) {
-                    await prisma.privateVoiceChannel.delete({ where: { channelId: pvc.channelId } }).catch(() => { });
+                    await prisma.privateVoiceChannel.deleteMany({ where: { channelId: pvc.channelId } }).catch(() => { });
                     continue;
                 }
                 const nonBotMembers = channel.members.filter(m => !m.user.bot);
@@ -349,7 +349,7 @@ async function startPeriodicSync(client: PVCClient, stateStore: any): Promise<vo
                             isTeam: false,
                         });
                         if (result.success) {
-                            await prisma.privateVoiceChannel.delete({ where: { channelId: pvc.channelId } }).catch(() => { });
+                            await prisma.privateVoiceChannel.deleteMany({ where: { channelId: pvc.channelId } }).catch(() => { });
                             await prisma.voicePermission.deleteMany({ where: { channelId: pvc.channelId } }).catch(() => { });
                             unregisterChannel(pvc.channelId);
                             invalidateChannelPermissions(pvc.channelId);
@@ -357,7 +357,7 @@ async function startPeriodicSync(client: PVCClient, stateStore: any): Promise<vo
                             const chCheck = guild.channels.cache.get(pvc.channelId);
                             if (!chCheck) {
                                 console.log(`[PeriodicSync] Channel ${pvc.channelId} missing after failed delete - cleaning DB`);
-                                await prisma.privateVoiceChannel.delete({ where: { channelId: pvc.channelId } }).catch(() => { });
+                                await prisma.privateVoiceChannel.deleteMany({ where: { channelId: pvc.channelId } }).catch(() => { });
                                 unregisterChannel(pvc.channelId);
                             } else {
                                 console.error(`[PeriodicSync] Failed to delete channel ${pvc.channelId}: ${result.error}`);
@@ -403,7 +403,7 @@ async function startPeriodicSync(client: PVCClient, stateStore: any): Promise<vo
                     }
                 }
                 if (!channel || channel.type !== ChannelType.GuildVoice) {
-                    await prisma.teamVoiceChannel.delete({ where: { channelId: tc.channelId } }).catch(() => { });
+                    await prisma.teamVoiceChannel.deleteMany({ where: { channelId: tc.channelId } }).catch(() => { });
                     continue;
                 }
                 const nonBotMembers = channel.members.filter(m => !m.user.bot);
@@ -416,13 +416,13 @@ async function startPeriodicSync(client: PVCClient, stateStore: any): Promise<vo
                             isTeam: true,
                         });
                         if (result.success) {
-                            await prisma.teamVoiceChannel.delete({ where: { channelId: tc.channelId } }).catch(() => { });
+                            await prisma.teamVoiceChannel.deleteMany({ where: { channelId: tc.channelId } }).catch(() => { });
                             await prisma.teamVoicePermission.deleteMany({ where: { channelId: tc.channelId } }).catch(() => { });
                             unregisterTeamChannel(tc.channelId);
                         } else {
                             const chCheck = guild.channels.cache.get(tc.channelId);
                             if (!chCheck) {
-                                await prisma.teamVoiceChannel.delete({ where: { channelId: tc.channelId } }).catch(() => { });
+                                await prisma.teamVoiceChannel.deleteMany({ where: { channelId: tc.channelId } }).catch(() => { });
                                 unregisterTeamChannel(tc.channelId);
                             } else {
                                 console.error(`[PeriodicSync] Failed to delete team channel ${tc.channelId}: ${result.error}`);

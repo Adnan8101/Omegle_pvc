@@ -71,7 +71,7 @@ async function refreshGuild(guild: Guild): Promise<void> {
         for (const pvc of settings.privateChannels) {
             const channel = guild.channels.cache.get(pvc.channelId);
             if (!channel || channel.type !== ChannelType.GuildVoice) {
-                await prisma.privateVoiceChannel.delete({ where: { channelId: pvc.channelId } }).catch(() => {});
+                await prisma.privateVoiceChannel.deleteMany({ where: { channelId: pvc.channelId } }).catch(() => {});
                 await prisma.voicePermission.deleteMany({ where: { channelId: pvc.channelId } }).catch(() => {});
                 continue;
             }
@@ -101,7 +101,7 @@ async function refreshGuild(guild: Guild): Promise<void> {
         for (const tc of teamSettings.teamChannels) {
             const channel = guild.channels.cache.get(tc.channelId);
             if (!channel || channel.type !== ChannelType.GuildVoice) {
-                await prisma.teamVoiceChannel.delete({ where: { channelId: tc.channelId } }).catch(() => {});
+                await prisma.teamVoiceChannel.deleteMany({ where: { channelId: tc.channelId } }).catch(() => {});
                 await prisma.teamVoicePermission.deleteMany({ where: { channelId: tc.channelId } }).catch(() => {});
                 continue;
             }
