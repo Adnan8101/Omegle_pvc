@@ -84,6 +84,28 @@ export class VCQueueWorker {
             await vcQueueService.markCompleted(id, request.channelId);
             return;
         }
+        const isTeam = requestType !== VCRequestType.PVC;
+        const existingChannel = isTeam
+            ? await prisma.teamVoiceChannel.findFirst({ where: { guildId, ownerId: userId } })
+            : await prisma.privateVoiceChannel.findFirst({ where: { guildId, ownerId: userId } });
+        if (existingChannel) {
+            console.log(`[VCQueueWorker] ✅ User ${userId} already has channel ${existingChannel.channelId} - marking completed`);
+            await vcQueueService.markCompleted(id, existingChannel.channelId);
+            const guild = this.client?.guilds.cache.get(guildId);
+            if (guild) {
+                const member = await guild.members.fetch(userId).catch(() => null);
+                const channel = guild.channels.cache.get(existingChannel.channelId);
+                if (member && channel && channel.isVoiceBased() && member.voice.channelId) {
+                    try {
+                        await member.voice.setChannel(channel);
+                        console.log(`[VCQueueWorker] ✅ Moved user ${userId} to existing channel ${existingChannel.channelId}`);
+                    } catch (error) {
+                        console.error(`[VCQueueWorker] Failed to move user to existing channel:`, error);
+                    }
+                }
+            }
+            return;
+        }
         await vcQueueService.markProcessing(id);
         try {
             const guild = this.client?.guilds.cache.get(guildId);
@@ -125,29 +147,7 @@ export class VCQueueWorker {
             }
             const channelId = createResult.channelId;
             console.log(`[VCQueueWorker] ✅ VC created: ${channelId}`);
-            if (isTeam && teamType) {
-                registerTeamChannel(channelId, guildId, userId, teamType, false);
-            } else {
-                registerChannel(channelId, guildId, userId, false);
-            }
-            if (isTeam) {
-                await prisma.teamVoiceChannel.create({
-                    data: {
-                        channelId,
-                        guildId,
-                        ownerId: userId,
-                        teamType: teamType!.toUpperCase() as any,
-                    },
-                });
-            } else {
-                await prisma.privateVoiceChannel.create({
-                    data: {
-                        channelId,
-                        guildId,
-                        ownerId: userId,
-                    },
-                });
-            }
+            await guild.channels.fetch(channelId).catch(() => null);
             const channel = guild.channels.cache.get(channelId);
             if (channel && channel.isVoiceBased() && member.voice.channelId) {
                 try {
@@ -156,6 +156,8 @@ export class VCQueueWorker {
                 } catch (error) {
                     console.error(`[VCQueueWorker] Failed to move user to new channel:`, error);
                 }
+            } else {
+                console.log(`[VCQueueWorker] ⚠️ Could not move user - channel: ${!!channel}, voice-based: ${channel?.isVoiceBased()}, in voice: ${!!member.voice.channelId}`);
             }
             await vcQueueService.markCompleted(id, channelId);
             this.runPostCreationTasks(guild, member, channel, channelId, isTeam, teamType).catch(err => {
