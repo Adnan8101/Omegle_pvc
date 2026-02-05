@@ -1221,16 +1221,18 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
             const position = await vcQueueService.getQueuePosition(existingRequest.id);
             console.log(`[VCNS-CREATE] User already in queue at position ${position}`);
             releaseCreationLock(guild.id, member.id);
-            try {
-                await member.send({
-                    embeds: [{
-                        title: '⏳ Already in Queue',
-                        description: `You're already waiting for your voice channel!\n\n**Queue Position:** #${position}\n\nPlease stay in the interface channel and your VC will be created automatically.`,
-                        color: 0xFFA500,
-                        timestamp: new Date().toISOString(),
-                    }],
-                }).catch(() => {});
-            } catch {}
+            if (position >= 5) {
+                try {
+                    await member.send({
+                        embeds: [{
+                            title: '⏳ Already in Queue',
+                            description: `You're already waiting for your voice channel!\n\n**Queue Position:** #${position}\n\nPlease stay in the interface channel and your VC will be created automatically.`,
+                            color: 0xFFA500,
+                            timestamp: new Date().toISOString(),
+                        }],
+                    }).catch(() => {});
+                } catch {}
+            }
             return;
         }
         const request = await vcQueueService.createRequest({
@@ -1246,19 +1248,21 @@ async function createPrivateChannel(client: PVCClient, state: VoiceState): Promi
         const position = await vcQueueService.getQueuePosition(request.id);
         const queueSize = await vcQueueService.getQueueSize(guild.id);
         console.log(`[VCNS-CREATE] ✅ Request ${request.id} created - Position: ${position}/${queueSize}`);
-        try {
-            await member.send({
-                embeds: [{
-                    title: '✅ Added to VC Creation Queue',
-                    description: `Your voice channel is being created!\n\n**Queue Position:** #${position} of ${queueSize}\n**Status:** ${request.status}\n\n⏳ Please **stay in the interface channel**. You'll be automatically moved to your new VC when it's ready!\n\nThis may take a few seconds if the server is busy.`,
-                    color: 0x00FF00,
-                    timestamp: new Date().toISOString(),
-                    footer: {
-                        text: 'We guarantee your VC will be created - infinite retry enabled',
-                    },
-                }],
-            }).catch(() => {});
-        } catch {}
+        if (position >= 5) {
+            try {
+                await member.send({
+                    embeds: [{
+                        title: '✅ Added to VC Creation Queue',
+                        description: `Your voice channel is being created!\n\n**Queue Position:** #${position} of ${queueSize}\n**Status:** ${request.status}\n\n⏳ Please **stay in the interface channel**. You'll be automatically moved to your new VC when it's ready!\n\nThis may take a few seconds if the server is busy.`,
+                        color: 0x00FF00,
+                        timestamp: new Date().toISOString(),
+                        footer: {
+                            text: 'We guarantee your VC will be created - infinite retry enabled',
+                        },
+                    }],
+                }).catch(() => {});
+            } catch {}
+        }
         return;
     } catch (error) {
         console.error('[VCNS-CREATE] Error:', error);
@@ -1553,16 +1557,18 @@ async function createTeamChannel(client: PVCClient, state: VoiceState, teamType:
             const position = await vcQueueService.getQueuePosition(existingRequest.id);
             console.log(`[TEAM-CREATE] User already in queue at position ${position}`);
             releaseCreationLock(guild.id, member.id);
-            try {
-                await member.send({
-                    embeds: [{
-                        title: '⏳ Already in Queue',
-                        description: `You're already waiting for your ${teamType} channel!\n\n**Queue Position:** #${position}\n\nPlease stay in the interface channel and your VC will be created automatically.`,
-                        color: 0xFFA500,
-                        timestamp: new Date().toISOString(),
-                    }],
-                }).catch(() => {});
-            } catch {}
+            if (position >= 5) {
+                try {
+                    await member.send({
+                        embeds: [{
+                            title: '⏳ Already in Queue',
+                            description: `You're already waiting for your ${teamType} channel!\n\n**Queue Position:** #${position}\n\nPlease stay in the interface channel and your VC will be created automatically.`,
+                            color: 0xFFA500,
+                            timestamp: new Date().toISOString(),
+                        }],
+                    }).catch(() => {});
+                } catch {}
+            }
             return;
         }
         const request = await vcQueueService.createRequest({
@@ -1584,19 +1590,21 @@ async function createTeamChannel(client: PVCClient, state: VoiceState, teamType:
         const position = await vcQueueService.getQueuePosition(request.id);
         const queueSize = await vcQueueService.getQueueSize(guild.id);
         console.log(`[TEAM-CREATE] ✅ Request ${request.id} created - Position: ${position}/${queueSize}`);
-        try {
-            await member.send({
-                embeds: [{
-                    title: `✅ Added to ${teamType.toUpperCase()} Channel Queue`,
-                    description: `Your team voice channel is being created!\n\n**Queue Position:** #${position} of ${queueSize}\n**Status:** ${request.status}\n**User Limit:** ${userLimit}\n\n⏳ Please **stay in the interface channel**. You'll be automatically moved to your new VC when it's ready!\n\nThis may take a few seconds if the server is busy.`,
-                    color: 0x00FF00,
-                    timestamp: new Date().toISOString(),
-                    footer: {
-                        text: 'We guarantee your VC will be created - infinite retry enabled',
-                    },
-                }],
-            }).catch(() => {});
-        } catch {}
+        if (position >= 5) {
+            try {
+                await member.send({
+                    embeds: [{
+                        title: `✅ Added to ${teamType.toUpperCase()} Channel Queue`,
+                        description: `Your team voice channel is being created!\n\n**Queue Position:** #${position} of ${queueSize}\n**Status:** ${request.status}\n**User Limit:** ${userLimit}\n\n⏳ Please **stay in the interface channel**. You'll be automatically moved to your new VC when it's ready!\n\nThis may take a few seconds if the server is busy.`,
+                        color: 0x00FF00,
+                        timestamp: new Date().toISOString(),
+                        footer: {
+                            text: 'We guarantee your VC will be created - infinite retry enabled',
+                        },
+                    }],
+                }).catch(() => {});
+            } catch {}
+        }
         return;
     } catch (error) {
         console.error('[TEAM-CREATE] Error:', error);
