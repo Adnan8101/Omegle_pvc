@@ -1385,16 +1385,29 @@ async function transferChannelOwnership(
             }
         }
         recordBotEdit(channelId);
+
+        // Use queue system to handle rate limits automatically
         if (oldOwnerId) {
-            try {
-                await channel.permissionOverwrites.delete(oldOwnerId);
+            console.log(`[TransferOwnership] 🔄 Removing old owner ${oldOwnerId} permissions via queue...`);
+            const removeResult = await vcnsBridge.removePermission({
+                guild: guild,
+                channelId: channelId,
+                targetId: oldOwnerId,
+                allowWhenHealthy: true,
+            });
+            if (removeResult.success) {
                 console.log(`[TransferOwnership] ✅ Removed old owner ${oldOwnerId} permissions`);
-            } catch (err) {
-                console.log(`[TransferOwnership] ⚠️ Failed to remove old owner permissions:`, err);
+            } else {
+                console.log(`[TransferOwnership] ⚠️ Failed to remove old owner permissions:`, removeResult.error);
             }
         }
-        try {
-            await channel.permissionOverwrites.edit(newOwner, {
+
+        console.log(`[TransferOwnership] 🔄 Granting new owner ${nextUserId} permissions via queue...`);
+        const editResult = await vcnsBridge.editPermission({
+            guild: guild,
+            channelId: channelId,
+            targetId: nextUserId,
+            permissions: {
                 ViewChannel: true,
                 Connect: true,
                 Speak: true,
@@ -1405,17 +1418,28 @@ async function transferChannelOwnership(
                 MuteMembers: true,
                 DeafenMembers: true,
                 ManageChannels: true,
-            });
+            },
+            allowWhenHealthy: true,
+        });
+        if (editResult.success) {
             console.log(`[TransferOwnership] ✅ Granted new owner ${nextUserId} full permissions`);
-        } catch (permErr) {
-            console.error(`[TransferOwnership] ❌ Failed to set new owner permissions:`, permErr);
+        } else {
+            console.error(`[TransferOwnership] ❌ Failed to set new owner permissions:`, editResult.error);
         }
-        try {
-            await channel.setName(newOwner.displayName);
+
+        console.log(`[TransferOwnership] 🔄 Renaming channel via queue...`);
+        const renameResult = await vcnsBridge.renameVC({
+            guild: guild,
+            channelId: channelId,
+            newName: newOwner.displayName,
+            allowWhenHealthy: true,
+        });
+        if (renameResult.success) {
             console.log(`[TransferOwnership] ✅ Renamed channel to: ${newOwner.displayName}`);
-        } catch (err) {
-            console.log(`[TransferOwnership] ⚠️ Failed to rename channel:`, err);
+        } else {
+            console.log(`[TransferOwnership] ⚠️ Failed to rename channel:`, renameResult.error);
         }
+
         await logAction({
             action: LogAction.CHANNEL_TRANSFERRED,
             guild: guild,
@@ -1727,16 +1751,29 @@ async function transferTeamChannelOwnership(
         });
         console.log(`[TransferTeamOwnership] ✅ Updated DB owner`);
         recordBotEdit(channelId);
+
+        // Use queue system to handle rate limits automatically
         if (oldOwnerId) {
-            try {
-                await channel.permissionOverwrites.delete(oldOwnerId);
+            console.log(`[TransferTeamOwnership] 🔄 Removing old owner permissions via queue...`);
+            const removeResult = await vcnsBridge.removePermission({
+                guild: guild,
+                channelId: channelId,
+                targetId: oldOwnerId,
+                allowWhenHealthy: true,
+            });
+            if (removeResult.success) {
                 console.log(`[TransferTeamOwnership] ✅ Removed old owner permissions`);
-            } catch (err) {
-                console.log(`[TransferTeamOwnership] ⚠️ Failed to remove old owner perms:`, err);
+            } else {
+                console.log(`[TransferTeamOwnership] ⚠️ Failed to remove old owner perms:`, removeResult.error);
             }
         }
-        try {
-            await channel.permissionOverwrites.edit(newOwner, {
+
+        console.log(`[TransferTeamOwnership] 🔄 Granting new owner permissions via queue...`);
+        const editResult = await vcnsBridge.editPermission({
+            guild: guild,
+            channelId: channelId,
+            targetId: nextUserId,
+            permissions: {
                 ViewChannel: true,
                 Connect: true,
                 Speak: true,
@@ -1747,19 +1784,31 @@ async function transferTeamChannelOwnership(
                 MuteMembers: true,
                 DeafenMembers: true,
                 ManageChannels: true,
-            });
+            },
+            allowWhenHealthy: true,
+        });
+        if (editResult.success) {
             console.log(`[TransferTeamOwnership] ✅ Granted new owner permissions`);
-        } catch (permErr) {
-            console.error(`[TransferTeamOwnership] ❌ Failed to set permissions:`, permErr);
+        } else {
+            console.error(`[TransferTeamOwnership] ❌ Failed to set permissions:`, editResult.error);
         }
+
         const teamType = teamState?.teamType || 'Team';
         const teamTypeName = teamType.charAt(0).toUpperCase() + teamType.slice(1).toLowerCase();
-        try {
-            await channel.setName(`${newOwner.displayName}'s ${teamTypeName}`);
+        
+        console.log(`[TransferTeamOwnership] 🔄 Renaming team channel via queue...`);
+        const renameResult = await vcnsBridge.renameVC({
+            guild: guild,
+            channelId: channelId,
+            newName: `${newOwner.displayName}'s ${teamTypeName}`,
+            allowWhenHealthy: true,
+        });
+        if (renameResult.success) {
             console.log(`[TransferTeamOwnership] ✅ Renamed channel`);
-        } catch (err) {
-            console.log(`[TransferTeamOwnership] ⚠️ Failed to rename:`, err);
+        } else {
+            console.log(`[TransferTeamOwnership] ⚠️ Failed to rename:`, renameResult.error);
         }
+
         await logAction({
             action: LogAction.CHANNEL_TRANSFERRED,
             guild: guild,

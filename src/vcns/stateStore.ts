@@ -336,8 +336,6 @@ export class StateStore extends EventEmitter {
         this.channelBans.delete(channelId);
         console.log(`[StateStore] ✅ Cleared all permissions for channel ${channelId}`);
     }
-
-    // Load channel permissions from DB
     public loadChannelPermissions(channelId: string, permissions: Array<{ targetId: string; permission: string }>): void {
         for (const perm of permissions) {
             if (perm.permission === 'permit') {

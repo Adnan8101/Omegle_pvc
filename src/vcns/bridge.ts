@@ -435,6 +435,36 @@ export class VCNSBridge {
             eta: result.eta,
         };
     }
+    public async renameVC(options: {
+        guild: Guild;
+        channelId: string;
+        newName: string;
+        allowWhenHealthy?: boolean;
+    }): Promise<BridgeResult> {
+        if (!vcns.isActive()) {
+            return { success: false, queued: false, error: 'VCNS not active' };
+        }
+        try {
+            const channel = options.guild.channels.cache.get(options.channelId);
+            if (!channel || !channel.isVoiceBased()) {
+                console.error(`[VCNSBridge] renameVC failed: channel ${options.channelId} not found or not voice-based`);
+                return { success: false, queued: false, error: 'Channel not found' };
+            }
+            await this.executeFallback(
+                `vc:rename:${options.channelId}`,
+                async () => {
+                    await channel.setName(options.newName);
+                },
+                IntentPriority.NORMAL,
+                options.allowWhenHealthy || false,
+            );
+            return { success: true, queued: false };
+        } catch (error: any) {
+            console.error(`[VCNSBridge] renameVC error for channel ${options.channelId}:`, error);
+            return { success: false, queued: false, error: error.message };
+        }
+    }
+
     public async editPermission(options: {
         guild: Guild;
         channelId: string;
