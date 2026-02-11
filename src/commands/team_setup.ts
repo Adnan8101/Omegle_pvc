@@ -64,7 +64,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         let logsWebhook;
         try {
             const webhooks = await (logsChannel as any).fetchWebhooks();
-            logsWebhook = webhooks.find((w: any) => w.owner?.id === interaction.client.user?.id && w.name === 'Team VC Logger');
+            logsWebhook = webhooks.find((w: any) => w.owner?.id === interaction.client.user?.id && w.name === interaction.client.user?.username);
             if (!logsWebhook) {
                 const botWebhooks = webhooks.filter((w: any) => w.owner?.id === interaction.client.user?.id);
                 if (webhooks.size >= 15 && botWebhooks.size > 0) {
@@ -75,8 +75,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                         } catch {}
                     }
                 }
+                const botAvatar = interaction.client.user?.displayAvatarURL();
                 logsWebhook = await (logsChannel as any).createWebhook({
-                    name: 'Team VC Logger',
+                    name: interaction.client.user?.username || 'Team VC Logger',
+                    avatar: botAvatar,
                     reason: 'For logging Team VC actions',
                 });
             }

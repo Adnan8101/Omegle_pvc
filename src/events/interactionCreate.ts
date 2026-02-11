@@ -32,22 +32,26 @@ async function safeReply(interaction: Interaction, content: string): Promise<voi
     try {
         if (!interaction.isRepliable() || interaction.isAutocomplete()) return;
         if (interaction.replied) {
-            await interaction.followUp({ content, ephemeral: true }).catch(() => { });
+            await interaction.followUp({ content, flags: [MessageFlags.Ephemeral] }).catch(() => { });
         } else if (interaction.deferred) {
-            await interaction.editReply({ content }).catch(() => { });
+            await interaction.editReply({ content }).catch((err: any) => {
+                if (err.code === 10008) {
+                    console.log('[InteractionCreate] Interaction expired (Unknown Message)');
+                }
+            });
         } else {
-            await interaction.reply({ content, ephemeral: true }).catch(() => { });
+            await interaction.reply({ content, flags: [MessageFlags.Ephemeral] }).catch(() => { });
         }
     } catch { }
 }
 function isStaleError(error: unknown): boolean {
     const discordError = error as DiscordAPIError;
     const staleErrorCodes = [
-        10003,
-        10008,
-        50027,
-        10062, 
-        40060, 
+        10003,  // Unknown Channel
+        10008,  // Unknown Message (interaction expired)
+        50027,  // Invalid Webhook Token
+        10062,  // Unknown Interaction
+        40060,  // Interaction has already been acknowledged 
     ];
     return staleErrorCodes.includes(discordError.code as number);
 }

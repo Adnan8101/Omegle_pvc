@@ -130,7 +130,7 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
         let logsWebhook;
         try {
             const webhooks = await (logsChannel as any).fetchWebhooks();
-            logsWebhook = webhooks.find((w: any) => w.owner?.id === interaction.client.user?.id && w.name === 'PVC Logger');
+            logsWebhook = webhooks.find((w: any) => w.owner?.id === interaction.client.user?.id && w.name === interaction.client.user?.username);
             if (logsWebhook) {
                 console.log('[PVC Setup] Reusing existing webhook:', logsWebhook.id);
             } else {
@@ -147,8 +147,10 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
                         }
                     }
                 }
+                const botAvatar = interaction.client.user?.displayAvatarURL();
                 logsWebhook = await (logsChannel as any).createWebhook({
-                    name: 'PVC Logger',
+                    name: interaction.client.user?.username || 'PVC Logger',
+                    avatar: botAvatar,
                     reason: 'For logging PVC actions',
                 });
                 console.log('[PVC Setup] Webhook created successfully');
