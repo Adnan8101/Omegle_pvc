@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider     = "postgresql"
+  url          = env("DATABASE_URL")
+  relationMode = "prisma"
 }
 
 model GuildSettings {
@@ -20,44 +21,44 @@ model GuildSettings {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  privateChannels  PrivateVoiceChannel[]
-  pendingRequests  PendingRenameRequest[]
-  
+  privateChannels PrivateVoiceChannel[]
+  pendingRequests PendingRenameRequest[]
+
   @@index([guildId])
 }
 
 model PendingRenameRequest {
-  id          String   @id @default(uuid())
-  guildId     String
-  userId      String
-  channelId   String
-  newName     String
-  messageId   String   @unique
-  createdAt   DateTime @default(now())
-  
-  guild       GuildSettings @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
-  
+  id        String   @id @default(uuid())
+  guildId   String
+  userId    String
+  channelId String
+  newName   String
+  messageId String   @unique
+  createdAt DateTime @default(now())
+
+  guild GuildSettings @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
+
   @@index([guildId])
   @@index([userId])
   @@index([messageId])
 }
 
 model PrivateVoiceChannel {
-  id          String   @id @default(uuid())
-  channelId   String   @unique
-  guildId     String
-  ownerId     String
-  createdAt   DateTime @default(now())
+  id        String   @id @default(uuid())
+  channelId String   @unique
+  guildId   String
+  ownerId   String
+  createdAt DateTime @default(now())
 
   // -- STATE PERSISTENCE --
-  isLocked         Boolean  @default(false)
-  isHidden         Boolean  @default(false)
-  userLimit        Int      @default(0)
-  bitrate          Int      @default(64000)
+  isLocked         Boolean @default(false)
+  isHidden         Boolean @default(false)
+  userLimit        Int     @default(0)
+  bitrate          Int     @default(64000)
   rtcRegion        String?
-  videoQualityMode Int      @default(1)
+  videoQualityMode Int     @default(1)
 
-  guild       GuildSettings @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
+  guild       GuildSettings     @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
   permissions VoicePermission[]
 
   @@index([guildId])
@@ -73,7 +74,7 @@ model VoicePermission {
   permission String
   createdAt  DateTime @default(now())
 
-  channel    PrivateVoiceChannel @relation(fields: [channelId], references: [channelId], onDelete: Cascade)
+  channel PrivateVoiceChannel @relation(fields: [channelId], references: [channelId], onDelete: Cascade)
 
   @@unique([channelId, targetId])
   @@index([channelId])
@@ -113,20 +114,20 @@ model PvcOwner {
 }
 
 model TeamVoiceSettings {
-  id              String   @id @default(uuid())
-  guildId         String   @unique
-  categoryId      String?
-  duoVcId         String?
-  trioVcId        String?
-  squadVcId       String?
-  logsChannelId   String?
-  logsWebhookUrl  String?
+  id               String   @id @default(uuid())
+  guildId          String   @unique
+  categoryId       String?
+  duoVcId          String?
+  trioVcId         String?
+  squadVcId        String?
+  logsChannelId    String?
+  logsWebhookUrl   String?
   commandChannelId String?
-  adminStrictness Boolean  @default(false)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  adminStrictness  Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  teamChannels    TeamVoiceChannel[]
+  teamChannels TeamVoiceChannel[]
 
   @@index([guildId])
 }
@@ -138,22 +139,22 @@ enum TeamType {
 }
 
 model TeamVoiceChannel {
-  id          String   @id @default(uuid())
-  channelId   String   @unique
-  guildId     String
-  ownerId     String
-  teamType    TeamType
-  createdAt   DateTime @default(now())
+  id        String   @id @default(uuid())
+  channelId String   @unique
+  guildId   String
+  ownerId   String
+  teamType  TeamType
+  createdAt DateTime @default(now())
 
   // -- STATE PERSISTENCE --
-  isLocked         Boolean  @default(false)
-  isHidden         Boolean  @default(false)
-  userLimit        Int      @default(0)
-  bitrate          Int      @default(64000)
+  isLocked         Boolean @default(false)
+  isHidden         Boolean @default(false)
+  userLimit        Int     @default(0)
+  bitrate          Int     @default(64000)
   rtcRegion        String?
-  videoQualityMode Int      @default(1)
+  videoQualityMode Int     @default(1)
 
-  guild       TeamVoiceSettings @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
+  guild       TeamVoiceSettings     @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
   permissions TeamVoicePermission[]
 
   @@index([guildId])
@@ -169,7 +170,7 @@ model TeamVoicePermission {
   permission String
   createdAt  DateTime @default(now())
 
-  channel    TeamVoiceChannel @relation(fields: [channelId], references: [channelId], onDelete: Cascade)
+  channel TeamVoiceChannel @relation(fields: [channelId], references: [channelId], onDelete: Cascade)
 
   @@unique([channelId, targetId])
   @@index([channelId])
@@ -223,7 +224,7 @@ model CountingSettings {
   channelId    String
   enabled      Boolean  @default(true)
   currentCount Int      @default(0)
-  lastUserId   String?  // To prevent same user counting twice
+  lastUserId   String? // To prevent same user counting twice
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -246,122 +247,6 @@ model CountingUserStats {
 }
 
 // =====================================
-// GIVEAWAY SYSTEM MODELS
-// =====================================
-
-model Giveaway {
-  id                    Int      @id @default(autoincrement())
-  messageId             String   @unique
-  channelId             String
-  guildId               String
-  hostId                String
-  prize                 String
-  winnersCount          Int
-  endTime               BigInt   // Unix timestamp in milliseconds
-  ended                 Boolean  @default(false)
-  paused                Boolean  @default(false)
-  pausedAt              BigInt?
-  createdAt             BigInt
-
-  // Requirements
-  roleRequirement       String?
-  inviteRequirement     Int      @default(0)
-  accountAgeRequirement Int      @default(0)
-  serverAgeRequirement  Int      @default(0)
-  captchaRequirement    Boolean  @default(false)
-  messageRequired       Int      @default(0)
-  voiceRequirement      Int      @default(0)
-
-  // Features
-  customMessage         String?
-  assignRole            String?
-  winnerRole            String?
-  thumbnail             String?
-  emoji                 String   @default("🎉")
-  increaseChance        String?  // 'role', 'booster', 'role_booster'
-  increaseChanceRole    String?
-  forcedWinners         String?  // Comma-separated user IDs for forced winners
-  preCalculatedWinners  String?  // Pre-calculated winner IDs (comma-separated)
-  winnersCalculatedAt   BigInt?  // When winners were pre-calculated
-
-  participants          GiveawayParticipant[]
-  winners               GiveawayWinner[]
-  
-  @@index([guildId])
-  @@index([ended])
-}
-
-model GiveawayParticipant {
-  id         Int      @id @default(autoincrement())
-  giveawayId Int
-  userId     String
-  joinedAt   BigInt
-  giveaway   Giveaway @relation(fields: [giveawayId], references: [id], onDelete: Cascade)
-
-  @@index([giveawayId])
-  @@index([userId])
-}
-
-model GiveawayWinner {
-  id         Int      @id @default(autoincrement())
-  giveawayId Int
-  userId     String
-  wonAt      BigInt
-  giveaway   Giveaway @relation(fields: [giveawayId], references: [id], onDelete: Cascade)
-
-  @@index([giveawayId])
-}
-
-model ScheduledGiveaway {
-  id                    Int      @id @default(autoincrement())
-  channelId             String
-  guildId               String
-  hostId                String
-  prize                 String
-  winnersCount          Int
-  payload               String   // JSON string containing all options
-  startTime             BigInt   // Unix timestamp in milliseconds
-  createdAt             DateTime @default(now())
-
-  @@index([guildId])
-  @@index([startTime])
-}
-
-model GiveawayConfig {
-  guildId     String @id
-  managerRole String?
-  prefix      String @default("!")
-}
-
-model GiveawayUserStats {
-  id           Int    @id @default(autoincrement())
-  guildId      String
-  userId       String
-  messageCount Int    @default(0)
-  voiceMinutes Int    @default(0)
-  inviteCount  Int    @default(0)
-
-  @@unique([guildId, userId])
-  @@index([guildId])
-}
-
-model GiveawayInviteTracker {
-  id        Int      @id @default(autoincrement())
-  guildId   String
-  inviterId String
-  inviteeId String
-  code      String?
-  createdAt DateTime @default(now())
-
-  @@unique([guildId, inviteeId])
-  @@index([guildId])
-}
-
-// =====================================
-// END GIVEAWAY SYSTEM MODELS
-// =====================================
-
-// =====================================
 // VC CREATION QUEUE SYSTEM
 // =====================================
 
@@ -373,45 +258,45 @@ enum VCRequestType {
 }
 
 enum VCRequestStatus {
-  PENDING      // Waiting in queue
-  PROCESSING   // Being created
-  COMPLETED    // Successfully created
-  FAILED       // Failed with error
-  RETRYING     // Scheduled for retry
-  EXPIRED      // Timed out completely
-  CANCELLED    // User left before completion
+  PENDING // Waiting in queue
+  PROCESSING // Being created
+  COMPLETED // Successfully created
+  FAILED // Failed with error
+  RETRYING // Scheduled for retry
+  EXPIRED // Timed out completely
+  CANCELLED // User left before completion
 }
 
 model VCCreationRequest {
-  id                 String          @id @default(uuid())
-  userId             String
-  guildId            String
-  requestType        VCRequestType
-  status             VCRequestStatus @default(PENDING)
-  
+  id          String          @id @default(uuid())
+  userId      String
+  guildId     String
+  requestType VCRequestType
+  status      VCRequestStatus @default(PENDING)
+
   // Tracking
-  createdAt          DateTime        @default(now())
-  updatedAt          DateTime        @updatedAt
-  completedAt        DateTime?
-  expiresAt          DateTime        // Hard expiration (e.g., 1 hour)
-  
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+  expiresAt   DateTime // Hard expiration (e.g., 1 hour)
+
   // Retry logic
-  retryCount         Int             @default(0)
-  maxRetries         Int             @default(999)  // Effectively infinite
-  nextRetryAt        DateTime?
-  lastError          String?
-  
+  retryCount  Int       @default(0)
+  maxRetries  Int       @default(999) // Effectively infinite
+  nextRetryAt DateTime?
+  lastError   String?
+
   // Result
-  channelId          String?         // Set when successfully created
-  
+  channelId String? // Set when successfully created
+
   // Priority
-  priority           Int             @default(5)    // 1 = highest, 10 = lowest
-  
+  priority Int @default(5) // 1 = highest, 10 = lowest
+
   // Context (JSON serialized)
-  channelName        String
-  parentId           String?
-  permissionData     String?         // JSON string of permission overwrites
-  
+  channelName    String
+  parentId       String?
+  permissionData String? // JSON string of permission overwrites
+
   @@index([userId, guildId])
   @@index([guildId, status])
   @@index([status, nextRetryAt])

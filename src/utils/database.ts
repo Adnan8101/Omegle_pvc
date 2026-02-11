@@ -12,15 +12,15 @@ interface DatabaseState {
     errorCount: number;
 }
 const CONFIG = {
-    POOL_SIZE: process.env.DB_POOL_SIZE ? parseInt(process.env.DB_POOL_SIZE) : 20,
-    POOL_TIMEOUT: 15,           
-    CONNECT_TIMEOUT: 10,        
-    QUERY_TIMEOUT: 10000,       
-    TRANSACTION_TIMEOUT: 20000, 
+    POOL_SIZE: process.env.DB_POOL_SIZE ? parseInt(process.env.DB_POOL_SIZE) : 15,
+    POOL_TIMEOUT: 20,           
+    CONNECT_TIMEOUT: 15,        
+    QUERY_TIMEOUT: 15000,       
+    TRANSACTION_TIMEOUT: 25000, 
     MAX_BACKOFF: 30000,         
     BASE_BACKOFF: 1000,         
     MAX_RETRIES: 3,             
-    STATEMENT_CACHE_SIZE: 100,  
+    STATEMENT_CACHE_SIZE: 50,  
     PGBOUNCER_MODE: false,      
 } as const;
 function buildConnectionUrl(): string {
