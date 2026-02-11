@@ -409,5 +409,8 @@ export { lockManager } from './lockManager';
 export { IntentFactory } from './intentFactory';
 export { vcnsBridge, executeWithVCNS } from './bridge';
 export { buildVC, type VCBuildOptions, type VCBuildResult } from './vcBuilder';
+export { accessEngine, AccessDecision, AccessReason, AccessTier } from './accessEngine';
+export { actionExecutor } from './actionExecutor';
+export { ownershipMachine, OwnershipTransferState } from './ownershipMachine';
 export * from './resourceKeys';
 export * from './types';

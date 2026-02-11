@@ -464,7 +464,6 @@ export class VCNSBridge {
             return { success: false, queued: false, error: error.message };
         }
     }
-
     public async editPermission(options: {
         guild: Guild;
         channelId: string;

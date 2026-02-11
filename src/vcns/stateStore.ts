@@ -25,8 +25,9 @@ export class StateStore extends EventEmitter {
     private cleanupInterval: NodeJS.Timeout | null = null;
     private globalBlocks: Map<string, { reason?: string; blockedAt: number }> = new Map(); 
     private permanentAccess: Map<string, Set<string>> = new Map(); 
-    private channelPermits: Map<string, Set<string>> = new Map(); // channelId -> Set of permitted userIds
-    private channelBans: Map<string, Set<string>> = new Map(); // channelId -> Set of banned userIds
+    private channelPermits: Map<string, Set<string>> = new Map(); 
+    private channelBans: Map<string, Set<string>> = new Map(); 
+    private pendingOwnershipTransfers: Map<string, NodeJS.Timeout> = new Map(); 
     constructor() {
         super();
         this.systemState = this.createDefaultSystemState();
@@ -199,14 +200,50 @@ export class StateStore extends EventEmitter {
         this.emit('channelStateChanged', channelId, newState);
         return { success: true, previousOwnerId };
     }
+    public scheduleDelayedOwnershipTransfer(
+        channelId: string,
+        newOwnerId: string,
+        delayMs: number = 3000,
+        callback?: (channelId: string, newOwnerId: string) => void
+    ): void {
+        this.cancelDelayedOwnershipTransfer(channelId);
+        console.log(`[StateStore] 🕐 Scheduling delayed ownership transfer for channel ${channelId} to user ${newOwnerId} in ${delayMs}ms`);
+        const timeout = setTimeout(() => {
+            console.log(`[StateStore] ⏰ Executing delayed ownership transfer for channel ${channelId} to user ${newOwnerId}`);
+            this.pendingOwnershipTransfers.delete(channelId);
+            const result = this.transferOwnership(channelId, newOwnerId);
+            if (result.success) {
+                console.log(`[StateStore] ✅ Delayed ownership transfer completed for channel ${channelId}`);
+                if (callback) {
+                    callback(channelId, newOwnerId);
+                }
+            } else {
+                console.log(`[StateStore] ❌ Delayed ownership transfer failed for channel ${channelId}: ${result.error}`);
+            }
+        }, delayMs);
+        this.pendingOwnershipTransfers.set(channelId, timeout);
+    }
+    public cancelDelayedOwnershipTransfer(channelId: string): boolean {
+        const existingTimeout = this.pendingOwnershipTransfers.get(channelId);
+        if (existingTimeout) {
+            console.log(`[StateStore] ❌ Canceling delayed ownership transfer for channel ${channelId}`);
+            clearTimeout(existingTimeout);
+            this.pendingOwnershipTransfers.delete(channelId);
+            return true;
+        }
+        return false;
+    }
+    public hasPendingOwnershipTransfer(channelId: string): boolean {
+        return this.pendingOwnershipTransfers.has(channelId);
+    }
     public unregisterChannel(channelId: string): void {
         const state = this.channelStates.get(channelId);
         if (state) {
             this.ownerToChannel.delete(`${state.guildId}:${state.ownerId}`);
             this.channelStates.delete(channelId);
-            // Also clean up channel permits and bans
             this.channelPermits.delete(channelId);
             this.channelBans.delete(channelId);
+            this.cancelDelayedOwnershipTransfer(channelId);
             this.emit('channelDeleted', channelId);
         }
     }
@@ -240,6 +277,12 @@ export class StateStore extends EventEmitter {
     public setChannelOperationPending(channelId: string, pending: boolean): void {
         this.updateChannelState(channelId, { operationPending: pending });
     }
+    public hasGlobalBlock(guildId: string, userId: string): { reason?: string; blockedAt: number } | null {
+        return this.globalBlocks.get(`${guildId}:${userId}`) || null;
+    }
+    public isGloballyBlocked(guildId: string, userId: string): { reason?: string; blockedAt: number } | null {
+        return this.hasGlobalBlock(guildId, userId);
+    }
     public addGlobalBlock(guildId: string, userId: string, reason?: string): void {
         this.globalBlocks.set(`${guildId}:${userId}`, {
             reason,
@@ -248,9 +291,6 @@ export class StateStore extends EventEmitter {
     }
     public removeGlobalBlock(guildId: string, userId: string): void {
         this.globalBlocks.delete(`${guildId}:${userId}`);
-    }
-    public isGloballyBlocked(guildId: string, userId: string): { reason?: string; blockedAt: number } | null {
-        return this.globalBlocks.get(`${guildId}:${userId}`) || null;
     }
     public loadGlobalBlocks(blocks: Array<{ guildId: string; userId: string; reason?: string | null }>): void {
         for (const block of blocks) {
@@ -282,55 +322,46 @@ export class StateStore extends EventEmitter {
             this.addPermanentAccess(grant.guildId, grant.ownerId, grant.targetId);
         }
     }
-
-    // Channel-level permit management (for !au command)
     public addChannelPermit(channelId: string, userId: string): void {
         if (!this.channelPermits.has(channelId)) {
             this.channelPermits.set(channelId, new Set());
         }
         this.channelPermits.get(channelId)!.add(userId);
-        // Remove from bans if present
         this.channelBans.get(channelId)?.delete(userId);
         console.log(`[StateStore] ✅ Added channel permit: channel=${channelId}, user=${userId}`);
     }
-
     public removeChannelPermit(channelId: string, userId: string): void {
         this.channelPermits.get(channelId)?.delete(userId);
         console.log(`[StateStore] ✅ Removed channel permit: channel=${channelId}, user=${userId}`);
     }
-
     public hasChannelPermit(channelId: string, userId: string): boolean {
         return this.channelPermits.get(channelId)?.has(userId) || false;
     }
-
-    // Channel-level ban management (for !ru command)
+    public hasChannelBan(channelId: string, userId: string): boolean {
+        const bans = this.channelBans.get(channelId);
+        return bans ? bans.has(userId) : false;
+    }
+    public isChannelBanned(channelId: string, userId: string): boolean {
+        return this.hasChannelBan(channelId, userId);
+    }
     public addChannelBan(channelId: string, userId: string): void {
         if (!this.channelBans.has(channelId)) {
             this.channelBans.set(channelId, new Set());
         }
         this.channelBans.get(channelId)!.add(userId);
-        // Remove from permits if present
         this.channelPermits.get(channelId)?.delete(userId);
         console.log(`[StateStore] ✅ Added channel ban: channel=${channelId}, user=${userId}`);
     }
-
     public removeChannelBan(channelId: string, userId: string): void {
         this.channelBans.get(channelId)?.delete(userId);
         console.log(`[StateStore] ✅ Removed channel ban: channel=${channelId}, user=${userId}`);
     }
-
-    public isChannelBanned(channelId: string, userId: string): boolean {
-        return this.channelBans.get(channelId)?.has(userId) || false;
-    }
-
     public getChannelPermits(channelId: string): string[] {
         return Array.from(this.channelPermits.get(channelId) || []);
     }
-
     public getChannelBans(channelId: string): string[] {
         return Array.from(this.channelBans.get(channelId) || []);
     }
-
     public clearChannelPermissions(channelId: string): void {
         this.channelPermits.delete(channelId);
         this.channelBans.delete(channelId);
@@ -345,7 +376,6 @@ export class StateStore extends EventEmitter {
             }
         }
     }
-
     public clearGuildState(guildId: string): void {
         for (const [channelId, state] of this.channelStates) {
             if (state.guildId === guildId) {
@@ -365,6 +395,10 @@ export class StateStore extends EventEmitter {
             clearInterval(this.cleanupInterval);
             this.cleanupInterval = null;
         }
+        for (const [channelId, timeout] of this.pendingOwnershipTransfers) {
+            clearTimeout(timeout);
+        }
+        this.pendingOwnershipTransfers.clear();
     }
     private createDefaultSystemState(): SystemState {
         return {

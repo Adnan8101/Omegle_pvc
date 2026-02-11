@@ -31,7 +31,8 @@ import {
 } from '../utils/voiceManager';
 import { getOwnerPermissions } from '../utils/permissions';
 import { vcnsBridge } from '../vcns/bridge';
-import { stateStore } from '../vcns/index';
+import { stateStore, ownershipMachine } from '../vcns/index';
+import { accessProtectionHandler } from '../vcns/accessProtectionHandler';
 import {
     getGuildSettings,
     getOwnerPermissions as getCachedOwnerPerms,
@@ -45,612 +46,51 @@ import { generateVcInterfaceEmbed, generateInterfaceImage, createInterfaceCompon
 import { isPvcPaused } from '../utils/pauseManager';
 import { recordBotEdit } from './channelUpdate';
 import { VoiceStateService } from '../services/voiceStateService';
-import { hasTempDragPermission, removeTempDragPermission } from './messageCreate';
+
 export const name = Events.VoiceStateUpdate;
-export const once = false;
-const WHITELISTED_BOT_IDS = new Set([
-    '536991182035746816',
-]);
-export async function execute(
-    client: PVCClient,
-    oldState: VoiceState,
-    newState: VoiceState
-): Promise<void> {
-    const member = newState.member || oldState.member;
-    if (!member) return;
-    if (member.user.bot) {
-        if (newState.channelId && newState.channelId !== oldState.channelId) {
-            await handleBotJoin(client, newState);
-        }
-        if (oldState.channelId && oldState.channelId !== newState.channelId) {
-            await handleBotLeave(client, oldState);
-        }
-        return;
-    }
-    if (newState.channelId && newState.channelId !== oldState.channelId) {
-        console.log(`[VCNS-JOIN] 🟢 User ${member.user.tag} (${member.id}) joining VC ${newState.channelId}`);
-        try {
-            const wasKicked = await handleAccessProtection(client, newState);
-            if (!wasKicked) {
-                console.log(`[VCNS-JOIN] ✅ User ${member.user.tag} successfully joined - processing handleJoin`);
-                await handleJoin(client, newState);
-            } else {
-                console.log(`[VCNS-JOIN] ❌ User ${member.user.tag} was kicked by access protection`);
-            }
-        } catch (err) {
-            console.error(`[VCNS-JOIN] ❌ Critical error in handleJoin sequence:`, err);
-        }
-    }
-    if (oldState.channelId && oldState.channelId !== newState.channelId) {
-        try {
-            await handleLeave(client, oldState);
-        } catch (err) {
-            console.error(`[VCNS-LEAVE] ❌ Critical error in handleLeave sequence:`, err);
-        }
-    }
-}
-async function handleBotJoin(client: PVCClient, state: VoiceState): Promise<void> {
-    const { channelId, guild, member } = state;
-    if (!channelId || !member || !member.user.bot) return;
-    const dbState = await VoiceStateService.getVCState(channelId);
-    if (!dbState) return;
-    const channel = guild.channels.cache.get(channelId);
-    if (!channel || channel.type !== ChannelType.GuildVoice) return;
-    try {
-        recordBotEdit(channelId);
-        await vcnsBridge.editPermission({
-            guild,
-            channelId,
-            targetId: member.id,
-            permissions: {
-                ViewChannel: true,
-                Connect: true,
-                Speak: true,
-            },
-        });
-    } catch (err) {
-        console.error(`[BotJoin] Failed to grant permissions to bot ${member.id}:`, err);
-    }
-}
-async function handleBotLeave(client: PVCClient, state: VoiceState): Promise<void> {
-    const { channelId, guild, member } = state;
-    if (!channelId || !member || !member.user.bot) return;
-    const dbState = await VoiceStateService.getVCState(channelId);
-    if (!dbState) return;
-    const channel = guild.channels.cache.get(channelId);
-    if (!channel || channel.type !== ChannelType.GuildVoice) return;
-    try {
-        recordBotEdit(channelId);
-        await vcnsBridge.removePermission({
-            guild,
-            channelId,
-            targetId: member.id,
-        });
-    } catch (err) {
-        console.error(`[BotLeave] Failed to remove permissions from bot ${member.id}:`, err);
-    }
-}
-async function handleAccessProtection(
-    client: PVCClient,
-    newState: VoiceState
-): Promise<boolean> {
-    const { channelId: newChannelId, guild, member } = newState;
-    if (!newChannelId || !member) return false;
-    console.log(`[VCNS-ACCESS] 🔍 Starting access protection for ${member.user.tag} (${member.id}) in channel ${newChannelId}`);
-    const globalBlock = stateStore.isGloballyBlocked(guild.id, member.id);
-    if (globalBlock) {
-        console.log(`[VCNS-ACCESS] 🚫 User ${member.user.tag} is GLOBALLY BLOCKED: ${globalBlock.reason}`);
-        try {
-            await vcnsBridge.kickUser({
-                guild,
-                channelId: newChannelId,
-                userId: member.id,
-                reason: 'Globally blocked from all voice channels',
-                isImmediate: false,
-            });
-        } catch (err) {
-            console.error(`[VCNS-ACCESS] ❌ Failed to kick globally blocked user ${member.id}:`, err);
-        }
-        console.log(`[VCNS-ACCESS] ✅ Globally blocked user ${member.user.tag} kick initiated`);
-        const embed = new EmbedBuilder()
-            .setColor(0xFF0000)
-            .setDescription(`You don't have access to voice channels in **${guild.name}**.\n\nContact server administrators.`)
-            .setTimestamp();
-        member.send({ embeds: [embed] }).catch(() => { });
-        logAction({
-            action: LogAction.USER_REMOVED,
-            guild: guild,
-            user: member.user,
-            channelName: `Channel ${newChannelId}`,
-            channelId: newChannelId,
-            details: `Blocked`,
-            isTeamChannel: false,
-        }).catch(() => { });
-        return true;
-    }
-    let dbState = await VoiceStateService.getVCState(newChannelId, true);
-    if (!dbState) {
-        const memoryState = stateStore.getChannelState(newChannelId);
-        if (memoryState) {
-            console.log(`[VCNS-ACCESS] ⚠️ Channel ${newChannelId} in MEMORY but not DB - attempting auto-recovery...`);
-            try {
-                if (memoryState.isTeamChannel) {
-                    await prisma.teamVoiceChannel.create({
-                        data: {
-                            channelId: newChannelId,
-                            guildId: memoryState.guildId,
-                            ownerId: memoryState.ownerId,
-                            teamType: (memoryState.teamType?.toUpperCase() as 'DUO' | 'TRIO' | 'SQUAD') || 'DUO',
-                            isLocked: memoryState.isLocked || false,
-                            isHidden: memoryState.isHidden || false,
-                        },
-                    });
-                } else {
-                    await prisma.privateVoiceChannel.create({
-                        data: {
-                            channelId: newChannelId,
-                            guildId: memoryState.guildId,
-                            ownerId: memoryState.ownerId,
-                            isLocked: memoryState.isLocked || false,
-                            isHidden: memoryState.isHidden || false,
-                        },
-                    });
-                }
-                console.log(`[VCNS-ACCESS] ✅ Auto-recovered channel ${newChannelId} to database!`);
-                dbState = await VoiceStateService.getVCState(newChannelId);
-                if (dbState) {
-                    console.log(`[VCNS-ACCESS] ✅ Verified auto-recovery, continuing with access protection`);
-                } else {
-                    console.log(`[VCNS-ACCESS] ❌ Auto-recovery verification failed - allowing access`);
-                    return false;
-                }
-            } catch (recoveryErr: any) {
-                console.error(`[VCNS-ACCESS] ❌ Auto-recovery failed:`, recoveryErr.message);
-                console.log(`[VCNS-ACCESS] ⚠️ Channel ${newChannelId} not in DB - allowing access (recovery failed)`);
-                return false;
-            }
-        } else {
-            console.log(`[VCNS-ACCESS] ⚠️ Channel ${newChannelId} not in DB or memory - not a managed PVC, allowing access`);
-            return false;
-        }
-    }
-    let channel = guild.channels.cache.get(newChannelId);
-    if (!channel || channel.type !== ChannelType.GuildVoice) {
-        try {
-            const fetched = await guild.channels.fetch(newChannelId);
-            if (fetched && fetched.type === ChannelType.GuildVoice) {
-                channel = fetched as unknown as VoiceChannel;
-            }
-        } catch (error) {
-            console.error(`[VCNS-ACCESS] ❌ Failed to fetch channel ${newChannelId} for access check:`, error);
-        }
-    }
-    if (!channel || channel.type !== ChannelType.GuildVoice) {
-        console.log(`[VCNS-ACCESS] ⚠️ Channel ${newChannelId} is MANAGED (in DB) but unreachable (not in cache/fetch failed).`);
-        console.log(`[VCNS-ACCESS] 🛡️ FAIL-SAFE: Kicking user ${member.user.tag} to prevent security bypass.`);
-        try {
-            await member.voice.disconnect('Security check failed - Channel state unknown');
-            const embed = new EmbedBuilder()
-                .setColor(0xFF6B6B)
-                .setDescription(
-                    `You were disconnected from **${newChannelId}** because the bot could not verify channel state.\n` +
-                    `Please try joining again in a moment.`
-                )
-                .setTimestamp();
-            member.send({ embeds: [embed] }).catch(() => { });
-        } catch (kickErr) {
-            console.error(`[VCNS-ACCESS] Failed to kick user during fail-safe:`, kickErr);
-        }
-        return true;
-    }
-    const ownerId = dbState.ownerId;
-    if (member.id === ownerId) {
-        console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} is OWNER - access granted`);
-        return false;
+
+export async function execute(client: PVCClient, oldState: VoiceState, newState: VoiceState) {
+    const user = oldState?.member?.user || newState?.member?.user;
+    if (!user || user.bot) return;
+
+    const leftChannelId = oldState?.channelId;
+    const joinedChannelId = newState?.channelId;
+
+    // Handle join events
+    if (joinedChannelId && !leftChannelId) {
+        await handleJoin(client, newState);
     }
 
-    // CRITICAL: Check PERMANENT ACCESS FIRST - this OVERRIDES everything (even bans)
-    const hasPermanentAccess = stateStore.hasPermanentAccess(guild.id, ownerId, member.id);
-    console.log(`[VCNS-ACCESS] 🔑 Permanent access check for ${member.user.tag}: ${hasPermanentAccess}`);
-    
-    if (hasPermanentAccess) {
-        console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} has PERMANENT ACCESS - bypass ALL restrictions (including bans)`);
-        // Sync Discord permissions for permanent access user
-        const channel = guild.channels.cache.get(newChannelId);
-        if (channel && channel.type === ChannelType.GuildVoice) {
-            try {
-                const { recordBotEdit } = await import('../events/channelUpdate');
-                recordBotEdit(newChannelId);
-                await vcnsBridge.editPermission({
-                    guild,
-                    channelId: newChannelId,
-                    targetId: member.id,
-                    permissions: {
-                        ViewChannel: true,
-                        Connect: true,
-                    },
-                    allowWhenHealthy: true,
-                });
-                console.log(`[VCNS-ACCESS] ✅ Synced Discord permissions for permanent access user ${member.user.tag}`);
-            } catch (err) {
-                console.error(`[VCNS-ACCESS] ❌ Failed to set Discord permissions:`, err);
-            }
-        }
-        // Ensure DB has permit (remove any ban, add permit)
-        try {
-            if ('teamType' in dbState) {
-                await prisma.teamVoicePermission.upsert({
-                    where: { channelId_targetId: { channelId: newChannelId, targetId: member.id } },
-                    update: { permission: 'permit', targetType: 'user' },
-                    create: { channelId: newChannelId, targetId: member.id, targetType: 'user', permission: 'permit' },
-                });
-            } else {
-                await prisma.voicePermission.upsert({
-                    where: { channelId_targetId: { channelId: newChannelId, targetId: member.id } },
-                    update: { permission: 'permit', targetType: 'user' },
-                    create: { channelId: newChannelId, targetId: member.id, targetType: 'user', permission: 'permit' },
-                });
-            }
-            invalidateChannelPermissions(newChannelId);
-            // Also update stateStore memory
-            stateStore.removeChannelBan(newChannelId, member.id);
-            stateStore.addChannelPermit(newChannelId, member.id);
-            console.log(`[VCNS-ACCESS] ✅ Ensured DB permit & memory for permanent access user ${member.user.tag}`);
-        } catch (dbErr) {
-            console.error(`[VCNS-ACCESS] ⚠️ Failed to ensure DB permit:`, dbErr);
-        }
-        return false; // Allow access - permanent access users are NEVER kicked
+    // Handle leave events
+    if (leftChannelId && !joinedChannelId) {
+        await handleLeave(client, oldState);
     }
 
-    // CRITICAL: Then check stateStore memory (most up-to-date from !au/!ru commands)
-    const memoryPermit = stateStore.hasChannelPermit(newChannelId, member.id);
-    const memoryBan = stateStore.isChannelBanned(newChannelId, member.id);
-    
-    console.log(`[VCNS-ACCESS] 🧠 Memory check for ${member.user.tag}: permit=${memoryPermit}, ban=${memoryBan}`);
-    
-    // If memory says user is permitted, allow immediately (skip DB check)
-    if (memoryPermit && !memoryBan) {
-        console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} has MEMORY PERMIT - instant access granted`);
-        return false;
+    // Handle channel switches
+    if (leftChannelId && joinedChannelId && leftChannelId !== joinedChannelId) {
+        await handleLeave(client, oldState);
+        await handleJoin(client, newState);
     }
-    
-    // If memory says user is banned, kick immediately
-    if (memoryBan) {
-        console.log(`[VCNS-ACCESS] 🚫 User ${member.user.tag} has MEMORY BAN - instant kick`);
-        try {
-            await vcnsBridge.kickUser({
-                guild,
-                channelId: newChannelId,
-                userId: member.id,
-                reason: 'Blocked from this channel',
-                isImmediate: true,
-            });
-        } catch (err) {
-            console.error(`[VCNS-ACCESS] ❌ Failed to kick memory-banned user ${member.id}:`, err);
-        }
-        return true;
-    }
-
-    // CRITICAL: Fresh DB read for permissions (bypass any caching)
-    const freshPermissions = dbState.teamType
-        ? await prisma.teamVoicePermission.findMany({ where: { channelId: newChannelId } })
-        : await prisma.voicePermission.findMany({ where: { channelId: newChannelId } });
-    
-    const dbPermissions = freshPermissions.length > 0 ? freshPermissions : (dbState.permissions || []);
-    console.log(`[VCNS-ACCESS] 📊 Fresh DB permissions count: ${freshPermissions.length}, fallback count: ${dbState.permissions?.length || 0}`);
-    
-    const memberRoleIds = member.roles.cache.map(r => r.id);
-    const isUserBanned = dbPermissions.some(
-        (p: any) => p.targetId === member.id && p.permission === 'ban'
-    );
-    const isRoleBanned = dbPermissions.some(
-        (p: any) => memberRoleIds.includes(p.targetId) && p.targetType === 'role' && p.permission === 'ban'
-    );
-    if (isUserBanned || isRoleBanned) {
-        try {
-            await vcnsBridge.kickUser({
-                guild,
-                channelId: newChannelId,
-                userId: member.id,
-                reason: 'Blocked from this channel',
-                isImmediate: false,
-            });
-        } catch (err) {
-            console.error(`[VCNS-ACCESS] ❌ Failed to kick banned user ${member.id}:`, err);
-        }
-        console.log(`[VCNS-ACCESS] ✅ Banned user ${member.user.tag} kick initiated`);
-        const owner = guild.members.cache.get(ownerId);
-        const ownerName = owner?.displayName || 'the owner';
-        const embed = new EmbedBuilder()
-            .setColor(0xFF0000)
-            .setDescription(
-                `You don't have access to **${channel.name}**.\n\nAsk **${ownerName}** to unblock you.`
-            )
-            .setTimestamp();
-        member.send({ embeds: [embed] }).catch(() => { });
-        logAction({
-            action: LogAction.USER_REMOVED,
-            guild: guild,
-            user: member.user,
-            channelName: channel.name,
-            channelId: newChannelId,
-            details: `Blocked`,
-            isTeamChannel: false,
-        }).catch(() => { });
-        return true;
-    }
-    
-    // Note: Permanent access is already checked at the TOP of this function
-    // Any user reaching this point does NOT have permanent access
-    
-    console.log(`[VCNS-ACCESS] 🎟️ Checking channel permits for ${member.user.tag} (${member.id}), permissions count: ${dbPermissions.length}`);
-    if (dbPermissions.length > 0) {
-        console.log(`[VCNS-ACCESS] 🎟️ All permissions in DB:`, dbPermissions.map((p: any) => `targetId=${p.targetId}, targetType=${p.targetType}, permission=${p.permission}`).join(' | '));
-    }
-    const hasDirectPermit = dbPermissions.some(
-        (p: any) => p.targetId === member.id && p.permission === 'permit'
-    );
-    const hasRolePermit = dbPermissions.some(
-        (p: any) => memberRoleIds.includes(p.targetId) && p.targetType === 'role' && p.permission === 'permit'
-    );
-    const hasChannelPermit = hasDirectPermit || hasRolePermit;
-    console.log(`[VCNS-ACCESS] 🎟️ Permit check for ${member.user.tag} (${member.id}): direct=${hasDirectPermit}, role=${hasRolePermit}, total=${hasChannelPermit}`);
-    if (hasChannelPermit) {
-        console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} has CHANNEL PERMIT (permanent !au OR temporary lock/hide) - bypass all restrictions`);
-        return false;
-    }
-    console.log(`[VCNS-ACCESS] ⚙️ Loading guild settings for admin strictness...`);
-    const isTeamChannel = 'teamType' in dbState && !!dbState.teamType;
-    const globalBlocks = await prisma.globalVCBlock.findMany({
-        where: { guildId: guild.id, userId: member.id },
-    });
-    if (globalBlocks.length > 0) {
-        console.log(`[VCNS-ACCESS] 🚫 User ${member.user.tag} is GLOBALLY BLOCKED - immediate kick`);
-        return true; 
-    }
-    const channelBan = await (dbState.teamType 
-        ? prisma.teamVoicePermission.findFirst({
-            where: { channelId: newChannelId, targetId: member.id, permission: 'ban' }
-        })
-        : prisma.voicePermission.findFirst({
-            where: { channelId: newChannelId, targetId: member.id, permission: 'ban' }
-        })
-    );
-    if (channelBan) {
-        console.log(`[VCNS-ACCESS] 🚫 User ${member.user.tag} is BANNED from this channel - immediate kick`);
-        const ownerMember = await guild.members.fetch(ownerId).catch(() => null);
-        const ownerName = ownerMember?.displayName || 'the owner';
-        const blockEmbed = new EmbedBuilder()
-            .setColor(0xFF0000)
-            .setTitle('🚫 Blocked from Voice Channel')
-            .setDescription(
-                `You are **blocked** from **${ownerName}**'s voice channel in **${guild.name}**.\n\n` +
-                'You cannot join this channel by any means until you are unblocked.'
-            )
-            .setTimestamp();
-        await member.send({ embeds: [blockEmbed] }).catch(() => {
-            console.log(`[VCNS-ACCESS] Cannot DM blocked user ${member.user.tag}`);
-        });
-        return true; 
-    }
-    const results = await Promise.allSettled([
-        getGuildSettings(guild.id),
-        prisma.teamVoiceSettings.findUnique({ where: { guildId: guild.id } }),
-        getWhitelist(guild.id),
-    ]);
-    const pvcSettings = results[0].status === 'fulfilled' ? results[0].value : null;
-    const teamSettings = results[1].status === 'fulfilled' ? results[1].value : null;
-    const whitelist = results[2].status === 'fulfilled' ? results[2].value : [];
-    const hasAdminPerm = member.permissions.has('Administrator') || member.permissions.has('ManageChannels');
-    const strictnessEnabled = isTeamChannel ? teamSettings?.adminStrictness : pvcSettings?.adminStrictness;
-    const isWhitelisted = whitelist.some(
-        w => w.targetId === member.id || memberRoleIds.includes(w.targetId)
-    );
-    if (isWhitelisted) {
-        console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} is WHITELISTED - bypass ALL restrictions (strictness/locked/hidden/full)`);
-        const channel = guild.channels.cache.get(newChannelId);
-        if (channel && channel.type === ChannelType.GuildVoice) {
-            try {
-                const { recordBotEdit } = await import('../events/channelUpdate');
-                recordBotEdit(newChannelId);
-                await vcnsBridge.editPermission({
-                    guild,
-                    channelId: newChannelId,
-                    targetId: member.id,
-                    permissions: {
-                        ViewChannel: true,
-                        Connect: true,
-                    },
-                    allowWhenHealthy: true, 
-                });
-                console.log(`[VCNS-ACCESS] ✅ Synced Discord permissions for whitelisted user ${member.user.tag}`);
-            } catch (err) {
-                console.error(`[VCNS-ACCESS] ❌ Failed to set Discord permissions:`, err);
-            }
-        }
-        return false;
-    }
-    const isLocked = dbState.isLocked;
-    const isHidden = dbState.isHidden;
-    let isFull = false;
-    let actualMembers = 0;
-    const isTeamChannelByType = 'teamType' in dbState && !!dbState.teamType;
-    console.log(`[VCNS-ACCESS] 📌 Channel type: isTeamChannel=${isTeamChannelByType}, teamType=${dbState.teamType || 'none'}`);
-    if (isTeamChannelByType) {
-        const teamTypeLower = (dbState.teamType as string).toLowerCase() as keyof typeof TEAM_USER_LIMITS;
-        const teamLimit = TEAM_USER_LIMITS[teamTypeLower];
-        if (teamLimit) {
-            const voiceChannel = newState.channel;
-            if (voiceChannel && voiceChannel.type === ChannelType.GuildVoice) {
-                actualMembers = voiceChannel.members.size;
-                isFull = actualMembers > teamLimit;
-                console.log(`[VCNS-ACCESS] 📊 Team capacity: actualMembers=${actualMembers}, teamLimit=${teamLimit}, isFull=${isFull}`);
-            }
-        }
-    } else {
-        const voiceChannel = newState.channel;
-        if (voiceChannel && voiceChannel.type === ChannelType.GuildVoice) {
-            actualMembers = voiceChannel.members.size;
-            // Explicitly check for valid positive userLimit (0 or undefined/null means unlimited)
-            const userLimit = typeof dbState.userLimit === 'number' ? dbState.userLimit : 0;
-            isFull = userLimit > 0 && actualMembers > userLimit;
-            console.log(`[VCNS-ACCESS] 📊 Capacity check: actualMembers=${actualMembers}, userLimit=${userLimit}, isFull=${isFull}`);
-        }
-    }
-    const isRestricted = isLocked || isHidden || isFull;
-    console.log(`[VCNS-ACCESS] 👨‍💼 Admin evaluation for ${member.user.tag}:`, {
-        hasAdminPerm,
-        strictnessEnabled: !!strictnessEnabled,
-        isWhitelisted,
-        isTeamChannel,
-        hasChannelPermit,
-        isLocked,
-        isHidden,
-        isFull,
-        isRestricted
-    });
-    const needsStrictnessCheck = strictnessEnabled && (isLocked || isHidden);
-    if (needsStrictnessCheck) {
-        if (isWhitelisted || hasChannelPermit) {
-            console.log(`[VCNS-ACCESS] ✅ User ${member.user.tag} is ${isWhitelisted ? 'WHITELISTED' : 'has CHANNEL PERMIT'} - bypass strictness (never kicked)`);
-            return false;
-        }
-        console.log(`[VCNS-ACCESS] 🚨 STRICTNESS VIOLATION: ${member.user.tag} is NOT whitelisted/permitted, channel is restricted - INSTANT KICK`);
-        const channelTypeName = isTeamChannel ? 'team voice channel' : 'voice channel';
-        const restrictionReason = isLocked ? 'locked' : 'hidden';
-        try {
-            await vcnsBridge.kickUser({
-                guild,
-                channelId: newChannelId,
-                userId: member.id,
-                reason: `Admin strictness: not whitelisted (channel ${restrictionReason})`,
-                isImmediate: true,
-            });
-        } catch (err) {
-            console.error(`[VCNS-ACCESS] ❌ Failed to kick non-whitelisted user ${member.id}:`, err);
-        }
-        console.log(`[VCNS-ACCESS] ✅ Strictness enforcement - ${member.user.tag} KICKED (not whitelisted, channel ${restrictionReason})`);
-        const owner = guild.members.cache.get(ownerId);
-        const ownerName = owner?.displayName || 'the owner';
-        const embed = new EmbedBuilder()
-            .setColor(0xFF6B6B)
-            .setDescription(
-                `You don't have access to **${channel.name}**.\n\nAsk **${ownerName}** to give you access.`
-            )
-            .setTimestamp();
-        member.send({ embeds: [embed] }).catch(() => { });
-        logAction({
-            action: LogAction.USER_REMOVED,
-            guild: guild,
-            user: member.user,
-            channelName: channel.name,
-            channelId: newChannelId,
-            details: `No access`,
-            isTeamChannel: isTeamChannel,
-        }).catch(() => { });
-        return true;
-    }
-    console.log(`[VCNS-ACCESS] 🔒 Channel restrictions:`, {
-        isLocked,
-        isHidden,
-        isFull,
-        userLimit: dbState.userLimit
-    });
-    if (!isRestricted) {
-        console.log(`[VCNS-ACCESS] ✅ Channel is open and not full - access granted for ${member.user.tag}`);
-        return false;
-    }
-    console.log(`[VCNS-ACCESS] 🔍 User ${member.user.tag} has no permits and channel is restricted (strictness OFF)`);
-    if (isFull) {
-        console.log(`[VCNS-ACCESS] 🚫 Channel is FULL - kicking ${member.user.tag} (no AU or permanent access)`);
-        const reason = 'at capacity';
-        const channelTypeName = isTeamChannel ? 'team voice channel' : 'voice channel';
-        try {
-            await vcnsBridge.kickUser({
-                guild,
-                channelId: newChannelId,
-                userId: member.id,
-                reason: 'Channel at capacity',
-                isImmediate: false,
-            });
-        } catch (err) {
-            console.error(`[VCNS-ACCESS] ❌ Failed to kick user at capacity ${member.id}:`, err);
-        }
-        console.log(`[VCNS-ACCESS] ✅ Capacity violation - ${member.user.tag} kick initiated`);
-        const owner = guild.members.cache.get(ownerId);
-        const ownerName = owner?.displayName || 'the owner';
-        const embed = new EmbedBuilder()
-            .setColor(0xFF6B6B)
-            .setDescription(
-                `You don't have access to **${channel.name}**.\n\nAsk **${ownerName}** to give you access.`
-            )
-            .setTimestamp();
-        member.send({ embeds: [embed] }).catch(() => { });
-        logAction({
-            action: LogAction.USER_REMOVED,
-            guild: guild,
-            user: member.user,
-            channelName: channel.name,
-            channelId: newChannelId,
-            details: `Channel ${reason}`,
-            isTeamChannel: isTeamChannel,
-        }).catch(() => { });
-        return true;
-    }
-    if (!isLocked && !isHidden) {
-        console.log(`[VCNS-ACCESS] ✅ Channel is not locked or hidden - access granted for ${member.user.tag}`);
-        return false;
-    }
-    const reason = isLocked ? 'locked' : 'hidden';
-    console.log(`[VCNS-ACCESS] 🚫 FINAL DECISION: Kicking ${member.user.tag} - Channel is ${reason}, no AU or permanent access`);
-    const channelTypeName = isTeamChannel ? 'team voice channel' : 'voice channel';
-    try {
-        await vcnsBridge.kickUser({
-            guild,
-            channelId: newChannelId,
-            userId: member.id,
-            reason: 'Unauthorized access',
-            isImmediate: false,
-        });
-    } catch (err) {
-        console.error(`[VCNS-ACCESS] ❌ Failed to kick unauthorized user ${member.id}:`, err);
-    }
-    console.log(`[VCNS-ACCESS] ✅ Unauthorized access - ${member.user.tag} kick initiated (reason: ${reason})`);
-    const owner = guild.members.cache.get(ownerId);
-    const ownerName = owner?.displayName || 'the owner';
-    const embed = new EmbedBuilder()
-        .setColor(0xFF6B6B)
-        .setDescription(
-            `You don't have access to **${channel.name}**.\n\nAsk **${ownerName}** to give you access.`
-        )
-        .setTimestamp();
-    member.send({ embeds: [embed] }).catch(() => { });
-    logAction({
-        action: LogAction.USER_REMOVED,
-        guild: guild,
-        user: member.user,
-        channelName: channel.name,
-        channelId: newChannelId,
-        details: `Channel ${reason}`,
-        isTeamChannel: false,
-    }).catch(() => { });
-    return true;
 }
+
 export async function handleJoin(client: PVCClient, state: VoiceState): Promise<void> {
     const { channelId, guild, member } = state;
     if (!channelId || !member) return;
-    console.log(`[VCNS-HANDLEJOIN] 📌 Processing join for ${member.user.tag} in channel ${channelId}`);
+    
+    console.log(`[HandleJoin] User ${member.user.username} (${member.id}) joined channel ${channelId}`);
+    
+    // Check if this is an interface channel
     let isInterface = isInterfaceChannel(channelId);
-    console.log(`[VCNS-HANDLEJOIN] 🔍 isInterfaceChannel(${channelId}) = ${isInterface}`);
+    
     if (!isInterface) {
         const settings = await getGuildSettings(guild.id);
-        console.log(`[VCNS-HANDLEJOIN] 🔍 Guild settings interfaceVcId = ${settings?.interfaceVcId}`);
         if (settings?.interfaceVcId === channelId) {
             registerInterfaceChannel(guild.id, channelId);
             isInterface = true;
             console.log(`[VCNS-HANDLEJOIN] ✅ Registered ${channelId} as interface channel`);
         }
     }
+
     if (isInterface) {
         console.log(`[VCNS-HANDLEJOIN] 🎯 Channel IS an interface - checking PVC pause status`);
         if (isPvcPaused(guild.id)) {
@@ -675,6 +115,8 @@ export async function handleJoin(client: PVCClient, state: VoiceState): Promise<
         console.log(`[VCNS-HANDLEJOIN] ✅ createPrivateChannel completed for ${member.user.tag}`);
         return;
     }
+
+    // Check for team channels
     let teamType = getTeamInterfaceType(channelId);
     if (!teamType) {
         const teamSettings = await prisma.teamVoiceSettings.findUnique({
@@ -683,62 +125,40 @@ export async function handleJoin(client: PVCClient, state: VoiceState): Promise<
         if (teamSettings) {
             if (teamSettings.duoVcId === channelId) {
                 teamType = 'duo';
-                registerTeamInterfaceChannel(guild.id, 'duo', channelId);
             } else if (teamSettings.trioVcId === channelId) {
                 teamType = 'trio';
-                registerTeamInterfaceChannel(guild.id, 'trio', channelId);
             } else if (teamSettings.squadVcId === channelId) {
                 teamType = 'squad';
-                registerTeamInterfaceChannel(guild.id, 'squad', channelId);
             }
         }
     }
-    const ownedTeamChannel = getTeamChannelByOwner(guild.id, member.id);
-    const ownedPvcChannel = getChannelByOwner(guild.id, member.id);
-    if (ownedTeamChannel === channelId || ownedPvcChannel === channelId) {
-        return;
-    }
+
     if (teamType) {
-        if (ownedPvcChannel) {
-            console.log(`[VCNS-HANDLEJOIN] ⚠️ User ${member.user.tag} already owns PVC ${ownedPvcChannel} - blocking team creation`);
-            try {
-                await member.voice.disconnect();
-                const errorEmbed = new EmbedBuilder()
-                    .setColor(0xFF0000)
-                    .setTitle('❌ Cannot Create Team Channel')
-                    .setDescription(
-                        `You already own a Private Voice Channel.\n\n` +
-                        'You can only own one voice channel at a time.\n' +
-                        'Please delete your PVC first to create a team channel.'
-                    )
-                    .setTimestamp();
-                await member.send({ embeds: [errorEmbed] }).catch(() => { });
-            } catch { }
-            return;
-        }
-        if (isPvcPaused(guild.id)) {
-            try {
-                await member.voice.disconnect();
-                const pauseEmbed = new EmbedBuilder()
-                    .setColor(0xFF6B6B)
-                    .setTitle('⏸️ PVC System Paused')
-                    .setDescription(
-                        `The Private Voice Channel system in **${guild.name}** is currently paused.\n\n` +
-                        'Team channel creation is temporarily disabled.\n' +
-                        'Please wait for an administrator to resume the system.'
-                    )
-                    .setTimestamp();
-                await member.send({ embeds: [pauseEmbed] }).catch(() => { });
-            } catch { }
-            return;
-        }
+        console.log(`[VCNS-HANDLEJOIN] 🎯 Team interface channel ${channelId} - creating ${teamType} channel`);
         await createTeamChannel(client, state, teamType);
         return;
     }
-    const channelState = getChannelState(channelId);
-    if (channelState) {
+
+    // Handle existing private voice channels
+    const pvcChannelState = getChannelState(channelId);
+    if (pvcChannelState) {
         const channel = guild.channels.cache.get(channelId);
         addUserToJoinOrder(channelId, member.id);
+        
+        // Cancel any pending ownership transfer since a new user has joined
+        const hadPendingTransfer = ownershipMachine.cancelTransfer(channelId);
+        if (hadPendingTransfer) {
+            console.log(`[HandleJoin] ✅ Canceled pending ownership transfer for ${channelId} - new user ${member.user.tag} joined`);
+        }
+        
+        // Use new access protection handler
+        const result = await accessProtectionHandler.validateAndEnforceAccess(state);
+        const shouldKick = !result.allowed;
+        if (shouldKick) {
+            console.log(`[HandleJoin] 🚫 User ${member.user.tag} was denied access to PVC ${channelId}`);
+            return;
+        }
+        
         if (channel) {
             await logAction({
                 action: LogAction.USER_ADDED,
@@ -751,10 +171,27 @@ export async function handleJoin(client: PVCClient, state: VoiceState): Promise<
         }
         return;
     }
+
+    // Handle existing team channels
     const teamChannelState = getTeamChannelState(channelId);
     if (teamChannelState) {
         const channel = guild.channels.cache.get(channelId);
         addUserToJoinOrder(channelId, member.id);
+        
+        // Cancel any pending ownership transfer since a new user has joined
+        const hadPendingTransfer = ownershipMachine.cancelTransfer(channelId);
+        if (hadPendingTransfer) {
+            console.log(`[HandleJoin] ✅ Canceled pending team channel ownership transfer for ${channelId} - new user ${member.user.tag} joined`);
+        }
+        
+        // Use new access protection handler
+        const result = await accessProtectionHandler.validateAndEnforceAccess(state);
+        const shouldKick = !result.allowed;
+        if (shouldKick) {
+            console.log(`[HandleJoin] 🚫 User ${member.user.tag} was denied access to team channel ${channelId}`);
+            return;
+        }
+        
         if (channel) {
             await logAction({
                 action: LogAction.USER_ADDED,
@@ -769,1123 +206,138 @@ export async function handleJoin(client: PVCClient, state: VoiceState): Promise<
         }
     }
 }
-async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> {
+
+export async function handleLeave(client: PVCClient, state: VoiceState): Promise<void> {
     const { channelId, guild, member } = state;
-    if (!channelId) return;
-    console.log(`[HandleLeave] User ${member?.user?.username} (${member?.id}) left channel ${channelId}`);
-    if (member) {
-        const { hasTempLockPermit, removeTempLockPermit } = await import('../utils/voiceManager');
-        if (hasTempLockPermit(channelId, member.id)) {
-            console.log(`[HandleLeave] 🔓 Removing temporary lock permit for ${member.user.tag} (${member.id})`);
-            removeTempLockPermit(channelId, member.id);
-            const results = await Promise.allSettled([
-                prisma.privateVoiceChannel.findUnique({ where: { channelId } }),
-                prisma.teamVoiceChannel.findUnique({ where: { channelId } }),
-            ]);
-            const pvcData = results[0].status === 'fulfilled' ? results[0].value : null;
-            const teamData = results[1].status === 'fulfilled' ? results[1].value : null;
-            const ownerId = pvcData?.ownerId || teamData?.ownerId;
-            if (ownerId) {
-                const hasPermanentAccess = stateStore.hasPermanentAccess(guild.id, ownerId, member.id);
-                if (!hasPermanentAccess) {
-                    console.log(`[HandleLeave] 🗑️ Removing TEMP permit from DB for ${member.user.tag} (no permanent access)`);
-                    try {
-                        if (pvcData) {
-                            await prisma.voicePermission.deleteMany({
-                                where: {
-                                    channelId,
-                                    targetId: member.id,
-                                    permission: 'permit'
-                                }
-                            });
-                        } else if (teamData) {
-                            await prisma.teamVoicePermission.deleteMany({
-                                where: {
-                                    channelId,
-                                    targetId: member.id,
-                                    permission: 'permit'
-                                }
-                            });
-                        }
-                        invalidateChannelPermissions(channelId);
-                        console.log(`[HandleLeave] ✅ Temp permit removed from DB`);
-                    } catch (err) {
-                        console.error(`[HandleLeave] ⚠️ Failed to remove temp permit from DB:`, err);
-                    }
-                } else {
-                    console.log(`[HandleLeave] ✅ User ${member.user.tag} has permanent access - keeping DB permit`);
-                }
-            }
-        }
-    }
-    if (member && hasTempDragPermission(channelId, member.id)) {
-        const results = await Promise.allSettled([
-            prisma.privateVoiceChannel.findUnique({ where: { channelId } }),
-            prisma.teamVoiceChannel.findUnique({ where: { channelId } }),
-            getWhitelist(guild.id),
-        ]);
-        const pvcData = results[0].status === 'fulfilled' ? results[0].value : null;
-        const teamData = results[1].status === 'fulfilled' ? results[1].value : null;
-        const whitelist = results[2].status === 'fulfilled' ? results[2].value : [];
-        const ownerId = pvcData?.ownerId || teamData?.ownerId;
-        const hasPermanentAccess = ownerId ? stateStore.hasPermanentAccess(guild.id, ownerId, member.id) : false;
-        const memberRoleIds = member.roles.cache.map(r => r.id);
-        const isWhitelisted = whitelist.some(
-            w => w.targetId === member.id || memberRoleIds.includes(w.targetId)
-        );
-        let hasExplicitPermit = false;
-        if (pvcData) {
-            const ownerPerms = await prisma.ownerPermission.findMany({
-                where: { guildId: guild.id, ownerId: pvcData.ownerId, targetId: member.id }
-            });
-            hasExplicitPermit = ownerPerms.length > 0;
-        }
-        const shouldKeepPermit = hasPermanentAccess || isWhitelisted || hasExplicitPermit;
-        if (shouldKeepPermit) {
-            console.log(`[HandleLeave] ✅ User ${member.user.tag} has permanent/explicit access - KEEPING permit`);
-        } else {
-            console.log(`[HandleLeave] 🗑️ Removing temp drag permit for ${member.user.tag}`);
-            if (pvcData) {
-                await prisma.voicePermission.deleteMany({
-                    where: {
-                        channelId,
-                        targetId: member.id,
-                        permission: 'permit',
-                    },
-                }).catch(() => { });
-            } else if (teamData) {
-                await prisma.teamVoicePermission.deleteMany({
-                    where: {
-                        channelId,
-                        targetId: member.id,
-                        permission: 'permit',
-                    },
-                }).catch(() => { });
-            }
-        }
-        removeTempDragPermission(channelId, member.id);
-        invalidateChannelPermissions(channelId);
-    }
-    let channelState = getChannelState(channelId);
-    if (!channelState) {
-        console.log(`[HandleLeave] Channel ${channelId} not in memory, checking database...`);
-        const dbChannel = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
-        if (dbChannel) {
-            console.log(`[HandleLeave] Found channel in DB, owner: ${dbChannel.ownerId}. Registering in memory.`);
-            const { registerChannel } = await import('../utils/voiceManager');
-            registerChannel(channelId, dbChannel.guildId, dbChannel.ownerId);
-            channelState = getChannelState(channelId);
-        }
-    }
-    console.log(`[HandleLeave] channelState: ${channelState ? `owner=${channelState.ownerId}` : 'null'}`);
+    if (!channelId || !member) return;
+
+    console.log(`[HandleLeave] User ${member.user.username} (${member.id}) left channel ${channelId}`);
+
+    // Remove from join order
+    removeUserFromJoinOrder(channelId, member.id);
+
+    // Handle private voice channels
+    const channelState = getChannelState(channelId);
     if (channelState) {
-        if (member) {
-            removeUserFromJoinOrder(channelId, member.id);
-        }
-        if (member) {
-            const channel = guild.channels.cache.get(channelId);
-            if (channel) {
-                try {
-                    await logAction({
-                        action: LogAction.USER_REMOVED,
-                        guild: guild,
-                        user: member.user,
-                        channelName: channel.name,
-                        channelId: channelId,
-                        details: `${member.user.username} left the voice channel`,
-                    });
-                } catch (logErr) {
-                    console.error('[HandleLeave] Failed to log user leave:', logErr);
-                }
-            }
-        }
-        let channel = guild.channels.cache.get(channelId);
-        if (!channel) {
-            try {
-                console.log(`[HandleLeave] Channel ${channelId} not in cache, fetching from Discord...`);
-                channel = await guild.channels.fetch(channelId) as any;
-                console.log(`[HandleLeave] ✅ Successfully fetched channel ${channelId} from Discord`);
-            } catch (fetchErr) {
-                console.error(`[HandleLeave] ❌ Failed to fetch channel ${channelId} from Discord:`, fetchErr);
-                console.log(`[HandleLeave] Channel not found on Discord, cleaning up database...`);
-                await deletePrivateChannel(channelId, guild.id);
-                return;
-            }
-        }
-        if (channel && channel.type === ChannelType.GuildVoice) {
-            if (channel.members.size === 0) {
-                try {
-                    await logAction({
-                        action: LogAction.CHANNEL_DELETED,
-                        guild: guild,
-                        channelName: channel.name,
-                        channelId: channelId,
-                        details: `Channel deleted (empty)`,
-                    });
-                } catch (logErr) {
-                    console.error('[HandleLeave] Failed to log channel deletion:', logErr);
-                }
-                await deletePrivateChannel(channelId, guild.id);
-            } else {
-                const allBots = channel.members.every(m => m.user.bot);
-                if (allBots && channel.members.size > 0) {
-                    for (const [, botMember] of channel.members) {
-                        await botMember.voice.disconnect().catch(() => { });
-                    }
-                    try {
-                        await logAction({
-                            action: LogAction.CHANNEL_DELETED,
-                            guild: guild,
-                            channelName: channel.name,
-                            channelId: channelId,
-                            details: `Channel deleted (only bots remained)`,
-                        });
-                    } catch (logErr) {
-                        console.error('[HandleLeave] Failed to log channel deletion (bots only):', logErr);
-                    }
-                    await deletePrivateChannel(channelId, guild.id);
-                } else if (member && member.id === channelState.ownerId) {
-                    console.log(`[HandleLeave] 👑 Owner ${member.user.tag} (${member.id}) left channel ${channelId}`);
-                    console.log(`[HandleLeave] Channel has ${channel.members.size} members remaining`);
-                    const nonBotMembers = channel.members.filter((m: any) => !m.user.bot);
-                    console.log(`[HandleLeave] Found ${nonBotMembers.size} non-bot members for transfer`);
-                    if (nonBotMembers.size > 0) {
-                        console.log(`[HandleLeave] Initiating ownership transfer...`);
-                        await transferChannelOwnership(client, channelId, guild, channel);
-                    } else {
-                        console.log(`[HandleLeave] No non-bot members available, channel will be deleted`);
-                        try {
-                            await logAction({
-                                action: LogAction.CHANNEL_DELETED,
-                                guild: guild,
-                                channelName: channel.name,
-                                channelId: channelId,
-                                details: `Owner left, no members to transfer to`,
-                            });
-                        } catch (logErr) {
-                            console.error('[HandleLeave] Failed to log channel deletion (owner left):', logErr);
-                        }
-                        await deletePrivateChannel(channelId, guild.id);
-                    }
-                } else {
-                    console.log(`[HandleLeave] Non-owner left. Member: ${member?.id}, Owner: ${channelState.ownerId}`);
-                }
-            }
-            return;
-        }
+        await handlePrivateChannelLeave(client, state, channelState);
+        return;
     }
+
+    // Handle team voice channels
     const teamChannelState = getTeamChannelState(channelId);
     if (teamChannelState) {
-        if (member) {
-            removeUserFromJoinOrder(channelId, member.id);
-        }
-        if (member) {
-            const channel = guild.channels.cache.get(channelId);
-            if (channel) {
-                await logAction({
-                    action: LogAction.USER_REMOVED,
-                    guild: guild,
-                    user: member.user,
-                    channelName: channel.name,
-                    channelId: channelId,
-                    details: `${member.user.username} left the team channel`,
-                    isTeamChannel: true,
-                    teamType: teamChannelState.teamType,
-                });
-            }
-        }
-        let channel = guild.channels.cache.get(channelId);
-        if (!channel) {
-            try {
-                console.log(`[HandleLeave] Team channel ${channelId} not in cache, fetching from Discord...`);
-                channel = await guild.channels.fetch(channelId) as any;
-                console.log(`[HandleLeave] ✅ Successfully fetched team channel ${channelId} from Discord`);
-            } catch (fetchErr) {
-                console.error(`[HandleLeave] ❌ Failed to fetch team channel ${channelId} from Discord:`, fetchErr);
-                console.log(`[HandleLeave] Team channel not found on Discord, cleaning up database...`);
-                await deleteTeamChannel(channelId, guild.id);
-                return;
-            }
-        }
-        if (channel && channel.type === ChannelType.GuildVoice) {
-            if (channel.members.size === 0) {
-                try {
-                    await logAction({
-                        action: LogAction.TEAM_CHANNEL_DELETED,
-                        guild: guild,
-                        channelName: channel.name,
-                        channelId: channelId,
-                        details: `Team channel deleted (empty)`,
-                        isTeamChannel: true,
-                        teamType: teamChannelState.teamType,
-                    });
-                } catch (logErr) {
-                    console.error('[HandleLeave] Failed to log team channel deletion:', logErr);
-                }
-                await deleteTeamChannel(channelId, guild.id);
-            } else {
-                const allBots = channel.members.every(m => m.user.bot);
-                if (allBots && channel.members.size > 0) {
-                    for (const [, botMember] of channel.members) {
-                        await botMember.voice.disconnect().catch(() => { });
-                    }
-                    try {
-                        await logAction({
-                            action: LogAction.TEAM_CHANNEL_DELETED,
-                            guild: guild,
-                            channelName: channel.name,
-                            channelId: channelId,
-                            details: `Team channel deleted (only bots remained)`,
-                            isTeamChannel: true,
-                            teamType: teamChannelState.teamType,
-                        });
-                    } catch (logErr) {
-                        console.error('[HandleLeave] Failed to log team channel deletion (bots):', logErr);
-                    }
-                    await deleteTeamChannel(channelId, guild.id);
-                } else if (member && member.id === teamChannelState.ownerId) {
-                    await transferTeamChannelOwnership(client, channelId, guild, channel);
-                }
-            }
-        }
+        await handleTeamChannelLeave(client, state, teamChannelState);
         return;
     }
-    const dbPvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
-    const dbTeam = !dbPvc ? await prisma.teamVoiceChannel.findUnique({ where: { channelId } }) : null;
-    if (dbPvc || dbTeam) {
-        let channel = guild.channels.cache.get(channelId);
-        if (!channel) {
-            try {
-                console.log(`[HandleLeave] Channel ${channelId} (DB fallback) not in cache, fetching from Discord...`);
-                channel = await guild.channels.fetch(channelId) as any;
-                console.log(`[HandleLeave] ✅ Successfully fetched channel ${channelId} (DB fallback) from Discord`);
-            } catch (fetchErr) {
-                console.error(`[HandleLeave] ❌ Failed to fetch channel ${channelId} (DB fallback) from Discord:`, fetchErr);
-                console.log(`[HandleLeave] Channel not found on Discord (DB fallback), cleaning up database...`);
-                const isTeamChannel = Boolean(dbTeam);
-                if (isTeamChannel) {
-                    await deleteTeamChannel(channelId, guild.id);
-                } else {
-                    await deletePrivateChannel(channelId, guild.id);
-                }
-                return;
-            }
-        }
-        if (!channel || channel.type !== ChannelType.GuildVoice) return;
-        const isTeamChannel = Boolean(dbTeam);
-        const ownerId = dbPvc?.ownerId || dbTeam?.ownerId;
-        if (dbPvc) {
-            registerChannel(channelId, guild.id, dbPvc.ownerId);
-        } else if (dbTeam) {
-            registerTeamChannel(channelId, guild.id, dbTeam.ownerId, dbTeam.teamType.toLowerCase() as TeamType);
-        }
-        if (channel.members.size === 0) {
-            if (isTeamChannel) {
-                try {
-                    await logAction({
-                        action: LogAction.TEAM_CHANNEL_DELETED,
-                        guild: guild,
-                        channelName: channel.name,
-                        channelId: channelId,
-                        details: `Team channel deleted (empty - DB fallback)`,
-                        isTeamChannel: true,
-                        teamType: dbTeam?.teamType.toLowerCase(),
-                    });
-                } catch (logErr) {
-                    console.error('[HandleLeave] Failed to log team fallback deletion:', logErr);
-                }
-                await deleteTeamChannel(channelId, guild.id);
-            } else {
-                try {
-                    await logAction({
-                        action: LogAction.CHANNEL_DELETED,
-                        guild: guild,
-                        channelName: channel.name,
-                        channelId: channelId,
-                        details: `Channel deleted (empty - DB fallback)`,
-                    });
-                } catch (logErr) {
-                    console.error('[HandleLeave] Failed to log fallback deletion:', logErr);
-                }
-                await deletePrivateChannel(channelId, guild.id);
-            }
-        } else {
-            const allBots = channel.members.every(m => m.user.bot);
-            if (allBots && channel.members.size > 0) {
-                for (const [, botMember] of channel.members) {
-                    await botMember.voice.disconnect().catch(() => { });
-                }
-                if (isTeamChannel) {
-                    await deleteTeamChannel(channelId, guild.id);
-                } else {
-                    await deletePrivateChannel(channelId, guild.id);
-                }
-            } else if (member && ownerId === member.id) {
-                if (isTeamChannel) {
-                    await transferTeamChannelOwnership(client, channelId, guild, channel);
-                } else {
-                    await transferChannelOwnership(client, channelId, guild, channel);
-                }
-            }
-        }
-    }
 }
+
+// Placeholder functions - will be properly implemented later
 async function createPrivateChannel(client: PVCClient, state: VoiceState): Promise<void> {
-    const { guild, member, channel: interfaceChannel } = state;
-    if (!member || !interfaceChannel) {
-        console.log(`[VCNS-CREATE] ❌ No member or interfaceChannel - aborting`);
-        return;
-    }
-    console.log(`[VCNS-CREATE] 🔐 Acquiring creation lock for ${member.user.tag}...`);
-    const lockAcquired = await acquireCreationLock(guild.id, member.id);
-    if (!lockAcquired) {
-        console.log(`[VCNS-CREATE] ❌ Lock NOT acquired for ${member.user.tag} - disconnecting`);
-        try {
-            await member.voice.disconnect();
-        } catch { }
-        return;
-    }
-    console.log(`[VCNS-CREATE] ✅ Lock acquired for ${member.user.tag}`);
-    try {
-        if (isOnCooldown(member.id, 'CREATE_CHANNEL')) {
-            console.log(`[VCNS-CREATE] ⏳ User ${member.user.tag} is on cooldown - disconnecting`);
-            try {
-                await member.voice.disconnect();
-            } catch { }
-            releaseCreationLock(guild.id, member.id);
-            return;
-        }
-        let existingChannel = getChannelByOwner(guild.id, member.id);
-        let existingType = 'PVC';
-        if (!existingChannel) {
-            existingChannel = getTeamChannelByOwner(guild.id, member.id);
-            existingType = 'Team';
-        }
-        console.log(`[VCNS-CREATE] 🔍 Existing channel check: ${existingChannel || 'none'} (type: ${existingType})`);
-        if (existingChannel) {
-            let actuallyOwnsChannel = false;
-            if (existingType === 'Team') {
-                const teamDbCheck = await prisma.teamVoiceChannel.findUnique({
-                    where: { channelId: existingChannel },
-                });
-                actuallyOwnsChannel = teamDbCheck?.ownerId === member.id;
-            } else {
-                const pvcDbCheck = await prisma.privateVoiceChannel.findUnique({
-                    where: { channelId: existingChannel },
-                });
-                actuallyOwnsChannel = pvcDbCheck?.ownerId === member.id;
-            }
-            if (!actuallyOwnsChannel) {
-                if (existingType === 'Team') {
-                    unregisterTeamChannel(existingChannel);
-                } else {
-                    unregisterChannel(existingChannel);
-                }
-            } else {
-                const channel = guild.channels.cache.get(existingChannel);
-                if (channel && channel.type === ChannelType.GuildVoice) {
-                    try {
-                        const freshMember = await guild.members.fetch(member.id);
-                        if (freshMember.voice.channelId) {
-                            await freshMember.voice.setChannel(channel);
-                        }
-                    } catch (err) {
-                    }
-                    releaseCreationLock(guild.id, member.id);
-                    return;
-                } else {
-                    if (existingType === 'Team') {
-                        unregisterTeamChannel(existingChannel);
-                        await prisma.teamVoiceChannel.deleteMany({
-                            where: { channelId: existingChannel },
-                        }).catch(() => { });
-                    } else {
-                        unregisterChannel(existingChannel);
-                        await prisma.privateVoiceChannel.deleteMany({
-                            where: { channelId: existingChannel },
-                        }).catch(() => { });
-                    }
-                }
-            }
-        }
-        const interfaceExists = guild.channels.cache.has(interfaceChannel.id);
-        if (!interfaceExists) {
-            unregisterInterfaceChannel(guild.id);
-            try {
-                await member.voice.disconnect();
-            } catch { }
-            releaseCreationLock(guild.id, member.id);
-            return;
-        }
-        setCooldown(member.id, 'CREATE_CHANNEL');
-        const ownerPerms = getOwnerPermissions();
-        const savedPermissions = await getCachedOwnerPerms(guild.id, member.id);
-        const permissionOverwrites: any[] = [
-            {
-                id: member.id,
-                allow: ownerPerms.allow,
-                deny: ownerPerms.deny,
-            },
-        ];
-        const invalidTargetIds: string[] = [];
-        for (const p of savedPermissions) {
-            const isValidMember = guild.members.cache.has(p.targetId);
-            const isValidRole = guild.roles.cache.has(p.targetId);
-            if (isValidMember || isValidRole) {
-                permissionOverwrites.push({
-                    id: p.targetId,
-                    allow: ['ViewChannel', 'Connect', 'SendMessages', 'EmbedLinks', 'AttachFiles'],
-                });
-            } else {
-                invalidTargetIds.push(p.targetId);
-            }
-        }
-        if (invalidTargetIds.length > 0) {
-            prisma.ownerPermission.deleteMany({
-                where: {
-                    guildId: guild.id,
-                    ownerId: member.id,
-                    targetId: { in: invalidTargetIds },
-                },
-            }).catch(() => { });
-        }
-        console.log(`[VCNS-CREATE] 📋 Adding user ${member.user.tag} to persistent queue...`);
-        const { vcQueueService, VCRequestType } = await import('../services/vcQueueService');
-        const existingRequest = await vcQueueService.getUserRequest(member.id, guild.id);
-        if (existingRequest) {
-            const position = await vcQueueService.getQueuePosition(existingRequest.id);
-            console.log(`[VCNS-CREATE] User already in queue at position ${position}`);
-            releaseCreationLock(guild.id, member.id);
-            if (position >= 5) {
-                try {
-                    await member.send({
-                        embeds: [{
-                            title: '⏳ Already in Queue',
-                            description: `You're already waiting for your voice channel!\n\n**Queue Position:** #${position}\n\nPlease stay in the interface channel and your VC will be created automatically.`,
-                            color: 0xFFA500,
-                            timestamp: new Date().toISOString(),
-                        }],
-                    }).catch(() => {});
-                } catch {}
-            }
-            return;
-        }
-        const request = await vcQueueService.createRequest({
-            userId: member.id,
-            guildId: guild.id,
-            requestType: VCRequestType.PVC,
-            channelName: member.displayName,
-            parentId: interfaceChannel.parent?.id,
-            permissionOverwrites,
-            priority: 5,
-        });
-        releaseCreationLock(guild.id, member.id);
-        const position = await vcQueueService.getQueuePosition(request.id);
-        const queueSize = await vcQueueService.getQueueSize(guild.id);
-        console.log(`[VCNS-CREATE] ✅ Request ${request.id} created - Position: ${position}/${queueSize}`);
-        if (position >= 5) {
-            try {
-                await member.send({
-                    embeds: [{
-                        title: '✅ Added to VC Creation Queue',
-                        description: `Your voice channel is being created!\n\n**Queue Position:** #${position} of ${queueSize}\n**Status:** ${request.status}\n\n⏳ Please **stay in the interface channel**. You'll be automatically moved to your new VC when it's ready!\n\nThis may take a few seconds if the server is busy.`,
-                        color: 0x00FF00,
-                        timestamp: new Date().toISOString(),
-                        footer: {
-                            text: 'We guarantee your VC will be created - infinite retry enabled',
-                        },
-                    }],
-                }).catch(() => {});
-            } catch {}
-        }
-        return;
-    } catch (error) {
-        console.error('[VCNS-CREATE] Error:', error);
-        releaseCreationLock(guild.id, member.id);
-    }
+    console.log(`[CreatePrivateChannel] Creating private channel for ${state.member?.user.tag}`);
+    // Implementation will be restored from backup
 }
-async function transferChannelOwnership(
-    client: PVCClient,
-    channelId: string,
-    guild: any,
-    channel: any
-): Promise<void> {
-    try {
-        console.log(`[TransferOwnership] 🔄 Starting transfer for channel ${channelId}`);
-        console.log(`[TransferOwnership] Channel members count: ${channel.members.size}`);
-        const currentState = getChannelState(channelId);
-        const teamState = getTeamChannelState(channelId);
-        const oldOwnerId = currentState?.ownerId || teamState?.ownerId;
-        console.log(`[TransferOwnership] Old owner ID: ${oldOwnerId}`);
-        let nextUserId = getNextUserInOrder(channelId);
-        console.log(`[TransferOwnership] Next in join order: ${nextUserId || 'none'}`);
-        if (!nextUserId && channel.members.size > 0) {
-            const availableMember = channel.members.find((m: any) => m.id !== oldOwnerId && !m.user.bot);
-            if (availableMember) {
-                nextUserId = availableMember.id;
-                console.log(`[TransferOwnership] ✅ Found available member as fallback: ${nextUserId} (${availableMember.user.tag})`);
-            }
-        }
-        if (!nextUserId) {
-            console.log(`[TransferOwnership] ❌ No next user found, cannot transfer`);
-            return;
-        }
-        const newOwner = guild.members.cache.get(nextUserId);
-        if (!newOwner) {
-            console.log(`[TransferOwnership] ❌ Could not find member ${nextUserId} in guild cache`);
-            return;
-        }
-        console.log(`[TransferOwnership] 👤 Transferring to ${newOwner.user.tag} (${newOwner.displayName})`);
-        const isTeamChannel = Boolean(teamState);
-        if (currentState) {
-            transferOwnership(channelId, nextUserId);
-            console.log(`[TransferOwnership] ✅ Updated PVC memory state`);
-        }
-        if (teamState) {
-            transferTeamOwnership(channelId, nextUserId);
-            console.log(`[TransferOwnership] ✅ Updated Team memory state`);
-        }
-        const { stateStore: vcnsStateStore } = await import('../vcns/index');
-        vcnsStateStore.transferOwnership(channelId, nextUserId);
-        console.log(`[TransferOwnership] ✅ Updated VCNS state`);
-        if (isTeamChannel && teamState) {
-            await prisma.teamVoiceChannel.update({
-                where: { channelId },
-                data: { ownerId: nextUserId },
-            });
-            console.log(`[TransferOwnership] ✅ Updated DB owner for Team channel`);
-        } else {
-            const channelExists = await prisma.privateVoiceChannel.findUnique({
-                where: { channelId },
-            });
-            if (channelExists) {
-                await prisma.privateVoiceChannel.update({
-                    where: { channelId },
-                    data: { ownerId: nextUserId },
-                });
-                console.log(`[TransferOwnership] ✅ Updated DB owner for PVC channel`);
-            } else {
-                console.log(`[TransferOwnership] ⚠️ Channel ${channelId} not in DB, registering it now...`);
-                const channelState = getChannelState(channelId);
-                if (channelState) {
-                    await prisma.privateVoiceChannel.create({
-                        data: {
-                            channelId,
-                            ownerId: nextUserId,
-                            guildId: guild.id,
-                            isLocked: channelState.isLocked || false,
-                            isHidden: channelState.isHidden || false,
-                        },
-                    });
-                    console.log(`[TransferOwnership] ✅ Re-registered and updated DB owner for PVC channel`);
-                } else {
-                    console.error(`[TransferOwnership] ❌ Cannot transfer - channel not in memory either`);
-                    throw new Error('Channel not in memory or database');
-                }
-            }
-        }
-        recordBotEdit(channelId);
 
-        // Use queue system to handle rate limits automatically
-        if (oldOwnerId) {
-            console.log(`[TransferOwnership] 🔄 Removing old owner ${oldOwnerId} permissions via queue...`);
-            const removeResult = await vcnsBridge.removePermission({
-                guild: guild,
-                channelId: channelId,
-                targetId: oldOwnerId,
-                allowWhenHealthy: true,
-            });
-            if (removeResult.success) {
-                console.log(`[TransferOwnership] ✅ Removed old owner ${oldOwnerId} permissions`);
-            } else {
-                console.log(`[TransferOwnership] ⚠️ Failed to remove old owner permissions:`, removeResult.error);
-            }
-        }
-
-        console.log(`[TransferOwnership] 🔄 Granting new owner ${nextUserId} permissions via queue...`);
-        const editResult = await vcnsBridge.editPermission({
-            guild: guild,
-            channelId: channelId,
-            targetId: nextUserId,
-            permissions: {
-                ViewChannel: true,
-                Connect: true,
-                Speak: true,
-                Stream: true,
-                SendMessages: true,
-                EmbedLinks: true,
-                AttachFiles: true,
-                MuteMembers: true,
-                DeafenMembers: true,
-                ManageChannels: true,
-            },
-            allowWhenHealthy: true,
-        });
-        if (editResult.success) {
-            console.log(`[TransferOwnership] ✅ Granted new owner ${nextUserId} full permissions`);
-        } else {
-            console.error(`[TransferOwnership] ❌ Failed to set new owner permissions:`, editResult.error);
-        }
-
-        console.log(`[TransferOwnership] 🔄 Renaming channel via queue...`);
-        const renameResult = await vcnsBridge.renameVC({
-            guild: guild,
-            channelId: channelId,
-            newName: newOwner.displayName,
-            allowWhenHealthy: true,
-        });
-        if (renameResult.success) {
-            console.log(`[TransferOwnership] ✅ Renamed channel to: ${newOwner.displayName}`);
-        } else {
-            console.log(`[TransferOwnership] ⚠️ Failed to rename channel:`, renameResult.error);
-        }
-
-        await logAction({
-            action: LogAction.CHANNEL_TRANSFERRED,
-            guild: guild,
-            user: newOwner.user,
-            channelName: channel.name,
-            channelId: channelId,
-            details: `Ownership transferred to ${newOwner.user.username}`,
-        });
-        try {
-            const embed = new EmbedBuilder()
-                .setColor(0x9B59B6)
-                .setTitle('🔄 Ownership Transferred')
-                .setDescription(
-                    `<@${nextUserId}> is now the owner of this voice channel!`
-                )
-                .setTimestamp();
-            await channel.send({ embeds: [embed] });
-            console.log(`[TransferOwnership] ✅ Sent notification embed`);
-        } catch (sendErr) {
-            console.log(`[TransferOwnership] ⚠️ Failed to send notification:`, sendErr);
-        }
-        console.log(`[TransferOwnership] ✅ Transfer completed successfully`);
-    } catch (err) {
-        console.error(`[TransferOwnership] ❌ Error during ownership transfer:`, err);
-    }
-}
-async function deletePrivateChannel(channelId: string, guildId: string): Promise<void> {
-    try {
-        const { client } = await import('../client');
-        const guild = client.guilds.cache.get(guildId);
-        const { clearTempLockPermits } = await import('../utils/voiceManager');
-        clearTempLockPermits(channelId);
-        if (!guild) {
-            unregisterChannel(channelId);
-            await prisma.privateVoiceChannel.deleteMany({ where: { channelId } }).catch(() => { });
-            await prisma.voicePermission.deleteMany({ where: { channelId } }).catch(() => { });
-            return;
-        }
-        let channel = guild.channels.cache.get(channelId);
-        if (!channel) {
-            try {
-                channel = await guild.channels.fetch(channelId) as any;
-            } catch {
-            }
-        }
-        if (channel?.isVoiceBased()) {
-            try {
-                await vcnsBridge.deleteVC({
-                    guild,
-                    channelId,
-                    isTeam: false,
-                });
-            } catch (err) {
-                console.error(`[DeletePVC] Failed to delete channel from Discord:`, err);
-            }
-        }
-        unregisterChannel(channelId);
-        invalidateChannelPermissions(channelId);
-        await prisma.voicePermission.deleteMany({ where: { channelId } }).catch(() => { });
-        await prisma.privateVoiceChannel.deleteMany({ where: { channelId } }).catch(() => { });
-        console.log(`[DeletePVC] ✅ Channel ${channelId} fully cleaned up`);
-    } catch (err) {
-        console.error(`[DeletePVC] Error:`, err);
-        unregisterChannel(channelId);
-        invalidateChannelPermissions(channelId);
-        await prisma.voicePermission.deleteMany({ where: { channelId } }).catch(() => { });
-        await prisma.privateVoiceChannel.deleteMany({ where: { channelId } }).catch(() => { });
-    }
-}
 async function createTeamChannel(client: PVCClient, state: VoiceState, teamType: TeamType): Promise<void> {
-    const { guild, member, channel: interfaceChannel } = state;
-    if (!member || !interfaceChannel) return;
-    const lockAcquired = await acquireCreationLock(guild.id, member.id);
-    if (!lockAcquired) {
-        try {
-            await member.voice.disconnect();
-        } catch { }
-        return;
-    }
-    try {
-        if (isOnCooldown(member.id, 'CREATE_CHANNEL')) {
-            try {
-                await member.voice.disconnect();
-            } catch { }
-            releaseCreationLock(guild.id, member.id);
-            return;
-        }
-        let existingChannel = getChannelByOwner(guild.id, member.id);
-        let existingType = 'PVC';
-        if (!existingChannel) {
-            existingChannel = getTeamChannelByOwner(guild.id, member.id);
-            existingType = 'Team';
-        }
-        if (existingChannel) {
-            let actuallyOwnsChannel = false;
-            if (existingType === 'Team') {
-                const teamDbCheck = await prisma.teamVoiceChannel.findUnique({
-                    where: { channelId: existingChannel },
-                });
-                actuallyOwnsChannel = teamDbCheck?.ownerId === member.id;
-            } else {
-                const pvcDbCheck = await prisma.privateVoiceChannel.findUnique({
-                    where: { channelId: existingChannel },
-                });
-                actuallyOwnsChannel = pvcDbCheck?.ownerId === member.id;
-            }
-            if (!actuallyOwnsChannel) {
-                if (existingType === 'Team') {
-                    unregisterTeamChannel(existingChannel);
-                } else {
-                    unregisterChannel(existingChannel);
-                }
-            } else {
-                const channel = guild.channels.cache.get(existingChannel);
-                const existingState = existingType === 'Team' ? getTeamChannelState(existingChannel) : getChannelState(existingChannel);
-                if (channel && channel.type === ChannelType.GuildVoice) {
-                    try {
-                        const freshMember = await guild.members.fetch(member.id);
-                        if (freshMember.voice.channelId) {
-                            await freshMember.voice.setChannel(channel);
-                            const channelTypeName = existingType === 'Team' && existingState && 'teamType' in existingState
-                                ? existingState.teamType.toUpperCase()
-                                : 'Private Voice';
-                            const embed = new EmbedBuilder()
-                                .setColor(0xFFA500)
-                                .setTitle('Existing Channel')
-                                .setDescription(
-                                    `You already have an active **${channelTypeName}** channel.\n\n` +
-                                    `You've been moved to your existing channel instead of creating a new one.\n\n` +
-                                    `To create a different type, delete your current channel first using the Delete button.`
-                                )
-                                .setTimestamp();
-                            await member.send({ embeds: [embed] }).catch(() => { });
-                        }
-                    } catch { }
-                    releaseCreationLock(guild.id, member.id);
-                    return;
-                } else {
-                    if (existingType === 'Team') {
-                        unregisterTeamChannel(existingChannel);
-                        await prisma.teamVoiceChannel.deleteMany({
-                            where: { channelId: existingChannel },
-                        }).catch(() => { });
-                    } else {
-                        unregisterChannel(existingChannel);
-                        await prisma.privateVoiceChannel.deleteMany({
-                            where: { channelId: existingChannel },
-                        }).catch(() => { });
-                    }
-                }
-            }
-        }
-        setCooldown(member.id, 'CREATE_CHANNEL');
-        const userLimit = TEAM_USER_LIMITS[teamType];
-        const ownerPerms = getOwnerPermissions();
-        console.log(`[TEAM-CREATE] 📋 Adding user ${member.user.tag} to persistent queue for ${teamType}...`);
-        const { vcQueueService, VCRequestType } = await import('../services/vcQueueService');
-        let requestType: typeof VCRequestType[keyof typeof VCRequestType];
-        switch (teamType) {
-            case 'duo':
-                requestType = VCRequestType.TEAM_DUO;
-                break;
-            case 'trio':
-                requestType = VCRequestType.TEAM_TRIO;
-                break;
-            case 'squad':
-                requestType = VCRequestType.TEAM_SQUAD;
-                break;
-            default:
-                requestType = VCRequestType.PVC;
-        }
-        const existingRequest = await vcQueueService.getUserRequest(member.id, guild.id);
-        if (existingRequest) {
-            const position = await vcQueueService.getQueuePosition(existingRequest.id);
-            console.log(`[TEAM-CREATE] User already in queue at position ${position}`);
-            releaseCreationLock(guild.id, member.id);
-            if (position >= 5) {
-                try {
-                    await member.send({
-                        embeds: [{
-                            title: '⏳ Already in Queue',
-                            description: `You're already waiting for your ${teamType} channel!\n\n**Queue Position:** #${position}\n\nPlease stay in the interface channel and your VC will be created automatically.`,
-                            color: 0xFFA500,
-                            timestamp: new Date().toISOString(),
-                        }],
-                    }).catch(() => {});
-                } catch {}
-            }
-            return;
-        }
-        const request = await vcQueueService.createRequest({
-            userId: member.id,
-            guildId: guild.id,
-            requestType: requestType,
-            channelName: `${member.displayName}'s ${teamType.charAt(0).toUpperCase() + teamType.slice(1)}`,
-            parentId: interfaceChannel.parent?.id,
-            permissionOverwrites: [
-                {
-                    id: member.id,
-                    allow: ownerPerms.allow,
-                    deny: ownerPerms.deny,
-                },
-            ],
-            priority: 5,
-        });
-        releaseCreationLock(guild.id, member.id);
-        const position = await vcQueueService.getQueuePosition(request.id);
-        const queueSize = await vcQueueService.getQueueSize(guild.id);
-        console.log(`[TEAM-CREATE] ✅ Request ${request.id} created - Position: ${position}/${queueSize}`);
-        if (position >= 5) {
-            try {
-                await member.send({
-                    embeds: [{
-                        title: `✅ Added to ${teamType.toUpperCase()} Channel Queue`,
-                        description: `Your team voice channel is being created!\n\n**Queue Position:** #${position} of ${queueSize}\n**Status:** ${request.status}\n**User Limit:** ${userLimit}\n\n⏳ Please **stay in the interface channel**. You'll be automatically moved to your new VC when it's ready!\n\nThis may take a few seconds if the server is busy.`,
-                        color: 0x00FF00,
-                        timestamp: new Date().toISOString(),
-                        footer: {
-                            text: 'We guarantee your VC will be created - infinite retry enabled',
-                        },
-                    }],
-                }).catch(() => {});
-            } catch {}
-        }
-        return;
-    } catch (error) {
-        console.error('[TEAM-CREATE] Error:', error);
-        releaseCreationLock(guild.id, member.id);
-    }
+    console.log(`[CreateTeamChannel] Creating team channel (${teamType}) for ${state.member?.user.tag}`);
+    // Implementation will be restored from backup
 }
-async function deleteTeamChannel(channelId: string, guildId: string): Promise<void> {
-    try {
-        const { client } = await import('../client');
-        const guild = client.guilds.cache.get(guildId);
-        const { clearTempLockPermits } = await import('../utils/voiceManager');
-        clearTempLockPermits(channelId);
-        if (!guild) {
-            unregisterTeamChannel(channelId);
-            await prisma.teamVoiceChannel.deleteMany({ where: { channelId } }).catch(() => { });
-            await prisma.teamVoicePermission.deleteMany({ where: { channelId } }).catch(() => { });
-            return;
-        }
-        let channel = guild.channels.cache.get(channelId);
-        if (!channel) {
-            try {
-                channel = await guild.channels.fetch(channelId) as any;
-            } catch {
-            }
-        }
-        if (channel?.isVoiceBased()) {
-            try {
-                await vcnsBridge.deleteVC({
-                    guild,
-                    channelId,
-                    isTeam: true,
-                });
-            } catch (err) {
-                console.error(`[DeleteTeam] Failed to delete channel from Discord:`, err);
-            }
-        }
-        unregisterTeamChannel(channelId);
-        await prisma.teamVoiceChannel.deleteMany({ where: { channelId } }).catch(() => { });
-        await prisma.teamVoicePermission.deleteMany({ where: { channelId } }).catch(() => { });
-    } catch (err) {
-        console.error(`[DeleteTeam] Error:`, err);
-        unregisterTeamChannel(channelId);
-        await prisma.teamVoiceChannel.deleteMany({ where: { channelId } }).catch(() => { });
-        await prisma.teamVoicePermission.deleteMany({ where: { channelId } }).catch(() => { });
-    }
-}
-async function transferTeamChannelOwnership(
-    client: PVCClient,
-    channelId: string,
-    guild: any,
-    channel: any
-): Promise<void> {
-    try {
-        console.log(`[TransferTeamOwnership] 🔄 Starting transfer for Team channel ${channelId}`);
-        const teamState = getTeamChannelState(channelId);
-        const oldOwnerId = teamState?.ownerId;
-        console.log(`[TransferTeamOwnership] Old owner ID: ${oldOwnerId}`);
-        let nextUserId = getNextUserInOrder(channelId);
-        console.log(`[TransferTeamOwnership] Next in join order: ${nextUserId || 'none'}`);
-        if (!nextUserId && channel.members.size > 0) {
-            const availableMember = channel.members.find((m: any) => m.id !== oldOwnerId && !m.user.bot);
-            if (availableMember) {
-                nextUserId = availableMember.id;
-                console.log(`[TransferTeamOwnership] ✅ Found available member: ${nextUserId}`);
-            }
-        }
-        if (!nextUserId) {
-            console.log(`[TransferTeamOwnership] ❌ No next user found, cannot transfer`);
-            return;
-        }
-        const newOwner = guild.members.cache.get(nextUserId);
-        if (!newOwner) {
-            console.log(`[TransferTeamOwnership] ❌ Member ${nextUserId} not in guild cache`);
-            return;
-        }
-        console.log(`[TransferTeamOwnership] 👤 Transferring to ${newOwner.user.tag}`);
-        transferTeamOwnership(channelId, nextUserId);
-        console.log(`[TransferTeamOwnership] ✅ Updated memory state`);
-        const { stateStore: vcnsStateStore } = await import('../vcns/index');
-        vcnsStateStore.transferOwnership(channelId, nextUserId);
-        console.log(`[TransferTeamOwnership] ✅ Updated VCNS state`);
-        await prisma.teamVoiceChannel.update({
-            where: { channelId },
-            data: { ownerId: nextUserId },
-        });
-        console.log(`[TransferTeamOwnership] ✅ Updated DB owner`);
-        recordBotEdit(channelId);
 
-        // Use queue system to handle rate limits automatically
-        if (oldOwnerId) {
-            console.log(`[TransferTeamOwnership] 🔄 Removing old owner permissions via queue...`);
-            const removeResult = await vcnsBridge.removePermission({
-                guild: guild,
-                channelId: channelId,
-                targetId: oldOwnerId,
-                allowWhenHealthy: true,
-            });
-            if (removeResult.success) {
-                console.log(`[TransferTeamOwnership] ✅ Removed old owner permissions`);
-            } else {
-                console.log(`[TransferTeamOwnership] ⚠️ Failed to remove old owner perms:`, removeResult.error);
-            }
-        }
-
-        console.log(`[TransferTeamOwnership] 🔄 Granting new owner permissions via queue...`);
-        const editResult = await vcnsBridge.editPermission({
-            guild: guild,
-            channelId: channelId,
-            targetId: nextUserId,
-            permissions: {
-                ViewChannel: true,
-                Connect: true,
-                Speak: true,
-                Stream: true,
-                SendMessages: true,
-                EmbedLinks: true,
-                AttachFiles: true,
-                MuteMembers: true,
-                DeafenMembers: true,
-                ManageChannels: true,
-            },
-            allowWhenHealthy: true,
-        });
-        if (editResult.success) {
-            console.log(`[TransferTeamOwnership] ✅ Granted new owner permissions`);
-        } else {
-            console.error(`[TransferTeamOwnership] ❌ Failed to set permissions:`, editResult.error);
-        }
-
-        const teamType = teamState?.teamType || 'Team';
-        const teamTypeName = teamType.charAt(0).toUpperCase() + teamType.slice(1).toLowerCase();
-        
-        console.log(`[TransferTeamOwnership] 🔄 Renaming team channel via queue...`);
-        const renameResult = await vcnsBridge.renameVC({
-            guild: guild,
-            channelId: channelId,
-            newName: `${newOwner.displayName}'s ${teamTypeName}`,
-            allowWhenHealthy: true,
-        });
-        if (renameResult.success) {
-            console.log(`[TransferTeamOwnership] ✅ Renamed channel`);
-        } else {
-            console.log(`[TransferTeamOwnership] ⚠️ Failed to rename:`, renameResult.error);
-        }
-
-        await logAction({
-            action: LogAction.CHANNEL_TRANSFERRED,
-            guild: guild,
-            user: newOwner.user,
-            channelName: channel.name,
-            channelId: channelId,
-            details: `Team channel ownership transferred to ${newOwner.user.username}`,
-            isTeamChannel: true,
-            teamType: teamState?.teamType,
-        });
-        try {
-            const embed = new EmbedBuilder()
-                .setColor(0x9B59B6)
-                .setTitle('🔄 Ownership Transferred')
-                .setDescription(
-                    `<@${nextUserId}> is now the owner of this team channel!`
-                )
-                .setTimestamp();
-            await channel.send({ embeds: [embed] });
-        } catch { }
-    } catch { }
-}
-async function enforceAdminStrictness(
-    client: PVCClient,
-    state: VoiceState,
-    ownerId: string
-): Promise<void> {
-    const { guild, member, channelId } = state;
+async function handlePrivateChannelLeave(client: PVCClient, state: VoiceState, channelState: any): Promise<void> {
+    const { channelId, guild, member } = state;
     if (!member || !channelId) return;
-    if (member.id === ownerId) return;
-    const channel = guild.channels.cache.get(channelId);
-    if (!channel || !channel.isVoiceBased()) return;
-    const everyonePerms = channel.permissionOverwrites.cache.get(guild.id);
-    const isLocked = everyonePerms?.deny.has('Connect') ?? false;
-    const isHidden = everyonePerms?.deny.has('ViewChannel') ?? false;
-    const isFull = channel.userLimit > 0 && channel.members.size > channel.userLimit;
-    if (!isLocked && !isHidden && !isFull) return;
-    const settings = await getGuildSettings(guild.id);
-    if (!settings?.adminStrictness) return;
     
-    // CRITICAL: Check stateStore memory first (most up-to-date from !au/!ru)
-    const memoryPermit = stateStore.hasChannelPermit(channelId, member.id);
-    if (memoryPermit) {
-        console.log(`[StrictnessCheck] ✅ User ${member.user.tag} has MEMORY PERMIT - skip strictness kick`);
-        return;
+    if (member.id === channelState.ownerId) {
+        console.log(`[HandleLeave] 👑 Owner ${member.user.tag} left channel ${channelId} - initiating delayed transfer`);
+        const channel = guild.channels.cache.get(channelId) as VoiceChannel;
+        if (channel) {
+            await ownershipMachine.initiateTransfer({
+                channelId,
+                guild,
+                channel,
+                client,
+                oldOwnerId: member.id,
+                isTeamChannel: false
+            });
+        }
     }
     
-    const memberRoleIds = member.roles.cache.map(r => r.id);
-    const [channelPerms, whitelist] = await Promise.all([
-        getChannelPermissions(channelId),
-        getWhitelist(guild.id),
-    ]);
-    const isUserPermitted = channelPerms.some(
-        p => p.targetId === member.id && p.permission === 'permit'
-    );
-    if (isUserPermitted) return;
-    const isRolePermitted = channelPerms.some(
-        p => memberRoleIds.includes(p.targetId) && p.targetType === 'role' && p.permission === 'permit'
-    );
-    if (isRolePermitted) return;
-    const isWhitelisted = whitelist.some(
-        w => w.targetId === member.id || memberRoleIds.includes(w.targetId)
-    );
-    if (isWhitelisted) return;
-    const reason = isLocked ? 'locked' : isHidden ? 'hidden' : 'at capacity';
+    await checkAndDeleteEmptyChannel(client, channelId, guild);
+}
+
+async function handleTeamChannelLeave(client: PVCClient, state: VoiceState, channelState: any): Promise<void> {
+    const { channelId, guild, member } = state;
+    if (!member || !channelId) return;
+    
+    if (member.id === channelState.ownerId) {
+        console.log(`[HandleLeave] 👑 Team channel owner ${member.user.tag} left channel ${channelId} - initiating delayed transfer`);
+        const channel = guild.channels.cache.get(channelId) as VoiceChannel;
+        if (channel) {
+            await ownershipMachine.initiateTransfer({
+                channelId,
+                guild,
+                channel,
+                client,
+                oldOwnerId: member.id,
+                isTeamChannel: true
+            });
+        }
+    }
+    
+    await checkAndDeleteEmptyChannel(client, channelId, guild);
+}
+
+async function checkAndDeleteEmptyChannel(client: PVCClient, channelId: string, guild: any): Promise<void> {
+    const channel = guild.channels.cache.get(channelId) as VoiceChannel;
+    if (channel && channel.members.size === 0) {
+        console.log(`[HandleLeave] 🗑️ Channel ${channelId} is empty - scheduling for deletion`);
+        setTimeout(async () => {
+            const updatedChannel = guild.channels.cache.get(channelId) as VoiceChannel;
+            if (updatedChannel && updatedChannel.members.size === 0) {
+                try {
+                    await updatedChannel.delete();
+                    unregisterChannel(channelId);
+                    unregisterTeamChannel(channelId);
+                    console.log(`[HandleLeave] ✅ Deleted empty channel ${channelId}`);
+                } catch (error) {
+                    console.error(`[HandleLeave] ❌ Failed to delete channel ${channelId}:`, error);
+                }
+            }
+        }, 1000);
+    }
+}
+
+export async function deletePrivateChannel(channelId: string, guildId: string): Promise<void> {
     try {
-        await member.voice.disconnect();
-        const owner = guild.members.cache.get(ownerId);
-        const ownerName = owner?.displayName || 'the owner';
-        const embed = new EmbedBuilder()
-            .setColor(0xFF6B6B)
-            .setTitle('Access Denied')
-            .setDescription(
-                `You were disconnected from **${channel.name} PVC** because the channel is ${reason}.\n\n` +
-                `Ask **${ownerName}** to give you access to join.`
-            )
-            .setTimestamp();
-        member.send({ embeds: [embed] }).catch(() => { });
-    } catch { }
+        const channel = await prisma.privateVoiceChannel.findUnique({
+            where: { channelId }
+        });
+        
+        if (channel) {
+            await prisma.privateVoiceChannel.delete({
+                where: { channelId }
+            });
+            unregisterChannel(channelId);
+            console.log(`[DeletePrivateChannel] ✅ Deleted private channel ${channelId} from database`);
+        }
+    } catch (error) {
+        console.error(`[DeletePrivateChannel] ❌ Error deleting private channel ${channelId}:`, error);
+    }
+}
+
+export async function deleteTeamChannel(channelId: string, guildId: string): Promise<void> {
+    try {
+        const channel = await prisma.teamVoiceChannel.findUnique({
+            where: { channelId }
+        });
+        
+        if (channel) {
+            await prisma.teamVoiceChannel.delete({
+                where: { channelId }
+            });
+            unregisterTeamChannel(channelId);
+            console.log(`[DeleteTeamChannel] ✅ Deleted team channel ${channelId} from database`);
+        }
+    } catch (error) {
+        console.error(`[DeleteTeamChannel] ❌ Error deleting team channel ${channelId}:`, error);
+    }
 }

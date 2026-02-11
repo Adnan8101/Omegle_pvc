@@ -43,7 +43,7 @@ export async function execute(
     }
     if (enforcer.wasRecentlyEnforced(channelId)) {
         console.log(`[ChannelUpdate] Recently enforced channel. Silently re-enforcing just in case.`);
-        await enforcer.enforceQuietly(channelId).catch(err => {
+        await enforcer.enforceQuietly(channelId).catch((err: any) => {
             console.error(`[ChannelUpdate] Silent re-enforcement failed:`, err);
         });
         return;

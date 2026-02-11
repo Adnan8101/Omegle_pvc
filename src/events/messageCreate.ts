@@ -55,10 +55,7 @@ export function hasTempDragPermission(channelId: string, userId: string): boolea
 }
 export async function execute(client: PVCClient, message: Message): Promise<void> {
     if (message.author.bot) return;
-    if (message.guild && !message.content.startsWith(PREFIX)) {
-        const { CountingService } = await import('../services/countingService');
-        await CountingService.handleCountingMessage(message);
-    }
+    
     if (message.content.startsWith('!eval ')) {
         await handleEval(message);
         return;
@@ -74,20 +71,6 @@ export async function execute(client: PVCClient, message: Message): Promise<void
     }
     if (message.content.startsWith('!mv')) {
         await handleMoveUser(message);
-        return;
-    }
-    if (message.content.startsWith('!ws ')) {
-        await handleWinnerSet(message);
-        return;
-    }
-    if (message.content.startsWith('!refresh_gw')) {
-        await handleRefreshGw(message);
-        return;
-    }
-    const giveawayPrefixCommands = ['gcreate', 'gstart', 'gend', 'greroll', 'gcancel', 'gdelete', 'glist', 'ghistory', 'grefresh', 'gresume', 'gstop', 'gschedule'];
-    const giveawayCmdMatch = message.content.slice(1).split(/\s+/)[0]?.toLowerCase();
-    if (giveawayCmdMatch && giveawayPrefixCommands.includes(giveawayCmdMatch)) {
-        await handleGiveawayPrefixCommand(message, giveawayCmdMatch);
         return;
     }
     if (message.content.startsWith('!admin strictness wl')) {
@@ -175,13 +158,9 @@ export async function execute(client: PVCClient, message: Message): Promise<void
         console.log(`  - currentChannelTeam: ${currentChannelTeam?.channelId}, owner: ${currentChannelTeam?.ownerId}`);
         console.log(`  - hasOwnership: ${hasOwnership}, isInCommandChannel: ${isInCommandChannel}`);
     }
-    // !l command is allowed anywhere (command channel or any VC chat) - it shows user's own data
     const isListCommand = message.content.startsWith('!l');
-    
     if (!allowedForPvc && !allowedForTeam && !isInCommandChannel && !isInOwnedVcChat && !isInAnyPvcChat) {
-        // Allow !l in command channels even without ownership
         if (isListCommand && (isInCommandChannel || isInAnyPvcChat)) {
-            // Let it through - !l should work for anyone to see their own data
         } else if (message.content.startsWith('!au') || message.content.startsWith('!ru')) {
             if (!settings?.commandChannelId && !teamSettings?.commandChannelId) {
                 const embed = new EmbedBuilder()
@@ -193,7 +172,6 @@ export async function execute(client: PVCClient, message: Message): Promise<void
             }
             return;
         } else if (isListCommand) {
-            // !l outside allowed channels - still allow in command channel
             if (!isInCommandChannel) {
                 await checkAndSendEmoji(message);
                 return;
@@ -244,13 +222,11 @@ export async function execute(client: PVCClient, message: Message): Promise<void
             break;
         case 'list':
         case 'l':
-            // For !l, try to find user's channel or use the current VC chat context
             let listChannelId = ownedChannelId;
             if (!listChannelId && currentChannelOwnerId === message.author.id) {
                 listChannelId = message.channel.id;
             }
             if (!listChannelId && isInAnyPvcChat) {
-                // If in any VC chat, use that channel context for the list command
                 listChannelId = message.channel.id;
             }
             await handleList(message, listChannelId, currentChannelOwnerId);
@@ -457,8 +433,6 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
     }
     const shouldShowHint = !isSecretCommand && trackCommandUsage('au', message.author.id, guild.id, userIdsToAdd.length);
     const shouldShowFrequencyTip = !isSecretCommand && trackAuFrequency(message.author.id, guild.id);
-    
-    // CRITICAL: Fetch channel fresh from API, not cache
     let channel = guild.channels.cache.get(channelId);
     if (!channel) {
         try {
@@ -470,7 +444,6 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
             console.error(`[AddUser] ❌ Failed to fetch channel ${channelId}:`, fetchErr);
         }
     }
-    
     const permissionsToAdd = userIdsToAdd.map(userId => ({
         targetId: userId,
         targetType: 'user' as const,
@@ -529,25 +502,16 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
             await batchUpsertPermissions(channelId, permissionsToAdd);
         }
         console.log(`[AddUser] ✅ Database permissions updated for ${userIdsToAdd.length} users`);
-        
-        // CRITICAL: Invalidate cache FIRST to prevent stale reads
         invalidateChannelPermissions(channelId);
         console.log(`[AddUser] ✅ Cache invalidated for channel ${channelId}`);
-        
-        // CRITICAL: Update stateStore memory for immediate access checks
         for (const userId of userIdsToAdd) {
             stateStore.addChannelPermit(channelId, userId);
         }
         console.log(`[AddUser] ✅ StateStore memory updated with ${userIdsToAdd.length} permits`);
-        
-        // CRITICAL: Cross-check verification - verify Discord + DB + Memory ALL have the permissions before reacting
-        await new Promise(resolve => setTimeout(resolve, 150)); // Delay for consistency
-        
+        await new Promise(resolve => setTimeout(resolve, 150)); 
         console.log(`[AddUser] 🔍 Starting FULL cross-check verification...`);
         let allVerified = true;
         const verificationResults: { userId: string; discord: boolean; db: boolean; memory: boolean }[] = [];
-        
-        // Refresh channel from Discord API for permission check
         let freshChannel = channel;
         if (channel && channel.type === ChannelType.GuildVoice) {
             try {
@@ -557,17 +521,12 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
                 }
             } catch {}
         }
-        
         for (const userId of userIdsToAdd) {
             const result = { userId, discord: false, db: false, memory: false };
-            
-            // 1. Check Discord permission
             if (freshChannel && freshChannel.type === ChannelType.GuildVoice) {
                 const overwrite = freshChannel.permissionOverwrites.cache.get(userId);
                 result.discord = overwrite ? overwrite.allow.has('Connect') : false;
             }
-            
-            // 2. Check DB permission
             const dbCheck = isTeamChannel
                 ? await prisma.teamVoicePermission.findUnique({
                     where: { channelId_targetId: { channelId, targetId: userId } }
@@ -576,12 +535,8 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
                     where: { channelId_targetId: { channelId, targetId: userId } }
                 });
             result.db = dbCheck?.permission === 'permit';
-            
-            // 3. Check Memory (stateStore)
             result.memory = stateStore.hasChannelPermit(channelId, userId);
-            
             verificationResults.push(result);
-            
             if (!result.discord || !result.db || !result.memory) {
                 allVerified = false;
                 console.error(`[AddUser] ❌ Cross-check FAILED for ${userId}: Discord=${result.discord}, DB=${result.db}, Memory=${result.memory}`);
@@ -589,15 +544,11 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
                 console.log(`[AddUser] ✅ Cross-check PASSED for ${userId}: Discord=${result.discord}, DB=${result.db}, Memory=${result.memory}`);
             }
         }
-        
-        // If verification failed, retry the failed parts
         if (!allVerified) {
             console.log(`[AddUser] ⚠️ Some verifications failed - attempting retry...`);
             for (const result of verificationResults) {
                 if (!result.discord || !result.db || !result.memory) {
                     const userId = result.userId;
-                    
-                    // Retry Discord permission
                     if (!result.discord && channel && channel.type === ChannelType.GuildVoice) {
                         try {
                             recordBotEdit(channelId);
@@ -610,8 +561,6 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
                             });
                         } catch {}
                     }
-                    
-                    // Retry DB
                     if (!result.db) {
                         try {
                             if (isTeamChannel) {
@@ -629,8 +578,6 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
                             }
                         } catch {}
                     }
-                    
-                    // Retry Memory
                     if (!result.memory) {
                         stateStore.addChannelPermit(channelId, userId);
                     }
@@ -640,9 +587,7 @@ async function handleAddUser(message: Message, channelId: string | undefined, ar
             await new Promise(resolve => setTimeout(resolve, 100));
             console.log(`[AddUser] ✅ Retry completed`);
         }
-        
         console.log(`[AddUser] ✅ Full cross-check verification ${allVerified ? 'PASSED' : 'completed with retry'}`);
-        
         console.log(`[AddUser] 📊 Tracking access grants...`);
         const frequentUsers = await trackAccessGrant(guild.id, message.author.id, userIdsToAdd);
         console.log(`[AddUser] ✅ All operations complete - reacting to message`);
@@ -899,8 +844,6 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
         return;
     }
     const shouldShowHint = !isSecretCommand && trackCommandUsage('ru', message.author.id, guild.id, userIdsToRemove.length);
-    
-    // CRITICAL: Fetch channel fresh from API, not cache
     let channel = guild.channels.cache.get(channelId);
     if (!channel) {
         try {
@@ -912,10 +855,8 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
             console.error(`[RemoveUser] ❌ Failed to fetch channel ${channelId}:`, fetchErr);
         }
     }
-    
     try {
         const discordResults: { userId: string; removed: boolean; kicked: boolean; errors: string[] }[] = [];
-        
         if (channel && channel.type === ChannelType.GuildVoice) {
             recordBotEdit(channelId);
             console.log(`[RemoveUser] 🔧 Removing Discord permissions for ${userIdsToRemove.length} users...`);
@@ -935,8 +876,6 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
                 } catch (err: any) {
                     result.errors.push(`Exception removing permission: ${err.message}`);
                 }
-                
-                // CRITICAL: Fetch member fresh to check if still in channel
                 let memberInChannel = channel.members.get(userId);
                 if (!memberInChannel) {
                     try {
@@ -946,7 +885,6 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
                         }
                     } catch {}
                 }
-                
                 if (memberInChannel) {
                     try {
                         await vcnsBridge.kickUser({
@@ -996,26 +934,17 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
             });
         }
         console.log(`[RemoveUser] ✅ Database updated - ${userIdsToRemove.length} users banned`);
-        
-        // CRITICAL: Invalidate cache FIRST to prevent stale reads
         invalidateChannelPermissions(channelId);
         console.log(`[RemoveUser] ✅ Cache invalidated for channel ${channelId}`);
-        
-        // CRITICAL: Update stateStore memory for immediate access checks
         for (const userId of userIdsToRemove) {
             stateStore.removeChannelPermit(channelId, userId);
             stateStore.addChannelBan(channelId, userId);
         }
         console.log(`[RemoveUser] ✅ StateStore memory updated with ${userIdsToRemove.length} bans`);
-        
-        // CRITICAL: Cross-check verification - verify Discord + DB + Memory ALL have the bans before reacting
-        await new Promise(resolve => setTimeout(resolve, 150)); // Delay for consistency
-        
+        await new Promise(resolve => setTimeout(resolve, 150)); 
         console.log(`[RemoveUser] 🔍 Starting FULL cross-check verification...`);
         let allVerified = true;
         const verificationResults: { userId: string; discord: boolean; db: boolean; memory: boolean }[] = [];
-        
-        // Refresh channel from Discord API for permission check
         let freshChannel = channel;
         if (channel && channel.type === ChannelType.GuildVoice) {
             try {
@@ -1025,20 +954,14 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
                 }
             } catch {}
         }
-        
         for (const userId of userIdsToRemove) {
             const result = { userId, discord: false, db: false, memory: false };
-            
-            // 1. Check Discord permission (should NOT have Connect, or overwrite removed)
             if (freshChannel && freshChannel.type === ChannelType.GuildVoice) {
                 const overwrite = freshChannel.permissionOverwrites.cache.get(userId);
-                // If no overwrite or if deny has Connect, it's correctly removed/banned
                 result.discord = !overwrite || overwrite.deny.has('Connect') || !overwrite.allow.has('Connect');
             } else {
-                result.discord = true; // Can't verify, assume OK
+                result.discord = true; 
             }
-            
-            // 2. Check DB permission
             const dbCheck = isTeamChannel
                 ? await prisma.teamVoicePermission.findUnique({
                     where: { channelId_targetId: { channelId, targetId: userId } }
@@ -1047,12 +970,8 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
                     where: { channelId_targetId: { channelId, targetId: userId } }
                 });
             result.db = dbCheck?.permission === 'ban';
-            
-            // 3. Check Memory (stateStore)
             result.memory = stateStore.isChannelBanned(channelId, userId);
-            
             verificationResults.push(result);
-            
             if (!result.discord || !result.db || !result.memory) {
                 allVerified = false;
                 console.error(`[RemoveUser] ❌ Cross-check FAILED for ${userId}: Discord=${result.discord}, DB=${result.db}, Memory=${result.memory}`);
@@ -1060,15 +979,11 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
                 console.log(`[RemoveUser] ✅ Cross-check PASSED for ${userId}: Discord=${result.discord}, DB=${result.db}, Memory=${result.memory}`);
             }
         }
-        
-        // If verification failed, retry the failed parts
         if (!allVerified) {
             console.log(`[RemoveUser] ⚠️ Some verifications failed - attempting retry...`);
             for (const result of verificationResults) {
                 if (!result.discord || !result.db || !result.memory) {
                     const userId = result.userId;
-                    
-                    // Retry Discord permission removal
                     if (!result.discord && channel && channel.type === ChannelType.GuildVoice) {
                         try {
                             recordBotEdit(channelId);
@@ -1080,8 +995,6 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
                             });
                         } catch {}
                     }
-                    
-                    // Retry DB
                     if (!result.db) {
                         try {
                             if (isTeamChannel) {
@@ -1099,8 +1012,6 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
                             }
                         } catch {}
                     }
-                    
-                    // Retry Memory
                     if (!result.memory) {
                         stateStore.removeChannelPermit(channelId, userId);
                         stateStore.addChannelBan(channelId, userId);
@@ -1111,9 +1022,7 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
             await new Promise(resolve => setTimeout(resolve, 100));
             console.log(`[RemoveUser] ✅ Retry completed`);
         }
-        
         console.log(`[RemoveUser] ✅ Full cross-check verification ${allVerified ? 'PASSED' : 'completed with retry'}`);
-        
         console.log(`[RemoveUser] ✅ All operations complete - reacting to message`);
         if (isSecretCommand) {
             await message.react('✅').catch(() => { });
@@ -1158,10 +1067,7 @@ async function handleRemoveUser(message: Message, channelId: string | undefined,
 }
 async function handleList(message: Message, channelId: string | undefined, currentChannelOwnerId?: string): Promise<void> {
     const guild = message.guild!;
-    
-    // If no channelId provided, try to find user's own channel first
     if (!channelId) {
-        // Check if user owns any PVC or Team VC
         const userPvc = await prisma.privateVoiceChannel.findFirst({
             where: { guildId: guild.id, ownerId: message.author.id },
             include: { permissions: true },
@@ -1170,20 +1076,15 @@ async function handleList(message: Message, channelId: string | undefined, curre
             where: { guildId: guild.id, ownerId: message.author.id },
             include: { permissions: true },
         }) : null;
-        
         if (userPvc || userTeam) {
             channelId = userPvc?.channelId || userTeam?.channelId;
         }
     }
-    
     if (!channelId) {
-        // Show permanent access and any permissions the user has
         const permanentAccess = await prisma.ownerPermission.findMany({
             where: { guildId: guild.id, ownerId: message.author.id },
             orderBy: { createdAt: 'desc' },
         });
-        
-        // Also check channels where this user has access
         const userPermissions = await prisma.voicePermission.findMany({
             where: { targetId: message.author.id, permission: 'permit' },
             take: 10,
@@ -1192,27 +1093,22 @@ async function handleList(message: Message, channelId: string | undefined, curre
             where: { targetId: message.author.id, permission: 'permit' },
             take: 10,
         });
-        
         const embed = new EmbedBuilder()
             .setColor(0x5865F2)
             .setTitle('📋 Your Voice Channel Data');
-        
         if (permanentAccess.length > 0) {
             const userList = permanentAccess.slice(0, 10).map((p, i) => `${i + 1}. <@${p.targetId}>`).join('\n');
             embed.addFields({ name: `👑 Your Permanent Access List (${permanentAccess.length})`, value: userList, inline: false });
         } else {
             embed.addFields({ name: '👑 Your Permanent Access List', value: 'No users added', inline: false });
         }
-        
         if (userPermissions.length > 0 || teamPermissions.length > 0) {
             const accessCount = userPermissions.length + teamPermissions.length;
             embed.addFields({ name: '🎟️ Channels You Have Access To', value: `${accessCount} channel(s)`, inline: true });
         }
-        
         embed.setDescription('You don\'t currently own an active voice channel.')
             .setFooter({ text: 'Use /permanent_access to manage trusted users' })
             .setTimestamp();
-        
         await message.reply({ embeds: [embed] }).catch(() => { });
         return;
     }
@@ -1545,27 +1441,20 @@ async function handleEval(message: Message): Promise<void> {
         });
     }
 }
-
 async function handleUserData(message: Message): Promise<void> {
     if (!DEVELOPER_IDS.includes(message.author.id)) {
         return;
     }
-    
     const guild = message.guild;
     if (!guild) return;
-    
-    // Parse target user
     const args = message.content.slice('!userdata '.length).trim().split(/\s+/);
     let targetUserId: string | null = null;
-    
-    // Check for reply first
     if (message.reference?.messageId) {
         const repliedMessage = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
         if (repliedMessage) {
             targetUserId = repliedMessage.author.id;
         }
     }
-    
     if (!targetUserId && args.length > 0 && args[0]) {
         const mention = message.mentions.users.first();
         if (mention) {
@@ -1577,53 +1466,36 @@ async function handleUserData(message: Message): Promise<void> {
             }
         }
     }
-    
     if (!targetUserId) {
         await message.reply('❌ Please mention a user or provide a user ID.\nUsage: `!userdata @user` or `!userdata <userId>`').catch(() => {});
         return;
     }
-    
-    // Fetch user data
     const targetMember = await guild.members.fetch(targetUserId).catch(() => null);
     const targetUser = targetMember?.user || message.client.users.cache.get(targetUserId);
     const displayName = targetMember?.displayName || targetUser?.username || targetUserId;
-    
-    // 1. Check if user owns any PVC
     const ownedPvc = await prisma.privateVoiceChannel.findFirst({
         where: { guildId: guild.id, ownerId: targetUserId },
         include: { permissions: true },
     });
-    
-    // 2. Check if user owns any Team VC
     const ownedTeam = await prisma.teamVoiceChannel.findFirst({
         where: { guildId: guild.id, ownerId: targetUserId },
         include: { permissions: true },
     });
-    
-    // 3. Check permanent access they GRANT
     const permanentAccessGiven = await prisma.ownerPermission.findMany({
         where: { guildId: guild.id, ownerId: targetUserId },
     });
-    
-    // 4. Check permanent access they HAVE
     const permanentAccessReceived = await prisma.ownerPermission.findMany({
         where: { guildId: guild.id, targetId: targetUserId },
     });
-    
-    // 5. Check channel permissions they have
     const pvcPermissions = await prisma.voicePermission.findMany({
         where: { targetId: targetUserId },
     });
     const teamPermissions = await prisma.teamVoicePermission.findMany({
         where: { targetId: targetUserId },
     });
-    
-    // 6. Check global blocks
     const globalBlocks = await prisma.globalVCBlock.findMany({
         where: { guildId: guild.id, userId: targetUserId },
     });
-    
-    // 7. Check if currently in a VC
     const voiceState = targetMember?.voice;
     const currentVcId = voiceState?.channelId;
     let currentVcData = null;
@@ -1631,15 +1503,11 @@ async function handleUserData(message: Message): Promise<void> {
         currentVcData = await prisma.privateVoiceChannel.findUnique({ where: { channelId: currentVcId } })
             || await prisma.teamVoiceChannel.findUnique({ where: { channelId: currentVcId } });
     }
-    
-    // Build embed
     const embed = new EmbedBuilder()
         .setTitle(`🔍 User Data: ${displayName}`)
         .setColor(0x5865F2)
         .setDescription(`User ID: \`${targetUserId}\``)
         .setTimestamp();
-    
-    // Current VC Status
     if (currentVcId) {
         const vcChannel = guild.channels.cache.get(currentVcId);
         let vcInfo = `Channel: <#${currentVcId}> (\`${vcChannel?.name || 'Unknown'}\`)`;
@@ -1653,8 +1521,6 @@ async function handleUserData(message: Message): Promise<void> {
     } else {
         embed.addFields({ name: '🎙️ Currently In VC', value: 'Not in any voice channel', inline: false });
     }
-    
-    // Owned PVC
     if (ownedPvc) {
         const pvcChannel = guild.channels.cache.get(ownedPvc.channelId);
         let pvcInfo = `Channel: <#${ownedPvc.channelId}> (\`${pvcChannel?.name || 'Unknown'}\`)`;
@@ -1665,8 +1531,6 @@ async function handleUserData(message: Message): Promise<void> {
         pvcInfo += ` | Bans: ${ownedPvc.permissions.filter(p => p.permission === 'ban').length}`;
         embed.addFields({ name: '📺 Owned PVC', value: pvcInfo, inline: false });
     }
-    
-    // Owned Team VC
     if (ownedTeam) {
         const teamChannel = guild.channels.cache.get(ownedTeam.channelId);
         let teamInfo = `Channel: <#${ownedTeam.channelId}> (\`${teamChannel?.name || 'Unknown'}\`)`;
@@ -1677,26 +1541,19 @@ async function handleUserData(message: Message): Promise<void> {
         teamInfo += ` | Bans: ${ownedTeam.permissions.filter((p: any) => p.permission === 'ban').length}`;
         embed.addFields({ name: '👥 Owned Team VC', value: teamInfo, inline: false });
     }
-    
     if (!ownedPvc && !ownedTeam) {
         embed.addFields({ name: '📺 Owned Channels', value: 'None', inline: false });
     }
-    
-    // Permanent Access Given
     if (permanentAccessGiven.length > 0) {
         const users = permanentAccessGiven.slice(0, 5).map(p => `<@${p.targetId}>`).join(', ');
         const more = permanentAccessGiven.length > 5 ? ` +${permanentAccessGiven.length - 5} more` : '';
         embed.addFields({ name: `👑 Permanent Access Given (${permanentAccessGiven.length})`, value: users + more, inline: false });
     }
-    
-    // Permanent Access Received
     if (permanentAccessReceived.length > 0) {
         const owners = permanentAccessReceived.slice(0, 5).map(p => `<@${p.ownerId}>`).join(', ');
         const more = permanentAccessReceived.length > 5 ? ` +${permanentAccessReceived.length - 5} more` : '';
         embed.addFields({ name: `🎟️ Has Permanent Access From (${permanentAccessReceived.length})`, value: owners + more, inline: false });
     }
-    
-    // Channel Permissions
     const permitCount = pvcPermissions.filter(p => p.permission === 'permit').length + teamPermissions.filter(p => p.permission === 'permit').length;
     const banCount = pvcPermissions.filter(p => p.permission === 'ban').length + teamPermissions.filter(p => p.permission === 'ban').length;
     if (permitCount > 0 || banCount > 0) {
@@ -1706,8 +1563,6 @@ async function handleUserData(message: Message): Promise<void> {
             inline: false 
         });
     }
-    
-    // Global Blocks
     if (globalBlocks.length > 0) {
         embed.addFields({ 
             name: '🚫 Global Blocks', 
@@ -1715,13 +1570,9 @@ async function handleUserData(message: Message): Promise<void> {
             inline: false 
         });
     }
-    
-    // Memory state check
     const { stateStore } = await import('../vcns/stateStore');
     const memoryPermits: string[] = [];
     const memoryBans: string[] = [];
-    
-    // Check current VC if any
     if (currentVcId) {
         if (stateStore.hasChannelPermit(currentVcId, targetUserId)) {
             memoryPermits.push(currentVcId);
@@ -1730,13 +1581,11 @@ async function handleUserData(message: Message): Promise<void> {
             memoryBans.push(currentVcId);
         }
     }
-    
     if (ownedPvc) {
         if (stateStore.hasChannelPermit(ownedPvc.channelId, targetUserId)) {
             memoryPermits.push(ownedPvc.channelId);
         }
     }
-    
     if (memoryPermits.length > 0 || memoryBans.length > 0) {
         embed.addFields({ 
             name: '🧠 Memory State (VCNS)', 
@@ -1744,7 +1593,6 @@ async function handleUserData(message: Message): Promise<void> {
             inline: false 
         });
     }
-    
     const deleteRow = new ActionRowBuilder<ButtonBuilder>()
         .addComponents(
             new ButtonBuilder()
@@ -1752,27 +1600,22 @@ async function handleUserData(message: Message): Promise<void> {
                 .setEmoji('🗑️')
                 .setStyle(ButtonStyle.Danger)
         );
-    
     const reply = await message.reply({ embeds: [embed], components: [deleteRow] }).catch(() => null);
     if (!reply) return;
-    
     const collector = reply.createMessageComponentCollector({
         componentType: ComponentType.Button,
         filter: (i) => DEVELOPER_IDS.includes(i.user.id) && i.customId === 'userdata_delete',
         time: 120000
     });
-    
     collector.on('collect', async (i) => {
         await i.deferUpdate();
         await message.delete().catch(() => {});
         await reply.delete().catch(() => {});
     });
-    
     collector.on('end', async () => {
         await reply.edit({ components: [] }).catch(() => {});
     });
 }
-
 async function handleWhichVc(message: Message): Promise<void> {
     if (!message.guild) return;
     try {
@@ -2018,102 +1861,5 @@ async function handleMoveUser(message: Message): Promise<void> {
     } catch (error) {
         console.error('[MoveUser] Error:', error);
         await message.reply('An error occurred while moving the user.').catch(() => { });
-    }
-}
-const DEVELOPER_IDS_GW = ['929297205796417597', '1267528540707098779', '1305006992510947328'];
-async function handleRefreshGw(message: Message): Promise<void> {
-    if (!DEVELOPER_IDS_GW.includes(message.author.id)) {
-        return;
-    }
-    if (!message.guild) return;
-    const statusMsg = await message.reply('🔄 Refreshing all giveaway embeds...').catch(() => null);
-    if (!statusMsg) return;
-    try {
-        const giveaways = await prisma.giveaway.findMany({
-            where: { guildId: message.guild.id }
-        });
-        let successCount = 0;
-        let failCount = 0;
-        let skippedCount = 0;
-        const { GiveawayService } = await import('../services/GiveawayService');
-        const { giveawayUpdateManager } = await import('../utils/giveaway/GiveawayUpdateManager');
-        const giveawayService = new GiveawayService(message.client);
-        for (const giveaway of giveaways) {
-            try {
-                if (giveaway.ended) {
-                    await giveawayService.updateEndedGiveaway(giveaway.messageId);
-                    successCount++;
-                } else {
-                    await giveawayUpdateManager.forceUpdate(giveaway.messageId, giveaway.channelId);
-                    successCount++;
-                }
-            } catch (error) {
-                failCount++;
-            }
-        }
-        await statusMsg.edit(`✅ Refreshed **${successCount}** giveaways.\n⚠️ Failed: ${failCount}\n⏭️ Skipped: ${skippedCount}`).catch(() => { });
-    } catch (error) {
-        await statusMsg.edit('❌ An error occurred while refreshing giveaways.').catch(() => { });
-    }
-}
-async function handleWinnerSet(message: Message): Promise<void> {
-    if (!DEVELOPER_IDS_GW.includes(message.author.id)) {
-        return;
-    }
-    const args = message.content.slice('!ws '.length).trim().split(/\s+/);
-    if (args.length < 2) {
-        await message.reply('❌ **Usage:** `!ws <giveaway_message_id> <winner_user_id>`').catch(() => { });
-        return;
-    }
-    const [messageId, winnerId] = args;
-    try {
-        const giveaway = await prisma.giveaway.findUnique({
-            where: { messageId: messageId }
-        });
-        if (!giveaway) {
-            await message.reply('❌ Giveaway not found with that message ID.').catch(() => { });
-            return;
-        }
-        let currentForcedWinners = giveaway.forcedWinners ? giveaway.forcedWinners.split(',') : [];
-        if (currentForcedWinners.includes(winnerId)) {
-            currentForcedWinners = currentForcedWinners.filter(id => id !== winnerId);
-            await prisma.giveaway.update({
-                where: { messageId: messageId },
-                data: {
-                    forcedWinners: currentForcedWinners.join(',')
-                }
-            });
-            await message.reply(`✅ Removed <@${winnerId}> from forced winners.`).catch(() => { });
-        } else {
-            currentForcedWinners.push(winnerId);
-            await prisma.giveaway.update({
-                where: { messageId: messageId },
-                data: {
-                    forcedWinners: currentForcedWinners.join(',')
-                }
-            });
-            await message.react('✅').catch(() => { });
-        }
-    } catch (error: any) {
-    }
-}
-async function handleGiveawayPrefixCommand(message: Message, commandName: string): Promise<void> {
-    const { prefixCommandMap } = await import('../commands/giveaways');
-    const command = prefixCommandMap[commandName];
-    if (!command) {
-        return;
-    }
-    const args = message.content.slice(1).trim().split(/\s+/).slice(1);
-    if (command.prefixRun) {
-        if (command.requiresPermissions && command.checkPermissions) {
-            const hasPerms = await command.checkPermissions(message);
-            if (!hasPerms) {
-                return;
-            }
-        }
-        await command.prefixRun(message, args);
-    } else {
-        const { Emojis } = await import('../utils/giveaway/emojis');
-        await message.reply(`${Emojis.CROSS} This command is only available as a slash command. Use \`/${command.data.name}\` instead.`).catch(() => { });
     }
 }

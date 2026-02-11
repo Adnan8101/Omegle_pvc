@@ -1,8 +1,5 @@
 import { Events, type Interaction, MessageFlags, DiscordAPIError } from 'discord.js';
 import type { PVCClient } from '../client';
-import { handleButtonInteraction } from '../interactions/buttons';
-import { handleModalSubmit } from '../interactions/modals';
-import { handleSelectMenuInteraction } from '../interactions/selects';
 export const name = Events.InteractionCreate;
 export const once = false;
 const userRateLimits = new Map<string, { count: number; resetAt: number }>();
@@ -67,18 +64,6 @@ export async function execute(client: PVCClient, interaction: Interaction): Prom
                 return;
             }
             await command.execute(interaction);
-            return;
-        }
-        if (interaction.isButton()) {
-            await handleButtonInteraction(interaction);
-            return;
-        }
-        if (interaction.isModalSubmit()) {
-            await handleModalSubmit(interaction);
-            return;
-        }
-        if (interaction.isAnySelectMenu()) {
-            await handleSelectMenuInteraction(interaction);
             return;
         }
     } catch (error) {
